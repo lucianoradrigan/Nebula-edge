@@ -1,0 +1,7 @@
+# Build esp32
+esp32/build/
+esp32/sdkconfig
+esp32/venv/
+esp32/schema_pb2.py
+
+.vscode/

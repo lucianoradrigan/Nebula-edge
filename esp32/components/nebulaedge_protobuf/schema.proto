@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+// Configuración del dispositivo
+message Config {
+    int32 id_device = 1;
+    int32 status_conf = 2;
+    int32 protocol_conf = 3;
+    int32 acc_sampling = 4;
+    int32 gyro_sensibility = 5;
+    int32 bme688_sampling = 6;
+    int32 discontinuous_time = 7;
+    int32 tcp_port = 8;
+    int32 udp_port = 9;
+    string host_ip_addr = 10;
+    string ssid = 11;
+    string passwd = 12;                 // Se escribe passwd y no pass porque en python pass da problemas
+}
+
+// Log de eventos
+message Log {
+    int32 id_device = 1;
+    int64 time_client = 2;
+    int64 time_server = 3;
+}
+
+// Paquete de datos 1
+message Data_1 {
+    int32 id_device = 1;
+    int32 temperature = 2;
+    int32 press = 3;
+    int32 hum = 4;
+    float co = 5;
+    float rms = 6;
+    float amp_x = 7;
+    float freq_x = 8;
+    float amp_y = 9;
+    float freq_y = 10;
+    float amp_z = 11;
+    float freq_z = 12;  
+}
+
+// Paquete de datos 2
+message Data_2 {
+    int32 id_device = 1;
+    float racc_x = 2;
+    float racc_y = 3;
+    float racc_z = 4;
+    float rgyr_x = 5;
+    float rgyr_y = 6;
+    float rgyr_z = 7;
+    int64 time_client = 8;
+}
