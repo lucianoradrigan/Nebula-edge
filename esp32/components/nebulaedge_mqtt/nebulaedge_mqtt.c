@@ -95,19 +95,28 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         // the fragmented message.
         case MQTT_EVENT_DATA:
 
-        // Verifica si el tópico es el de configuración
-            if (strncmp(event->topic, "/topic/nebulaedge/config", event->topic_len) == 0) {
-                Config *new_config = config__unpack(NULL, event->data_len, (uint8_t *)event->data);
+            size_t topic_len = (size_t)event->topic_len;
+            const char *prefix = "/topic/nebulaedge/";
+            size_t prefix_len = strlen(prefix);
+            if (topic_len >= prefix_len &&
+                strncmp(event->topic, prefix, prefix_len) == 0) {
+                const char *suffix = "/config";
+                size_t suffix_len = strlen(suffix);
+                if (topic_len >= suffix_len &&
+                    strncmp(event->topic + (topic_len - suffix_len), suffix, suffix_len) == 0) {
+                    ESP_LOGI(TAG, "MQTT config topic: %.*s", (int)topic_len, event->topic);
+                    Config *new_config = config__unpack(NULL, event->data_len, (uint8_t *)event->data);
 
-                if (new_config == NULL) {
-                    ESP_LOGE(TAG, "Error al desempaquetar configuración MQTT");
-                } 
-                else {
-                    ESP_LOGI(TAG, "Configuración MQTT desempaquetada correctamente");
-                    // Envía el puntero a la queue para que main lo procese
-                    if (xQueueSend(xQueueConfig, &new_config, 0) != pdTRUE) {
-                        ESP_LOGW(TAG, "xConfigQueue FULL, configuración descartada");
-                        config__free_unpacked(new_config, NULL);
+                    if (new_config == NULL) {
+                        ESP_LOGE(TAG, "Error al desempaquetar configuración MQTT");
+                    } 
+                    else {
+                        ESP_LOGI(TAG, "Configuración MQTT desempaquetada correctamente");
+                        // Envía el puntero a la queue para que main lo procese
+                        if (xQueueSend(xQueueConfig, &new_config, 0) != pdTRUE) {
+                            ESP_LOGW(TAG, "xConfigQueue FULL, configuración descartada");
+                            config__free_unpacked(new_config, NULL);
+                        }
                     }
                 }
             }

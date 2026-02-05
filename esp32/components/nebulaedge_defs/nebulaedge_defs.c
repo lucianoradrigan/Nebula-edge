@@ -5,3 +5,4 @@
 #include <time.h>
 
 SemaphoreHandle_t semaphore = NULL;
+SemaphoreHandle_t semaphore_ble = NULL;

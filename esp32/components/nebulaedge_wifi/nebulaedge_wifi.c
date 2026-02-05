@@ -8,6 +8,8 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
@@ -25,6 +27,12 @@ static EventGroupHandle_t s_wifi_event_group;
 
 static const char *TAG = "nebulaedge_wifi";
 static int s_retry_num = 0;
+static bool s_wifi_active = false;
+static bool s_netif_inited = false;
+static esp_netif_t *s_sta_netif = NULL;
+static bool s_handlers_registered = false;
+static esp_event_handler_instance_t s_instance_any_id;
+static esp_event_handler_instance_t s_instance_got_ip;
 
 /**
  * @brief Event handler for Wi-Fi and IP events.
@@ -55,13 +63,16 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
         // Check if the maximum number of retries has not been reached
         if (s_retry_num < config->max_retry) {
-            ESP_LOGI(TAG, "Trying to connect to the AP: attempt %d", s_retry_num+1);
+            ESP_LOGI(TAG, "trying to connect to the AP (SSID: %s, PASS: %s): attempt %d",
+                     config->ssid,
+                     config->password,
+                     s_retry_num + 1);
 
             // Attempt to reconnect
             esp_wifi_connect();
 
             // Log the delay before the next retry
-            ESP_LOGI(TAG, "Failed. Retrying in %d milliseconds...", config->retry_delay_ms);
+            ESP_LOGI(TAG, "failed. Retrying in %d milliseconds...", config->retry_delay_ms);
             vTaskDelay(pdMS_TO_TICKS(config->retry_delay_ms));
 
             // Increment the retry counter
@@ -114,33 +125,35 @@ void wifi_init_sta(global_wifi_config *global_wifi_config) {
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
 
     // Create an event group to handle Wi-Fi connection states
-    s_wifi_event_group = xEventGroupCreate();
+    if (s_wifi_event_group == NULL) {
+        s_wifi_event_group = xEventGroupCreate();
+    }
 
     // Create the default network interface for station mode
-    esp_netif_create_default_wifi_sta();
+    if (s_sta_netif == NULL) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+    }
 
     // Initial Wi-Fi configuration with default values
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     // Declaration of instances to handle events
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
-
     // Register an event handler for any Wi-Fi event, and one for obtaining an IP
     // A pointer to the custom configuration structure is passed.
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        global_wifi_config,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
-                                                        global_wifi_config,
-                                                        &instance_got_ip));
-
-    printf("pasó la configuración de ssid y pass\n");
+    if (!s_handlers_registered) {
+        ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                            ESP_EVENT_ANY_ID,
+                                                            &event_handler,
+                                                            global_wifi_config,
+                                                            &s_instance_any_id));
+        ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                            IP_EVENT_STA_GOT_IP,
+                                                            &event_handler,
+                                                            global_wifi_config,
+                                                            &s_instance_got_ip));
+        s_handlers_registered = true;
+    }
 
     // Wi-Fi configuration
     wifi_config_t wifi_config = {
@@ -157,7 +170,6 @@ void wifi_init_sta(global_wifi_config *global_wifi_config) {
     strncpy((char *)wifi_config.sta.ssid, global_wifi_config->ssid, sizeof(wifi_config.sta.ssid));
     strncpy((char *)wifi_config.sta.password, global_wifi_config->password, sizeof(wifi_config.sta.password));
     
-
     // Set the Wi-Fi mode to station
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
@@ -194,4 +206,47 @@ void wifi_init_sta(global_wifi_config *global_wifi_config) {
     else {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
     }
+}
+
+void wifi_start_if_needed(global_wifi_config *global_wifi_config) {
+    if (s_wifi_active) {
+        ESP_LOGI(TAG, "wifi_start_if_needed: already active");
+        return;
+    }
+    if (!s_netif_inited) {
+        ESP_LOGI(TAG, "wifi_start_if_needed: init netif/event loop");
+        ESP_ERROR_CHECK(esp_netif_init());
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        s_netif_inited = true;
+    }
+    ESP_LOGI(TAG, "wifi_start_if_needed: init STA");
+    wifi_init_sta(global_wifi_config);
+    s_wifi_active = true;
+}
+
+void wifi_deinit_sta(void) {
+    if (!s_wifi_active) {
+        ESP_LOGI(TAG, "wifi_deinit_sta: already inactive");
+        return;
+    }
+    ESP_LOGI(TAG, "wifi_deinit_sta: stop/deinit wifi");
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    if (s_handlers_registered) {
+        ESP_LOGI(TAG, "wifi_deinit_sta: unregister handlers");
+        esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_instance_any_id);
+        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_instance_got_ip);
+        s_handlers_registered = false;
+    }
+    if (s_sta_netif != NULL) {
+        ESP_LOGI(TAG, "wifi_deinit_sta: destroy netif");
+        esp_netif_destroy(s_sta_netif);
+        s_sta_netif = NULL;
+    }
+    if (s_wifi_event_group != NULL) {
+        ESP_LOGI(TAG, "wifi_deinit_sta: delete event group");
+        vEventGroupDelete(s_wifi_event_group);
+        s_wifi_event_group = NULL;
+    }
+    s_wifi_active = false;
 }

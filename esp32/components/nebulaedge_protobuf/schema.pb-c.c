@@ -52,6 +52,51 @@ void   config__free_unpacked
   assert(message->base.descriptor == &config__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
+void   config_ack__init
+                     (ConfigAck         *message)
+{
+  static const ConfigAck init_value = CONFIG_ACK__INIT;
+  *message = init_value;
+}
+size_t config_ack__get_packed_size
+                     (const ConfigAck *message)
+{
+  assert(message->base.descriptor == &config_ack__descriptor);
+  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
+}
+size_t config_ack__pack
+                     (const ConfigAck *message,
+                      uint8_t       *out)
+{
+  assert(message->base.descriptor == &config_ack__descriptor);
+  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
+}
+size_t config_ack__pack_to_buffer
+                     (const ConfigAck *message,
+                      ProtobufCBuffer *buffer)
+{
+  assert(message->base.descriptor == &config_ack__descriptor);
+  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
+}
+ConfigAck *
+       config_ack__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data)
+{
+  return (ConfigAck *)
+     protobuf_c_message_unpack (&config_ack__descriptor,
+                                allocator, len, data);
+}
+void   config_ack__free_unpacked
+                     (ConfigAck *message,
+                      ProtobufCAllocator *allocator)
+{
+  if(!message)
+    return;
+  assert(message->base.descriptor == &config_ack__descriptor);
+  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+}
 void   log__init
                      (Log         *message)
 {
@@ -187,27 +232,27 @@ void   data_2__free_unpacked
   assert(message->base.descriptor == &data_2__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor config__field_descriptors[12] =
+static const ProtobufCFieldDescriptor config__field_descriptors[15] =
 {
   {
     "id_device",
     1,
     PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_INT32,
+    PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
     offsetof(Config, id_device),
     NULL,
-    NULL,
+    &protobuf_c_empty_string,
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
   {
-    "status_conf",
+    "config_version",
     2,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_INT32,
     0,   /* quantifier_offset */
-    offsetof(Config, status_conf),
+    offsetof(Config, config_version),
     NULL,
     NULL,
     0,             /* flags */
@@ -262,12 +307,36 @@ static const ProtobufCFieldDescriptor config__field_descriptors[12] =
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
   {
-    "discontinuous_time",
+    "send_interval_ms",
     7,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_INT32,
     0,   /* quantifier_offset */
-    offsetof(Config, discontinuous_time),
+    offsetof(Config, send_interval_ms),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "discontinuous_sleep_time",
+    8,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(Config, discontinuous_sleep_time),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "discontinuous_window_size",
+    9,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(Config, discontinuous_window_size),
     NULL,
     NULL,
     0,             /* flags */
@@ -275,7 +344,7 @@ static const ProtobufCFieldDescriptor config__field_descriptors[12] =
   },
   {
     "tcp_port",
-    8,
+    10,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_INT32,
     0,   /* quantifier_offset */
@@ -287,7 +356,7 @@ static const ProtobufCFieldDescriptor config__field_descriptors[12] =
   },
   {
     "udp_port",
-    9,
+    11,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_INT32,
     0,   /* quantifier_offset */
@@ -299,7 +368,7 @@ static const ProtobufCFieldDescriptor config__field_descriptors[12] =
   },
   {
     "host_ip_addr",
-    10,
+    12,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
@@ -311,7 +380,7 @@ static const ProtobufCFieldDescriptor config__field_descriptors[12] =
   },
   {
     "ssid",
-    11,
+    13,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
@@ -323,7 +392,7 @@ static const ProtobufCFieldDescriptor config__field_descriptors[12] =
   },
   {
     "passwd",
-    12,
+    14,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
@@ -333,25 +402,40 @@ static const ProtobufCFieldDescriptor config__field_descriptors[12] =
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "mqtt_broker",
+    15,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(Config, mqtt_broker),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned config__field_indices_by_name[] = {
   3,   /* field[3] = acc_sampling */
   5,   /* field[5] = bme688_sampling */
-  6,   /* field[6] = discontinuous_time */
+  1,   /* field[1] = config_version */
+  7,   /* field[7] = discontinuous_sleep_time */
+  8,   /* field[8] = discontinuous_window_size */
   4,   /* field[4] = gyro_sensibility */
-  9,   /* field[9] = host_ip_addr */
+  11,   /* field[11] = host_ip_addr */
   0,   /* field[0] = id_device */
-  11,   /* field[11] = passwd */
+  14,   /* field[14] = mqtt_broker */
+  13,   /* field[13] = passwd */
   2,   /* field[2] = protocol_conf */
-  10,   /* field[10] = ssid */
-  1,   /* field[1] = status_conf */
-  7,   /* field[7] = tcp_port */
-  8,   /* field[8] = udp_port */
+  6,   /* field[6] = send_interval_ms */
+  12,   /* field[12] = ssid */
+  9,   /* field[9] = tcp_port */
+  10,   /* field[10] = udp_port */
 };
 static const ProtobufCIntRange config__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 12 }
+  { 0, 15 }
 };
 const ProtobufCMessageDescriptor config__descriptor =
 {
@@ -361,11 +445,75 @@ const ProtobufCMessageDescriptor config__descriptor =
   "Config",
   "",
   sizeof(Config),
-  12,
+  15,
   config__field_descriptors,
   config__field_indices_by_name,
   1,  config__number_ranges,
   (ProtobufCMessageInit) config__init,
+  NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCFieldDescriptor config_ack__field_descriptors[3] =
+{
+  {
+    "id_device",
+    1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(ConfigAck, id_device),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "config_version",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(ConfigAck, config_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "applied",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_BOOL,
+    0,   /* quantifier_offset */
+    offsetof(ConfigAck, applied),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+};
+static const unsigned config_ack__field_indices_by_name[] = {
+  2,   /* field[2] = applied */
+  1,   /* field[1] = config_version */
+  0,   /* field[0] = id_device */
+};
+static const ProtobufCIntRange config_ack__number_ranges[1 + 1] =
+{
+  { 1, 0 },
+  { 0, 3 }
+};
+const ProtobufCMessageDescriptor config_ack__descriptor =
+{
+  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
+  "ConfigAck",
+  "ConfigAck",
+  "ConfigAck",
+  "",
+  sizeof(ConfigAck),
+  3,
+  config_ack__field_descriptors,
+  config_ack__field_indices_by_name,
+  1,  config_ack__number_ranges,
+  (ProtobufCMessageInit) config_ack__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
 static const ProtobufCFieldDescriptor log__field_descriptors[3] =
@@ -432,17 +580,17 @@ const ProtobufCMessageDescriptor log__descriptor =
   (ProtobufCMessageInit) log__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor data_1__field_descriptors[12] =
+static const ProtobufCFieldDescriptor data_1__field_descriptors[13] =
 {
   {
     "id_device",
     1,
     PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_INT32,
+    PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
     offsetof(Data1, id_device),
     NULL,
-    NULL,
+    &protobuf_c_empty_string,
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
@@ -578,12 +726,25 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[12] =
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "config_version_applied",
+    13,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(Data1, config_version_applied),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned data_1__field_indices_by_name[] = {
   6,   /* field[6] = amp_x */
   8,   /* field[8] = amp_y */
   10,   /* field[10] = amp_z */
   4,   /* field[4] = co */
+  12,   /* field[12] = config_version_applied */
   7,   /* field[7] = freq_x */
   9,   /* field[9] = freq_y */
   11,   /* field[11] = freq_z */
@@ -596,7 +757,7 @@ static const unsigned data_1__field_indices_by_name[] = {
 static const ProtobufCIntRange data_1__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 12 }
+  { 0, 13 }
 };
 const ProtobufCMessageDescriptor data_1__descriptor =
 {
@@ -606,7 +767,7 @@ const ProtobufCMessageDescriptor data_1__descriptor =
   "Data1",
   "",
   sizeof(Data1),
-  12,
+  13,
   data_1__field_descriptors,
   data_1__field_indices_by_name,
   1,  data_1__number_ranges,
@@ -619,11 +780,11 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[8] =
     "id_device",
     1,
     PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_INT32,
+    PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
     offsetof(Data2, id_device),
     NULL,
-    NULL,
+    &protobuf_c_empty_string,
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },

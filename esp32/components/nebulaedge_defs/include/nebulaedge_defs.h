@@ -19,7 +19,7 @@ typedef struct {
 // Estructura de configuración global MQTT esto se puede extender muchísimo, por ahora
 // implementado así por simpleza. Mirar campos de la estructura esp_mqtt_client_config_t
 typedef struct {
-    char *broker;
+    const char *broker;
 } mqtt_config_global;
 
 typedef enum {
@@ -40,6 +40,7 @@ typedef struct {
 } tcp_params_t;
 
 extern SemaphoreHandle_t semaphore;
+extern SemaphoreHandle_t semaphore_ble;
 
 
 #endif

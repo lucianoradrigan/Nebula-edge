@@ -1,7 +1,27 @@
 # Build esp32
+.vscode/
+esp32.code-workspace
+
+# ESP-IDF
+esp32/.venv/
+esp32/vscode/
 esp32/build/
 esp32/sdkconfig
-esp32/venv/
-esp32/schema_pb2.py
+esp32/sdkconfig.old
+esp32/components/**/build/
+esp32/components/**/log/
 
-.vscode/
+# Server
+raspberry/__pycache__/
+raspberry/server/venv/
+raspberry/server/ble_multi_test.py
+raspberry/server/create_tables.py
+raspberry/server/ble_prueba.py
+raspberry/server/requirements.txt
+raspberry/server/test_wifi_parse.py
+raspberry/server/testing.py
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride

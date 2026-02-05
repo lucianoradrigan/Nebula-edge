@@ -7,24 +7,13 @@ from bleak import BleakScanner, BleakClient
 UUID_SERVICE = "0000ff00-0000-1000-8000-00805f9b34fb"
 UUID_CHAR_A  = "0000ff01-0000-1000-8000-00805f9b34fb"  # read/write/notify
 UUID_CHAR_B  = "0000ff02-0000-1000-8000-00805f9b34fb"  # read
-UUID_CHAR_C  = "0000ff03-0000-1000-8000-00805f9b34fb"  # write
+UUID_CHAR_C  = "0000ff03-0000-1000-8000-00805f9b34fb"  # write (semaforo)
+UUID_CHAR_D  = "0000ff04-0000-1000-8000-00805f9b34fb"  # notify (ack)
 
-LABEL_TO_UUID = {"A": UUID_CHAR_A, "B": UUID_CHAR_B, "C": UUID_CHAR_C}
+LABEL_TO_UUID = {"A": UUID_CHAR_A, "B": UUID_CHAR_B, "C": UUID_CHAR_C, "D": UUID_CHAR_D}
 
-# Busca la dirección MAC por nombre de dispositivo
-# name: nombre de dispositivo
-async def find_device(name: str) -> str:
-    print(f"Buscando dispositivo por nombre: {name}...")
-    devices = await BleakScanner.discover(timeout=5)
-    for d in devices:
-        if d.name == name:
-            print(f"Encontrado: {d.name} [{d.address}]")
-            return d.address
-    print("No encontrado. Verifica que está anunciando y el nombre coincide.")
-    return ""
-
-# Convierte un string a bytes
 def parse_data_arg(data: str) -> bytes:
+    """Convierte un string a bytes (hex o texto)."""
     # Si comienza con 0x o contiene espacios, tratar como hex; si no, como texto
     s = data.strip()
     try:
@@ -36,20 +25,8 @@ def parse_data_arg(data: str) -> bytes:
         # fallback a texto
         return data.encode("utf-8")
 
-# Lee bytes en una característica
-async def read_char(client: BleakClient, uuid: str):
-    val = await client.read_gatt_char(uuid)
-    # Decodifica y printea los bytes en ASCII
-    print(f"READ {uuid}: {val.hex()}  | ascii='{val.decode(errors='ignore')}'")
-    return val
-
-# Escribe bytes en una característica
-async def write_char(client: BleakClient, uuid: str, data: bytes, with_response: bool = True):
-    await client.write_gatt_char(uuid, data, response=with_response)
-    print(f"Wrote {len(data)} bytes to {uuid}")
-
-# Habilita la recepción automática de una característica BLE
 async def enable_notify(client: BleakClient, uuid: str):
+    """Habilita notificaciones y imprime datos entrantes."""
     def cb(_, data: bytearray):
         print(f"NOTIFY {uuid}: {data.hex()}  | ascii='{data.decode(errors='ignore')}'")
     await client.start_notify(uuid, cb)
@@ -64,6 +41,7 @@ async def enable_notify(client: BleakClient, uuid: str):
         print("Notify deshabilitado.")
 
 async def main():
+    """Ejemplo básico de conexión BLE y escritura en característica A."""
 
     addr = await find_device("ESP_GATTS_DEMO")
     if addr == "":
@@ -86,8 +64,6 @@ async def main():
                 print(f"Servicio {UUID_SERVICE} encontrado con {len(svc.characteristics)} características.")
         except Exception:
             pass
-
-
 
 if __name__ == "__main__":
     asyncio.run(main())

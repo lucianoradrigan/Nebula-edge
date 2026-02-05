@@ -16,6 +16,7 @@ PROTOBUF_C__BEGIN_DECLS
 
 
 typedef struct Config Config;
+typedef struct ConfigAck ConfigAck;
 typedef struct Log Log;
 typedef struct Data1 Data1;
 typedef struct Data2 Data2;
@@ -32,25 +33,70 @@ typedef struct Data2 Data2;
 struct  Config
 {
   ProtobufCMessage base;
-  int32_t id_device;
-  int32_t status_conf;
+  /*
+   * Identificador del dispositivo.
+   */
+  char *id_device;
+  /*
+   * Versión configuración. Cada cambio realizado debe incrementar este campo.
+   */
+  int32_t config_version;
+  /*
+   * Protocolo seleccionado. 0 -> MQTT, 1 -> UDP, 2 -> TCP, 3 -> BLE.
+   */
   int32_t protocol_conf;
   int32_t acc_sampling;
   int32_t gyro_sensibility;
   int32_t bme688_sampling;
-  int32_t discontinuous_time;
+  /*
+   * Tiempo en milisegundos entre paquetes de datos (continuo o discontinuo).
+   */
+  int32_t send_interval_ms;
+  /*
+   * Tiempo en milisegundos que se irá a dormir la ESP. Cuando es > 0 se corre el modo discontinuo.
+   */
+  int32_t discontinuous_sleep_time;
+  /*
+   * Cantidad de datos que se enviarán antes de irse a deep sleep.
+   */
+  int32_t discontinuous_window_size;
   int32_t tcp_port;
   int32_t udp_port;
+  /*
+   * IPv4 de la raspberry (192.168.1.1 por ejemplo)
+   */
   char *host_ip_addr;
+  /*
+   * Nombre WIFI
+   */
   char *ssid;
   /*
-   * Se escribe passwd y no pass porque en python pass da problemas
+   * Contraseña WIFI
    */
   char *passwd;
+  /*
+   * URI del broker MQTT (ej: mqtt://host:1883)
+   */
+  char *mqtt_broker;
 };
 #define CONFIG__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&config__descriptor) \
-, 0, 0, 0, 0, 0, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+
+
+/*
+ * ACK de configuración
+ */
+struct  ConfigAck
+{
+  ProtobufCMessage base;
+  char *id_device;
+  int32_t config_version;
+  protobuf_c_boolean applied;
+};
+#define CONFIG_ACK__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&config_ack__descriptor) \
+, (char *)protobuf_c_empty_string, 0, 0 }
 
 
 /*
@@ -74,7 +120,7 @@ struct  Log
 struct  Data1
 {
   ProtobufCMessage base;
-  int32_t id_device;
+  char *id_device;
   int32_t temperature;
   int32_t press;
   int32_t hum;
@@ -86,10 +132,14 @@ struct  Data1
   float freq_y;
   float amp_z;
   float freq_z;
+  /*
+   * Versión de config aplicada en el dispositivo
+   */
+  int32_t config_version_applied;
 };
 #define DATA_1__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&data_1__descriptor) \
-, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 
 /*
@@ -98,7 +148,7 @@ struct  Data1
 struct  Data2
 {
   ProtobufCMessage base;
-  int32_t id_device;
+  char *id_device;
   float racc_x;
   float racc_y;
   float racc_z;
@@ -109,7 +159,7 @@ struct  Data2
 };
 #define DATA_2__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&data_2__descriptor) \
-, 0, 0, 0, 0, 0, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0 }
 
 
 /* Config methods */
@@ -130,6 +180,25 @@ Config *
                       const uint8_t       *data);
 void   config__free_unpacked
                      (Config *message,
+                      ProtobufCAllocator *allocator);
+/* ConfigAck methods */
+void   config_ack__init
+                     (ConfigAck         *message);
+size_t config_ack__get_packed_size
+                     (const ConfigAck   *message);
+size_t config_ack__pack
+                     (const ConfigAck   *message,
+                      uint8_t             *out);
+size_t config_ack__pack_to_buffer
+                     (const ConfigAck   *message,
+                      ProtobufCBuffer     *buffer);
+ConfigAck *
+       config_ack__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   config_ack__free_unpacked
+                     (ConfigAck *message,
                       ProtobufCAllocator *allocator);
 /* Log methods */
 void   log__init
@@ -193,6 +262,9 @@ void   data_2__free_unpacked
 typedef void (*Config_Closure)
                  (const Config *message,
                   void *closure_data);
+typedef void (*ConfigAck_Closure)
+                 (const ConfigAck *message,
+                  void *closure_data);
 typedef void (*Log_Closure)
                  (const Log *message,
                   void *closure_data);
@@ -209,6 +281,7 @@ typedef void (*Data2_Closure)
 /* --- descriptors --- */
 
 extern const ProtobufCMessageDescriptor config__descriptor;
+extern const ProtobufCMessageDescriptor config_ack__descriptor;
 extern const ProtobufCMessageDescriptor log__descriptor;
 extern const ProtobufCMessageDescriptor data_1__descriptor;
 extern const ProtobufCMessageDescriptor data_2__descriptor;

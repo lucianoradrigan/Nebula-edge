@@ -1,0 +1,39 @@
+services:
+  server:
+    image: raspberry_server
+    build: .
+    container_name: nebulaedge_server
+    environment:
+      PYTHONUNBUFFERED: 1
+      BLE_ADAPTER: auto
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    volumes:
+      - /var/run/dbus:/var/run/dbus
+      - /sys/class/bluetooth:/sys/class/bluetooth
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16.2
+    container_name: nebulaedge_db
+    environment:
+      POSTGRES_DB: nebulaedge
+      POSTGRES_USER: nebulaedge
+      POSTGRES_PASSWORD: 1234
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db_init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+
+# Observación: con docker compose up --build --force-recreate no
+# se re-inicializa la base de datos
+
+# Primero hay que hacer un docker compose down -v
+# Luego hacer docker compose up --build
+
+volumes:
+  db_data:
