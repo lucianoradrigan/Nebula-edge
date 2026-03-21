@@ -1,6 +1,6 @@
-idf_component_register(SRCS "nebulaedge_defs.c"
+idf_component_register(SRCS "nebulaedge_i2c.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES esp_wifi esp_driver_gpio)
+                    REQUIRES esp_driver_i2c nebulaedge_defs)
 
 if(CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE)
    # some variables are only used by asserts

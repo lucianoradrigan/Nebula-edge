@@ -28,7 +28,7 @@ static struct sockaddr *dest_addr;
 /* Realiza un print de todos los descriptores de red abiertos. */
 static void print_all_netif_descriptions(void) {
     esp_netif_t *netif = NULL;
-    while ((netif = esp_netif_next(netif)) != NULL) {
+    while ((netif = esp_netif_next_unsafe(netif)) != NULL) {
         ESP_LOGI("netif", "Interface description: %s", esp_netif_get_desc(netif));
     }
 }

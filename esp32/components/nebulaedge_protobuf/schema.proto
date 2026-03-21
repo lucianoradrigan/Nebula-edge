@@ -36,7 +36,7 @@ message Log {
 // Paquete de datos 1
 message Data_1 {
     string id_device = 1;
-    int32 temperature = 2;
+    float temperature = 2;
     int32 press = 3;
     int32 hum = 4;
     float co = 5;
@@ -47,17 +47,21 @@ message Data_1 {
     float freq_y = 10;
     float amp_z = 11;
     float freq_z = 12;  
-    int32 config_version_applied = 13; // Versión de config aplicada en el dispositivo
+    float mag_x = 13;
+    float mag_y = 14;
+    float mag_z = 15;
+    int32 config_version_applied = 16; // Versión de config aplicada en el dispositivo
 }
 
 // Paquete de datos 2
 message Data_2 {
     string id_device = 1;
-    float racc_x = 2;
-    float racc_y = 3;
-    float racc_z = 4;
-    float rgyr_x = 5;
-    float rgyr_y = 6;
-    float rgyr_z = 7;
+    float acc_x = 2;
+    float acc_y = 3;
+    float acc_z = 4;
+    float gyr_x = 5;
+    float gyr_y = 6;
+    float gyr_z = 7;
     int64 time_client = 8;
+    int32 config_version_applied = 9;
 }

@@ -4,5 +4,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+const uint8_t DEEP_SLEEP_FLAG[DEEP_SLEEP_FLAG_LEN] = {'d', 's'};
+
 SemaphoreHandle_t semaphore = NULL;
 SemaphoreHandle_t semaphore_ble = NULL;

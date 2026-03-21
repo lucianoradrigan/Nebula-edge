@@ -1,6 +1,7 @@
 # Build esp32
 .vscode/
 esp32.code-workspace
+nebulaedge.code-workspace
 
 # ESP-IDF
 esp32/.venv/
@@ -13,7 +14,9 @@ esp32/components/**/log/
 
 # Server
 raspberry/__pycache__/
+raspberry/TODO.md
 raspberry/server/venv/
+raspberry/**/__pycache__/
 raspberry/server/ble_multi_test.py
 raspberry/server/create_tables.py
 raspberry/server/ble_prueba.py

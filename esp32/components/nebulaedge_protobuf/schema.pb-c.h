@@ -20,6 +20,7 @@ typedef struct ConfigAck ConfigAck;
 typedef struct Log Log;
 typedef struct Data1 Data1;
 typedef struct Data2 Data2;
+typedef struct Measure Measure;
 
 
 /* --- enums --- */
@@ -121,7 +122,7 @@ struct  Data1
 {
   ProtobufCMessage base;
   char *id_device;
-  int32_t temperature;
+  float temperature;
   int32_t press;
   int32_t hum;
   float co;
@@ -132,6 +133,9 @@ struct  Data1
   float freq_y;
   float amp_z;
   float freq_z;
+  float mag_x;
+  float mag_y;
+  float mag_z;
   /*
    * Versión de config aplicada en el dispositivo
    */
@@ -139,7 +143,7 @@ struct  Data1
 };
 #define DATA_1__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&data_1__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 
 /*
@@ -156,10 +160,72 @@ struct  Data2
   float rgyr_y;
   float rgyr_z;
   int64_t time_client;
+  /*
+   * Versión de config aplicada en el dispositivo
+   */
+  int32_t config_version_applied;
 };
 #define DATA_2__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&data_2__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0 }
+
+
+struct  Measure
+{
+  ProtobufCMessage base;
+  /*
+   * BMI270 
+   */
+  /*
+   * rad/s
+   */
+  float gyr_x_rads;
+  float gyr_y_rads;
+  float gyr_z_rads;
+  /*
+   * g
+   */
+  float acc_x_g;
+  float acc_y_g;
+  float acc_z_g;
+  /*
+   * m/s²
+   */
+  float acc_x_ms2;
+  float acc_y_ms2;
+  float acc_z_ms2;
+  /*
+   * BMM350 
+   */
+  /*
+   * uT
+   */
+  float mag_x_ut;
+  float mag_y_ut;
+  float mag_z_ut;
+  /*
+   * BME688 
+   */
+  /*
+   * °C
+   */
+  float temp_c;
+  /*
+   * % (0-100)
+   */
+  float hum_percent;
+  /*
+   * hPa
+   */
+  float press_hpa;
+  /*
+   * Ohms
+   */
+  float gas_res_ohms;
+};
+#define MEASURE__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&measure__descriptor) \
+, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 
 /* Config methods */
@@ -257,6 +323,25 @@ Data2 *
 void   data_2__free_unpacked
                      (Data2 *message,
                       ProtobufCAllocator *allocator);
+/* Measure methods */
+void   measure__init
+                     (Measure         *message);
+size_t measure__get_packed_size
+                     (const Measure   *message);
+size_t measure__pack
+                     (const Measure   *message,
+                      uint8_t             *out);
+size_t measure__pack_to_buffer
+                     (const Measure   *message,
+                      ProtobufCBuffer     *buffer);
+Measure *
+       measure__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   measure__free_unpacked
+                     (Measure *message,
+                      ProtobufCAllocator *allocator);
 /* --- per-message closures --- */
 
 typedef void (*Config_Closure)
@@ -274,6 +359,9 @@ typedef void (*Data1_Closure)
 typedef void (*Data2_Closure)
                  (const Data2 *message,
                   void *closure_data);
+typedef void (*Measure_Closure)
+                 (const Measure *message,
+                  void *closure_data);
 
 /* --- services --- */
 
@@ -285,6 +373,7 @@ extern const ProtobufCMessageDescriptor config_ack__descriptor;
 extern const ProtobufCMessageDescriptor log__descriptor;
 extern const ProtobufCMessageDescriptor data_1__descriptor;
 extern const ProtobufCMessageDescriptor data_2__descriptor;
+extern const ProtobufCMessageDescriptor measure__descriptor;
 
 PROTOBUF_C__END_DECLS
 

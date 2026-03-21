@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_mac.h"
 #include "esp_sleep.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -18,6 +19,10 @@
 #include "nebulaedge_tcp.h"
 #include "nebulaedge_ble.h"
 #include "nebulaedge_defs.h"
+#include "nebulaedge_i2c.h"
+#include "bmm350.h"
+#include "bme688.h"
+#include "bmi270.h"
 
 #include "schema.pb-c.h"
 
@@ -26,7 +31,7 @@ QueueHandle_t xQueueData = NULL;
 QueueHandle_t xQueueConfigBle = NULL;
 
 Config *current_config = NULL;
-TaskHandle_t xHandleGenRandData = NULL;
+TaskHandle_t xHandleCollectSensorData = NULL;
 
 TaskHandle_t xHandleSendUDP = NULL;
 TaskHandle_t xHandleGetResponseUDP = NULL;
@@ -40,7 +45,7 @@ TaskHandle_t xHandleGetResponseBLE = NULL;
 
 
 const char *TAG = "main_task";
-const char *TAG_RAND_DATA = "task_rand_data"; 
+const char *TAG_COLLECT_DATA = "task_rand_data"; 
 
 const char *TAG_SEND_MQTT = "task_send_mqtt";
 const char *TAG_SEND_UDP = "task_send_udp";
@@ -53,9 +58,25 @@ const char *TAG_GET_RSP_TCP = "task_get_rsp_tcp";
 const char *TAG_GET_RSP_UDP = "task_get_rsp_udp";
 
 static uint32_t data_window_count = 0;
+static char this_device_id[18] = "00:00:00:00:00:00";
 
 #define NVS_NAMESPACE "nebulaedge"
 #define NVS_KEY_CONFIG "config_blob"
+
+/* Obtiene dirección MAC bluetooth. */
+static void get_device_id(void) {
+    uint8_t mac[6] = {0};
+
+    esp_err_t ret = esp_read_mac(mac, ESP_MAC_BT);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "No se pudo leer MAC BT: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    snprintf(this_device_id, sizeof(this_device_id), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ESP_LOGI(TAG, "ID del device detectado: %s", this_device_id);
+}
 
 static void nvs_clear_config(void) {
     nvs_handle_t nvs;
@@ -118,7 +139,8 @@ static Config *nvs_load_config(void) {
     return cfg;
 }
 
-// Deep sleep helper para modo discontinuo
+/* Deep sleep helper para modo discontinuo.
+ * Se llama en la función de envío de cada protocolo. */
 static void deep_sleep_if_needed(void) {
     if (!current_config) {
         return;
@@ -141,12 +163,38 @@ static void deep_sleep_if_needed(void) {
     uint64_t sleep_us = (uint64_t)current_config->discontinuous_sleep_time * 1000ULL;
     ESP_LOGI(TAG, "Entrando deep sleep por %ld ms", (long)current_config->discontinuous_sleep_time);
 
-    // Cierre ordenado de TCP antes de deep sleep
-    if (current_config->protocol_conf == 2) {
-        tcp_close_socket();
+
+    // En MQTT
+    if (current_config->protocol_conf == 0) {
+        // Suspende porque envío de flag cierra socket 
+        if (xHandleGetResponseMQTT) {
+            vTaskSuspend(xHandleGetResponseMQTT);
+        }
+        char topic_data[128];
+        snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
+        mqtt_publish(topic_data, DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN, 0);
     }
     
-    // BLE: no persistir config, partir desde cero al despertar
+
+    // En UDP
+    if (current_config->protocol_conf == 1) {
+        // Suspende porque envío de flag cierra socket 
+        if (xHandleGetResponseUDP) {
+            vTaskSuspend(xHandleGetResponseUDP);
+        }
+        nebulaedge_udp_send((uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+    }
+
+    // En TCP
+    if (current_config->protocol_conf == 2) {
+        // Suspende porque envío de flag cierra socket 
+        if (xHandleGetResponseTCP) {
+            vTaskSuspend(xHandleGetResponseTCP);
+        }
+        tcp_send((uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+    }
+    
+    // En BLE: no persistir config, partir desde cero al despertar
     if (current_config->protocol_conf == 3) {
         nvs_clear_config();
     } 
@@ -154,30 +202,14 @@ static void deep_sleep_if_needed(void) {
         nvs_save_config(current_config);
     }
 
+    // Delay de precaución
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
     esp_sleep_enable_timer_wakeup(sleep_us);
     esp_deep_sleep_start();
 }
 
-// Esta función gatillará un task watchdog! Simula la demora que puede
-// tener un sensor para entregar un dato
-void busy_wait_10s_ticks(void) {
-    TickType_t start = xTaskGetTickCount();
-    TickType_t target = start + pdMS_TO_TICKS(5000);
-    while (xTaskGetTickCount() < target) {
-        // esp_task_wdt_reset(); // si necesario
-    }
-}
-
-// Imprime los tasks activos. Debugging.
-void print_active_tasks(void) {
-    char buffer[1024];
-    vTaskList(buffer);
-    printf("Nombre      Estado Prio Stack Num\n");
-    printf("%s\n", buffer);
-}
-
-// config: Recibe dos configuraciones y retorna un booleano si son diferentes o iguales
-// esta responsabilidad se le puede pasar a la raspberry
+// Recibe dos configuraciones y retorna un booleano si son diferentes o iguales
 bool config_has_changed(Config *old, Config *new) {
     if (new->config_version > old->config_version) return true;
     if (new->config_version < old->config_version) return false;
@@ -259,43 +291,69 @@ static void send_config_ack_tcp(const Config *cfg, bool applied) {
     free(buf);
 }
 
-// GEN_DATA: Genera datos random y los inserta en una xQueue. Simula generación de datos de sensores.
-void vTaskGenRandData(void *pvParameters) {
+// GEN_DATA: Lee datos de sensores, los empaqueta y los inserta en una xQueue.
+void vTaskCollectSensorData(void *pvParameters) {
     for (;;) {
         Data1 data_1 = DATA_1__INIT;
-        data_1.id_device   = "34:85:18:A2:DB:A2";                     // id fijo
-        data_1.temperature = rand() % 100;                            // temperatura entre 0 y 99
-        data_1.press       = rand() % 1100;                           // presión entre 0 y 1099
-        data_1.co          = ((float)rand() / RAND_MAX) * 10.0f;      // CO entre 0.0 y 10.0
-        data_1.rms         = ((float)rand() / RAND_MAX) * 5.0f;       // RMS entre 0.0 y 5.0
-        data_1.amp_x       = ((float)rand() / RAND_MAX) * 2.0f;       // amp_x entre 0.0 y 2.0
-        data_1.freq_x      = ((float)rand() / RAND_MAX) * 100.0f;     // freq_x entre 0.0 y 100.0
-        data_1.amp_y       = ((float)rand() / RAND_MAX) * 2.0f;
-        data_1.freq_y      = ((float)rand() / RAND_MAX) * 100.0f;
-        data_1.amp_z       = ((float)rand() / RAND_MAX) * 2.0f;
-        data_1.freq_z      = ((float)rand() / RAND_MAX) * 100.0f;
+        data_1.id_device = this_device_id;
         data_1.config_version_applied = current_config ? current_config->config_version : 0;
 
-        packet_t packet;
+        Data2 data_2 = DATA_2__INIT;
+        data_2.id_device = this_device_id;
+        data_2.config_version_applied = current_config ? current_config->config_version : 0;
 
+        packet_t packet_1;
+        packet_t packet_2;
+
+        // Recogida de datos de sensores
+        readout_data_bmm350(&data_1, false, true);
+        readout_data_bme688(&data_1, false, true, true, true, true, 2, 16, 1); 
+        readout_data_bmi270(&data_2, false, true, true);
+        
         // Serializa el mensaje protobuf
-        packet.size = data_1__get_packed_size(&data_1);
-        packet.data = malloc(packet.size);
-        if (packet.data == NULL) {
-            ESP_LOGI(TAG_RAND_DATA, "Error: no se pudo reservar memoria para el paquete");
+        packet_1.size = data_1__get_packed_size(&data_1) + 1;
+        packet_1.data = malloc(packet_1.size);
+        if (packet_1.data == NULL) {
+            ESP_LOGI(TAG_COLLECT_DATA, "Error: no se pudo reservar memoria para el paquete");
+            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
-        data_1__pack(&data_1, packet.data);
-        ESP_LOGI(TAG_RAND_DATA, "Paquete random generado");
+        packet_1.data[0] = 0x01;
+        data_1__pack(&data_1, packet_1.data + 1);
+        ESP_LOGI(TAG_COLLECT_DATA, "Paquete Data1 generado");
 
         // Inserción en la queue
-        int send = xQueueSend(xQueueData, &packet, portMAX_DELAY);
+        int send = xQueueSend(xQueueData, &packet_1, portMAX_DELAY);
         if (send == pdTRUE) {
-            ESP_LOGI(TAG_RAND_DATA, "Se ha insertado correctamente en la xQueue");
+            ESP_LOGI(TAG_COLLECT_DATA, "Se ha insertado correctamente en la xQueue");
         }
-        else if (send == errQUEUE_FULL) {
-            ESP_LOGW(TAG_RAND_DATA, "xQueueSend: QUEUE FULL, paquete descartado y memoria liberada");
-            free(packet.data);
+        else {
+            ESP_LOGW(TAG_COLLECT_DATA, "xQueueSend falló (code=%d), paquete descartado y memoria liberada", send);
+            free(packet_1.data);
+        }
+        
+        // Ritma la producción
+        vTaskDelay(1);
+
+        packet_2.size = data_2__get_packed_size(&data_2) + 1;
+        packet_2.data = malloc(packet_2.size);
+        if (packet_2.data == NULL) {
+            ESP_LOGI(TAG_COLLECT_DATA, "Error: no se pudo reservar memoria para el paquete");
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        packet_2.data[0] = 0x02;
+        data_2__pack(&data_2, packet_2.data + 1);
+        ESP_LOGI(TAG_COLLECT_DATA, "Paquete Data2 generado");
+
+        // Inserción en la queue
+        xQueueSend(xQueueData, &packet_2, portMAX_DELAY);
+        if (send == pdTRUE) {
+            ESP_LOGI(TAG_COLLECT_DATA, "Se ha insertado correctamente en la xQueue");
+        }
+        else {
+            ESP_LOGW(TAG_COLLECT_DATA, "xQueueSend falló (code=%d), paquete descartado y memoria liberada", send);
+            free(packet_2.data);
         }
 
         // Ritma la producción
@@ -376,11 +434,11 @@ void vTaskGetResponseMQTT(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskSendMQTT");
             }
 
-            if (xHandleGenRandData) { 
+            if (xHandleCollectSensorData) { 
                 // Se resetea queue para que quede vacía
                 xQueueReset(xQueueData);
-                vTaskSuspend(xHandleGenRandData);
-                ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskGenRandData");  
+                vTaskSuspend(xHandleCollectSensorData);
+                ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskCollectSensorData");  
             }
 
             mqtt_finish();
@@ -473,11 +531,11 @@ void vTaskGetResponseBLE(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskSendBLE");
                 vTaskSuspend(xHandleSendBLE);
             }
-            if (xHandleGenRandData) {
+            if (xHandleCollectSensorData) {
                 // Se resetea queue para que quede vacía
                 xQueueReset(xQueueData);
-                ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskGenRandData");
-                vTaskSuspend(xHandleGenRandData);
+                ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskCollectSensorData");
+                vTaskSuspend(xHandleCollectSensorData);
             }
 
             // Señala a app_main que debe cambiar de protocolo
@@ -502,23 +560,15 @@ void vTaskSendUDP(void *pvParameters) {
     packet_t packet;
     for (;;) {
         if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) == pdTRUE) {
-            
-            // Ritmo de envío según configuración
+            nebulaedge_udp_send(packet.data, packet.size);
+            free(packet.data);
             vTaskDelay(pdMS_TO_TICKS((uint32_t)current_config->send_interval_ms) + 1);
 
-            // Delay de precaución en caso de modo discontinuo
-            if (current_config->discontinuous_sleep_time > 0) {
-                vTaskDelay(pdMS_TO_TICKS(1000));
-            }
-            
-            nebulaedge_udp_send(packet.data, packet.size);
+            // // Delay de precaución en caso de modo discontinuo
+            // if (current_config->discontinuous_sleep_time > 0) {
+            //     vTaskDelay(pdMS_TO_TICKS(1000));
+            // }
 
-            // Para evitar que se pierda el último paquete
-            if (data_window_count + 1 == (uint32_t)current_config->discontinuous_window_size) {
-                vTaskDelay(pdMS_TO_TICKS(3000));
-            }
-            
-            free(packet.data);
             deep_sleep_if_needed();
         }
     }
@@ -536,6 +586,7 @@ void vTaskGetResponseUDP(void *pvParameters) {
 
         if (len_recv == 0) {
             ESP_LOGI(TAG_GET_RSP_UDP, "no han llegado nuevos datos de configuración");
+            vTaskDelay(1);
             continue;
         }
 
@@ -565,11 +616,11 @@ void vTaskGetResponseUDP(void *pvParameters) {
                 vTaskSuspend(xHandleSendUDP);
             }
 
-            if (xHandleGenRandData) {
+            if (xHandleCollectSensorData) {
                 // Se resetea queue para que quede vacía
                 xQueueReset(xQueueData);
-                ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo vTaskGenRandData");
-                vTaskSuspend(xHandleGenRandData);
+                ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo vTaskCollectSensorData");
+                vTaskSuspend(xHandleCollectSensorData);
             }
 
             send_config_ack_udp(current_config, true);
@@ -619,6 +670,7 @@ void vTaskGetResponseTCP(void *pvParameters) {
         size_t len_recv = tcp_receive(buffer, len);
         if (len_recv == 0) {
             // sin datos/timeout
+            vTaskDelay(1);
             continue;
         }
 
@@ -650,11 +702,11 @@ void vTaskGetResponseTCP(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskSendTCP");
                 vTaskSuspend(xHandleSendTCP);
             }
-            if (xHandleGenRandData) {
+            if (xHandleCollectSensorData) {
                 // Se resetea queue para que quede vacía
                 xQueueReset(xQueueData);
-                ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskGenRandData");
-                vTaskSuspend(xHandleGenRandData);
+                ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskCollectSensorData");
+                vTaskSuspend(xHandleCollectSensorData);
             }
 
             send_config_ack_tcp(current_config, true);
@@ -679,11 +731,26 @@ void vTaskGetResponseTCP(void *pvParameters) {
 
 void app_main() {
 
-    /* ***************************************************************/
-    /* *************************  COMUNES ****************************/
-    /* ***************************************************************/
+    /****************************************************************/
+    /******************** INICIALIZACIÓN SENSORES *******************/
+    /****************************************************************/
+
+    // Inicializa master bus
+    ESP_ERROR_CHECK(i2c_master_init(&bus_handle));
+
+    // Inicializa slaves BMM350, BME688, BMI270
+    ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmm350, BMM350_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+    ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bme688, BME688_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+    ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmi270, BMI270_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+
+
+
+    /****************************************************************/
+    /**************************  COMUNES ****************************/
+    /****************************************************************/
 
     srand((unsigned)time(NULL));
+    get_device_id();
 
     // Inicializa NVS
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -698,9 +765,9 @@ void app_main() {
     xQueueConfigBle = xQueueCreate(5, sizeof(packet_t));
 
 
-    /* *******************************************************************/
-    /* ******************** CONFIG INICIAL (NVS/BLE) ******************** */
-    /* *******************************************************************/
+    /********************************************************************/
+    /********************* CONFIG INICIAL (NVS/BLE) *********************/
+    /********************************************************************/
 
     // Recoge la información de la NVS solo si despierta de un deep sleep.
     // En caso de reinicio espera configuración vía BLE.
@@ -716,9 +783,9 @@ void app_main() {
         nvs_clear_config();
     }
 
-    /* *******************************************************************/
-    /* *********************** INICIO VÍA BLE  ***************************/
-    /* *******************************************************************/
+    /********************************************************************/
+    /************************ INICIO VÍA BLE  ***************************/
+    /********************************************************************/
     
     // BLE queda activo siempre
     ble_init();
@@ -742,9 +809,12 @@ void app_main() {
             data_window_count = 0;
             ESP_LOGI(TAG, "configuración leída correctamente");
         }
-    } 
+    }
 
-
+    // Inicializa sensores BMM350, BME688, BMI270 con respectivas configuraciones
+    bmm350_init(400, 4);                // bmm350_init(ODR = 4, AVG = 4);
+    bme688_init();                      // bme688_init();
+    bmi270_init(400, 4, 8, 400, 500);   // bmi270_init(ACC_ODR, ACC_AVG, ACC_RANGE, GYR_ODR, GYR_RANGE);
 
     /****************************************************************/
     /********** ITERACIÓN QUE MANEJA DE CAMBIOS DE PROTOCOLO ********/
@@ -794,14 +864,14 @@ void app_main() {
                 mqtt_subscribe(topic_cfg, 0);
                 
                 // Crea una sola vez las tasks
-                if (!xHandleGenRandData)
-                    xTaskCreate(vTaskGenRandData, TAG_RAND_DATA, 4096, NULL, 2, &xHandleGenRandData);
+                if (!xHandleCollectSensorData)
+                    xTaskCreate(vTaskCollectSensorData, TAG_COLLECT_DATA, 4096, NULL, 2, &xHandleCollectSensorData);
                 if (!xHandleSendMQTT)
                     xTaskCreate(vTaskSendMQTT, TAG_SEND_MQTT, 4096, NULL, 2, &xHandleSendMQTT);
                 if (!xHandleGetResponseMQTT) 
                     xTaskCreate(vTaskGetResponseMQTT, TAG_GET_RSP_MQTT, 4096, NULL, 3, &xHandleGetResponseMQTT);
 
-                vTaskResume(xHandleGenRandData);
+                vTaskResume(xHandleCollectSensorData);
                 vTaskResume(xHandleSendMQTT);
                 vTaskResume(xHandleGetResponseMQTT);
 
@@ -840,14 +910,14 @@ void app_main() {
                 nebulaedge_udp_open_socket(&params);
 
                 // Crea una sola vez las tasks
-                if (!xHandleGenRandData)
-                    xTaskCreate(vTaskGenRandData, TAG_RAND_DATA, 4096, NULL, 2, &xHandleGenRandData);
+                if (!xHandleCollectSensorData)
+                    xTaskCreate(vTaskCollectSensorData, TAG_COLLECT_DATA, 4096, NULL, 2, &xHandleCollectSensorData);
                 if (!xHandleSendUDP)
                     xTaskCreate(vTaskSendUDP, TAG_SEND_UDP, 4096, NULL, 2, &xHandleSendUDP);
                 if (!xHandleGetResponseUDP) 
                     xTaskCreate(vTaskGetResponseUDP, TAG_GET_RSP_UDP, 4096, NULL, 3, &xHandleGetResponseUDP);
 
-                vTaskResume(xHandleGenRandData);
+                vTaskResume(xHandleCollectSensorData);
                 vTaskResume(xHandleSendUDP);
                 vTaskResume(xHandleGetResponseUDP);
 
@@ -895,14 +965,14 @@ void app_main() {
                 }
 
                 // Crea una sola vez las tasks
-                if (!xHandleGenRandData)
-                    xTaskCreate(vTaskGenRandData, TAG_RAND_DATA, 4096, NULL, 2, &xHandleGenRandData);
+                if (!xHandleCollectSensorData)
+                    xTaskCreate(vTaskCollectSensorData, TAG_COLLECT_DATA, 4096, NULL, 2, &xHandleCollectSensorData);
                 if (!xHandleSendTCP)
                     xTaskCreate(vTaskSendTCP, TAG_SEND_TCP, 4096, NULL, 2, &xHandleSendTCP);
                 if (!xHandleGetResponseTCP) 
                     xTaskCreate(vTaskGetResponseTCP, TAG_GET_RSP_TCP, 4096, NULL, 3, &xHandleGetResponseTCP);
 
-                vTaskResume(xHandleGenRandData);
+                vTaskResume(xHandleCollectSensorData);
                 vTaskResume(xHandleSendTCP);
                 vTaskResume(xHandleGetResponseTCP);
 
@@ -933,14 +1003,14 @@ void app_main() {
                 vTaskDelay(5000 / portTICK_PERIOD_MS);
 
                 // Crea una sola vez las tasks
-                if (!xHandleGenRandData)
-                    xTaskCreate(vTaskGenRandData, TAG_RAND_DATA, 4096, NULL, 2, &xHandleGenRandData);
+                if (!xHandleCollectSensorData)
+                    xTaskCreate(vTaskCollectSensorData, TAG_COLLECT_DATA, 4096, NULL, 2, &xHandleCollectSensorData);
                 if (!xHandleSendBLE)
                     xTaskCreate(vTaskSendBLE, TAG_SEND_BLE, 4096, NULL, 2, &xHandleSendBLE);
                 if (!xHandleGetResponseBLE) 
                     xTaskCreate(vTaskGetResponseBLE, TAG_GET_RSP_BLE, 4096, NULL, 3, &xHandleGetResponseBLE);
 
-                vTaskResume(xHandleGenRandData);
+                vTaskResume(xHandleCollectSensorData);
                 vTaskResume(xHandleSendBLE);
                 vTaskResume(xHandleGetResponseBLE);
 

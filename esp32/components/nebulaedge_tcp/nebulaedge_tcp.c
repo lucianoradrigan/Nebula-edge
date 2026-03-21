@@ -141,7 +141,7 @@ void tcp_send(uint8_t *data, size_t len) {
 size_t tcp_receive(uint8_t *buffer, size_t len) {
 
     // Receive TCP
-    size_t len_recv = recv(sock, buffer, len, 0);
+    ssize_t len_recv = recv(sock, buffer, len, 0);
 
     // Error occurred during receiving
     if (len_recv < 0) {
@@ -149,10 +149,15 @@ size_t tcp_receive(uint8_t *buffer, size_t len) {
         return 0;
     }
 
-    // Data received
-    ESP_LOGI(TAG, "Received %d bytes", len_recv);
+    if (len_recv == 0) {
+        ESP_LOGW(TAG, "socket closed by peer");
+        return 0;
+    }
 
-    return len_recv;
+    // Data received
+    ESP_LOGI(TAG, "received %d bytes", (int)len_recv);
+
+    return (size_t)len_recv;
 }
 
 
@@ -164,11 +169,11 @@ void tcp_close_socket(void) {
         shutdown(sock, 0);
         close(sock);
         ESP_LOGI(TAG, "Socket closed");
+        sock = -1;
     }
     else {
         ESP_LOGW(TAG, "Socket is already closed");
     }
     free(dest_addr);
+    dest_addr = NULL;
 }
-// Hay cosas que se comparten entre UDP y TCP. Se podría
-// hacer un script de funciones comunes.
