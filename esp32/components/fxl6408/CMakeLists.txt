@@ -1,6 +1,6 @@
-idf_component_register(SRCS "nebulaedge_microsd.c"
+idf_component_register(SRCS "fxl6408.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES esp_driver_sdspi fatfs)
+                    REQUIRES esp_driver_i2c)
 
 if(CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE)
    # some variables are only used by asserts

@@ -7,12 +7,16 @@
 #include "nebulaedge_i2c.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_log.h"
 #include "bme688.h"
 
-static float t_fine;
+static int32_t t_fine;
+static int temp_ovs_global, press_ovs_global, hum_ovs_global;
 
-static const char *TAG = "BME688";
+static const char *TAG = "bme688";
 static esp_err_t ret;
+static bool is_bme688_active = false;
+#define BME688_INIT_RETRIES 3
 
 static uint8_t calc_gas_wait(uint16_t dur) {
     // Fuente: BME688 API
@@ -39,11 +43,13 @@ static uint8_t calc_res_heat(uint16_t temp) {
     // Fuente: BME688 API
     // https://github.com/boschsensortec/BME68x_SensorAPI/blob/master/bme68x.c#L1145
     uint8_t heatr_res;
-    uint8_t amb_temp = 25;
+    int8_t amb_temp = 25;
 
     uint8_t reg_par_g1 = 0xED;
-    uint8_t par_g1;
-    device_read(device_bme688, &reg_par_g1, &par_g1, 1, TAG);
+    uint8_t par_g1_u8;
+    int8_t par_g1;
+    device_read(device_bme688, &reg_par_g1, &par_g1_u8, 1, TAG);
+    par_g1 = (int8_t)par_g1_u8;
 
     uint8_t reg_par_g2_lsb = 0xEB;
     uint8_t par_g2_lsb;
@@ -53,10 +59,12 @@ static uint8_t calc_res_heat(uint16_t temp) {
     uint8_t par_g2_msb;
     device_read(device_bme688, &reg_par_g2_msb, &par_g2_msb, 1, TAG);
 
-    uint16_t par_g2 = (int16_t)(CONCAT_BYTES(par_g2_msb, par_g2_lsb));
+    int16_t par_g2 = (int16_t)(CONCAT_BYTES(par_g2_msb, par_g2_lsb));
     uint8_t reg_par_g3 = 0xEE;
-    uint8_t par_g3;
-    device_read(device_bme688, &reg_par_g3, &par_g3, 1, TAG);
+    uint8_t par_g3_u8;
+    int8_t par_g3;
+    device_read(device_bme688, &reg_par_g3, &par_g3_u8, 1, TAG);
+    par_g3 = (int8_t)par_g3_u8;
 
     uint8_t reg_res_heat_range = 0x02;
     uint8_t res_heat_range;
@@ -64,7 +72,8 @@ static uint8_t calc_res_heat(uint16_t temp) {
     uint8_t tmp_res_heat_range;
 
     uint8_t reg_res_heat_val = 0x00;
-    uint8_t res_heat_val;
+    uint8_t res_heat_val_u8;
+    int8_t res_heat_val;
 
     int32_t var1;
     int32_t var2;
@@ -78,7 +87,8 @@ static uint8_t calc_res_heat(uint16_t temp) {
     }
 
     device_read(device_bme688, &reg_res_heat_range, &tmp_res_heat_range, 1, TAG);
-    device_read(device_bme688, &reg_res_heat_val, &res_heat_val, 1, TAG);
+    device_read(device_bme688, &reg_res_heat_val, &res_heat_val_u8, 1, TAG);
+    res_heat_val = (int8_t)res_heat_val_u8;
     res_heat_range = (mask_res_heat_range & tmp_res_heat_range) >> 4;
 
     var1 = (((int32_t)amb_temp * par_g3) / 1000) * 256;
@@ -93,39 +103,63 @@ static uint8_t calc_res_heat(uint16_t temp) {
 }
 
 /* Comprueba comunicación con sensor. */
-static void chipid(void) {
+static esp_err_t chipid(void) {
     uint8_t reg_id = 0xd0;
     uint8_t tmp;
 
-    device_read(device_bme688, &reg_id, &tmp, 1, TAG);
-    printf("Valor de CHIPID: %2X \n\n", tmp);
+    for (int attempt = 1; attempt <= BME688_INIT_RETRIES; ++attempt) {
+        ret = device_read(device_bme688, &reg_id, &tmp, 1, TAG);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Intento %d/%d de lectura CHIPID falló: %s", attempt, BME688_INIT_RETRIES, esp_err_to_name(ret));
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
 
-    if (tmp == 0x61) {
-        printf("Chip BME688 reconocido.\n\n");
-    } 
-    else {
-        printf("Chip BME688 no reconocido. \nCHIP ID: %2x\n\n", tmp);  // %2X
+        ESP_LOGI(TAG, "Valor de CHIPID: 0x%02X", tmp);
+
+        if (tmp == 0x61) {
+            ESP_LOGI(TAG, "Chip reconocido exitosamente");
+            is_bme688_active = true;
+            return ESP_OK;
+        }
+
+        ESP_LOGW(TAG, "Intento %d/%d. Chip BME688 no reconocido. CHIP ID: 0x%02X", attempt, BME688_INIT_RETRIES, tmp);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
+
+    ESP_LOGE(TAG, "Verificación CHIPID BME688 agotó reintentos");
+    return ESP_ERR_INVALID_RESPONSE;
 }
 
 /* Reinicia el BME688. */
-static void softreset(void) {
+static esp_err_t softreset(void) {
     uint8_t reg_softreset = 0xE0; 
     uint8_t val_softreset = 0xB6;
 
-    ret = device_write(device_bme688, &reg_softreset, &val_softreset, 1, TAG);
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    if (ret != ESP_OK) {
-        printf("\nError en softreset: %s \n", esp_err_to_name(ret));
-    } 
-    else {
-        printf("\nSoftreset: OK\n\n");
+    for (int attempt = 1; attempt <= BME688_INIT_RETRIES; ++attempt) {
+        ret = device_write(device_bme688, &reg_softreset, &val_softreset, 1, TAG);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Intento %d/%d softreset fallido: %s", attempt, BME688_INIT_RETRIES, esp_err_to_name(ret));
+            continue;
+        }
+
+        ESP_LOGI(TAG, "Softreset BME688: OK");
+        vTaskDelay(pdMS_TO_TICKS(200));
+        return ESP_OK;
     }
+
+    ESP_LOGE(TAG, "Softreset BME688 agotó reintentos");
+    return ret;
 }
 
 /* Se setea el valor de oversampling de temperatura, presión y humedad. 
  * Además, pone al sensor en modo forzado. */
-static void set_oversampling_tph(int osrs_t_set, int osrs_p_set, int osrs_h_set) {
+static void set_oversampling_tph(void) {
+    int osrs_t_set = temp_ovs_global;
+    int osrs_p_set = press_ovs_global;
+    int osrs_h_set = hum_ovs_global;
     // Humidity sensor oversampling control
     uint8_t ctrl_hum_reg = 0x72;
 
@@ -166,7 +200,7 @@ static void set_oversampling_tph(int osrs_t_set, int osrs_p_set, int osrs_h_set)
             osrs_h = 0x05;
             break;               
         default:
-            printf("OVERSAMPLING HUMEDAD BME688 INCORRECTO.\n");
+            ESP_LOGE(TAG, "OVERSAMPLING HUMEDAD BME688 INCORRECTO.");
             exit(EXIT_SUCCESS);
     }
 
@@ -188,7 +222,7 @@ static void set_oversampling_tph(int osrs_t_set, int osrs_p_set, int osrs_h_set)
             osrs_t = 0x05;
             break;               
         default:
-            printf("OVERSAMPLING TEMPERATURA BME688 INCORRECTO.\n");
+            ESP_LOGE(TAG, "OVERSAMPLING TEMPERATURA BME688 INCORRECTO.");
             exit(EXIT_SUCCESS);
     }
 
@@ -210,7 +244,7 @@ static void set_oversampling_tph(int osrs_t_set, int osrs_p_set, int osrs_h_set)
             osrs_p = 0x05;
             break;               
         default:
-            printf("OVERSAMPLING PRESIÓN BME688 INCORRECTO.\n");
+            ESP_LOGE(TAG, "OVERSAMPLING PRESION BME688 INCORRECTO.");
             exit(EXIT_SUCCESS);
     }
 
@@ -250,24 +284,25 @@ static void set_oversampling_tph(int osrs_t_set, int osrs_p_set, int osrs_h_set)
     device_write(device_bme688, &ctrl_meas_reg, &ctrl_meas_val, 1, TAG);
 }
 
-static int check_forced_mode(void) {
-    uint8_t ctrl_hum_reg = 0x72;
-    uint8_t ctrl_meas_reg = 0x74;
-    uint8_t gas_wait_0_reg = 0x64;
-    uint8_t res_heat_0_reg = 0x5A;
-    uint8_t ctrl_gas_1_reg = 0x71;
+/* Función utilitaria. */
+// static int check_forced_mode(void) {
+//     uint8_t ctrl_hum_reg = 0x72;
+//     uint8_t ctrl_meas_reg = 0x74;
+//     uint8_t gas_wait_0_reg = 0x64;
+//     uint8_t res_heat_0_reg = 0x5A;
+//     uint8_t ctrl_gas_1_reg = 0x71;
 
-    uint8_t tmp, tmp2, tmp3, tmp4, tmp5;
+//     uint8_t tmp, tmp2, tmp3, tmp4, tmp5;
 
-    ret = device_read(device_bme688, &ctrl_hum_reg, &tmp, 1, TAG);
-    ret = device_read(device_bme688, &gas_wait_0_reg, &tmp2, 1, TAG);
-    ret = device_read(device_bme688, &res_heat_0_reg, &tmp3, 1, TAG);
-    ret = device_read(device_bme688, &ctrl_gas_1_reg, &tmp4, 1, TAG);
-    ret = device_read(device_bme688, &ctrl_meas_reg, &tmp5, 1, TAG);
+//     ret = device_read(device_bme688, &ctrl_hum_reg, &tmp, 1, TAG);
+//     ret = device_read(device_bme688, &gas_wait_0_reg, &tmp2, 1, TAG);
+//     ret = device_read(device_bme688, &res_heat_0_reg, &tmp3, 1, TAG);
+//     ret = device_read(device_bme688, &ctrl_gas_1_reg, &tmp4, 1, TAG);
+//     ret = device_read(device_bme688, &ctrl_meas_reg, &tmp5, 1, TAG);
 
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    return (tmp == 0b001 && tmp2 == 0x59 && tmp3 == 0x00 && tmp4 == 0b100000 && tmp5 == 0b01010101);
-}
+//     vTaskDelay(1000 / portTICK_PERIOD_MS);
+//     return (tmp == 0b001 && tmp2 == 0x59 && tmp3 == 0x00 && tmp4 == 0b100000 && tmp5 == 0b01010101);
+// }
 
 /* This internal API is used to calculate the temperature value. */
 static int16_t temp_celsius(uint32_t temp_adc) {
@@ -279,8 +314,8 @@ static int16_t temp_celsius(uint32_t temp_adc) {
     uint8_t addr_par_t2_lsb = 0x8A, addr_par_t2_msb = 0x8B;
     uint8_t addr_par_t3_lsb = 0x8C;
     uint16_t par_t1;
-    uint16_t par_t2;
-    uint16_t par_t3;
+    int16_t par_t2;
+    int8_t par_t3;
 
     uint8_t par[5];
     device_read(device_bme688, &addr_par_t1_lsb, par, 1, TAG);
@@ -296,7 +331,6 @@ static int16_t temp_celsius(uint32_t temp_adc) {
     int64_t var1;
     int64_t var2;
     int64_t var3;
-    int32_t t_fine;
     int16_t calc_temp;
 
     var1 = ((int32_t)temp_adc >> 3) - ((int32_t)par_t1 << 1);
@@ -322,8 +356,16 @@ static uint32_t press_pascal(uint32_t press_adc) {
     uint8_t addr_par_p9_lsb = 0x9E, addr_par_p9_msb = 0x9F;
     uint8_t addr_par_p10_lsb = 0xA0;
 
-    uint32_t par_p1, par_p2, par_p3, par_p4, par_p5;
-    uint32_t par_p6, par_p7, par_p8, par_p9, par_p10;
+    uint16_t par_p1;
+    int16_t par_p2;
+    int8_t par_p3;
+    int16_t par_p4;
+    int16_t par_p5;
+    int8_t par_p6;
+    int8_t par_p7;
+    int16_t par_p8;
+    int16_t par_p9;
+    uint8_t par_p10;
 
     uint8_t par_p[16];
 
@@ -345,15 +387,15 @@ static uint32_t press_pascal(uint32_t press_adc) {
     device_read(device_bme688, &addr_par_p10_lsb, par_p + 15, 1, TAG);
 
     par_p1 = (par_p[1] << 8) | par_p[0];
-    par_p2 = (par_p[3] << 8) | par_p[2];
-    par_p3 = par_p[4];
-    par_p4 = (par_p[6] << 8) | par_p[5];
-    par_p5 = (par_p[8] << 8) | par_p[7];
-    par_p6 = par_p[9];
-    par_p7 = par_p[10];
-    par_p8 = (par_p[12] << 8) | par_p[11];
-    par_p9 = (par_p[14] << 8) | par_p[13];
-    par_p10 = par_p[15];
+    par_p2 = (int16_t)((par_p[3] << 8) | par_p[2]);
+    par_p3 = (int8_t)par_p[4];
+    par_p4 = (int16_t)((par_p[6] << 8) | par_p[5]);
+    par_p5 = (int16_t)((par_p[8] << 8) | par_p[7]);
+    par_p6 = (int8_t)par_p[9];
+    par_p7 = (int8_t)par_p[10];
+    par_p8 = (int16_t)((par_p[12] << 8) | par_p[11]);
+    par_p9 = (int16_t)((par_p[14] << 8) | par_p[13]);
+    par_p10 = (uint8_t)par_p[15];
 
     // Calculo de la presion
     int64_t var1_p, var2_p, var3_p;
@@ -393,7 +435,9 @@ static uint32_t hum_percent(uint16_t hum_adc) {
     uint8_t addr_par_h6_lsb = 0xE7;
     uint8_t addr_par_h7_lsb = 0xE8;
 
-    uint32_t par_h1, par_h2, par_h3, par_h4, par_h5, par_h6, par_h7;
+    uint16_t par_h1, par_h2;
+    int8_t par_h3, par_h4, par_h5, par_h7;
+    uint8_t par_h6;
     uint8_t par_h[9];
 
     device_read(device_bme688, &addr_par_h1_lsb, par_h, 1, TAG);
@@ -411,11 +455,11 @@ static uint32_t hum_percent(uint16_t hum_adc) {
 
     par_h1 = (par_h[0] & 0x0F) | (uint16_t)(par_h[1] << 4);
     par_h2 = ((par_h[2] & 0xF0) >> 4) | (uint16_t)(par_h[3] << 4);
-    par_h3 = par_h[4];
-    par_h4 = par_h[5];
-    par_h5 = par_h[6];
-    par_h6 = par_h[7];
-    par_h7 = par_h[8];
+    par_h3 = (int8_t)par_h[4];
+    par_h4 = (int8_t)par_h[5];
+    par_h5 = (int8_t)par_h[6];
+    par_h6 = (uint8_t)par_h[7];
+    par_h7 = (int8_t)par_h[8];
 
     int32_t var1, var2, var3, var4, var5, var6;
     int32_t temp_scaled;
@@ -471,26 +515,17 @@ static void get_mode(void) {
 
     tmp = tmp & 0x3;
 
-    printf("Valor de BME MODE: %2X \n\n", tmp);
+    ESP_LOGI(TAG, "Valor de BME MODE: 0x%02X", tmp);
 }
 
 
 /* Extrae datos de temperatura, presión, humedad y resistencia de gas
- * del sensor BME688, los procesa e imprime en la salida estándar.
- * 
- * Si el parámetro loop es TRUE realiza lecturas indefinidamente.
- * Por otro lado, si loop es FALSE se realizará UNA sola lectura. En este caso
- * measure puede ser NULL o corresponder a un puntero a una estructura Data1. 
- * Lo primero es para almacenar datos y lo segundo para no hacerlo. Esto fue
- * diseñado así para ser llamado repetidas veces en un script externo (main). 
- * 
- * bool loop: true para imprimir datos en loop: esto solo tiene utilidad en la ejecución
- * independiente de este script. */     
-void readout_data_bme688(Data1 *data, bool loop, bool act_temp, bool act_press, bool act_hum, bool act_gas, int temp_ovs, int press_ovs, int hum_ovs) {
+ * del sensor BME688, los procesa e imprime en la salida estándar. */     
+void readout_data_bme688(Data1 *data) {
 
-    if (data != NULL && loop == true) {
-        printf("PARÁMETROS DE LECTURA BME688 INCORRECTOS.\n");
-        exit(EXIT_SUCCESS);
+    if (!is_bme688_active) {
+        ESP_LOGW(TAG, "BME688 no activo, se omite lectura");
+        return;
     }
 
     // Datasheet[23:41]
@@ -506,84 +541,89 @@ void readout_data_bme688(Data1 *data, bool loop, bool act_temp, bool act_press, 
     uint8_t forced_gas_reg[] = {0x2C, 0x2D};
     uint8_t forced_gas_range_reg[] = {0x2D};
 
-    do {
-        uint32_t temp_adc = 0;
-        uint32_t press_adc = 0;
-        uint16_t hum_adc = 0;
-        uint32_t gas_adc = 0;
-        uint8_t gas_range = 0;
+    uint32_t temp_adc = 0;
+    uint32_t press_adc = 0;
+    uint16_t hum_adc = 0;
+    uint32_t gas_adc = 0;
+    uint8_t gas_range = 0;
 
-        set_oversampling_tph(temp_ovs, press_ovs, hum_ovs);
-        // Datasheet[41]
-        // https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme688-ds000.pdf#page=41
+    // Datasheet[41]
+    // https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme688-ds000.pdf#page=41
+    set_oversampling_tph();
 
-        // Temperature read
-        device_read(device_bme688, &forced_temp_reg[0], &tmp, 1, TAG);
-        temp_adc = temp_adc | tmp << 12;
-        device_read(device_bme688, &forced_temp_reg[1], &tmp, 1, TAG);
-        temp_adc = temp_adc | tmp << 4;
-        device_read(device_bme688, &forced_temp_reg[2], &tmp, 1, TAG);
-        temp_adc = temp_adc | (tmp & 0xF0) >> 4;
+    // Temperature read
+    device_read(device_bme688, &forced_temp_reg[0], &tmp, 1, TAG);
+    temp_adc = temp_adc | tmp << 12;
+    device_read(device_bme688, &forced_temp_reg[1], &tmp, 1, TAG);
+    temp_adc = temp_adc | tmp << 4;
+    device_read(device_bme688, &forced_temp_reg[2], &tmp, 1, TAG);
+    temp_adc = temp_adc | (tmp & 0xF0) >> 4;
 
-        // Pressure read
-        device_read(device_bme688, &forced_press_reg[0], &tmp, 1, TAG);
-        press_adc = press_adc | tmp << 12;
-        device_read(device_bme688, &forced_press_reg[1], &tmp, 1, TAG);
-        press_adc = press_adc | tmp << 4;
-        device_read(device_bme688, &forced_press_reg[2], &tmp, 1, TAG);
-        press_adc = press_adc | (tmp & 0xF0) >> 4;
+    // Pressure read
+    device_read(device_bme688, &forced_press_reg[0], &tmp, 1, TAG);
+    press_adc = press_adc | tmp << 12;
+    device_read(device_bme688, &forced_press_reg[1], &tmp, 1, TAG);
+    press_adc = press_adc | tmp << 4;
+    device_read(device_bme688, &forced_press_reg[2], &tmp, 1, TAG);
+    press_adc = press_adc | (tmp & 0xF0) >> 4;
 
-        // Humidity read
-        device_read(device_bme688, &forced_hum_reg[0], &tmp, 1, TAG);
-        hum_adc = hum_adc | tmp << 8;
-        device_read(device_bme688, &forced_hum_reg[1], &tmp, 1, TAG);
-        hum_adc = hum_adc | tmp;
+    // Humidity read
+    device_read(device_bme688, &forced_hum_reg[0], &tmp, 1, TAG);
+    hum_adc = hum_adc | tmp << 8;
+    device_read(device_bme688, &forced_hum_reg[1], &tmp, 1, TAG);
+    hum_adc = hum_adc | tmp;
 
-        // Gas read
-        device_read(device_bme688, &forced_gas_reg[0], &tmp, 1, TAG);
-        gas_adc = gas_adc | tmp << 2;
-        device_read(device_bme688, &forced_gas_reg[1], &tmp, 1, TAG);
-        gas_adc = gas_adc | tmp >> 6;
+    // Gas read
+    device_read(device_bme688, &forced_gas_reg[0], &tmp, 1, TAG);
+    gas_adc = gas_adc | tmp << 2;
+    device_read(device_bme688, &forced_gas_reg[1], &tmp, 1, TAG);
+    gas_adc = gas_adc | tmp >> 6;
 
-        // Gas range read
-        device_read(device_bme688, &forced_gas_range_reg[0], &tmp, 1, TAG);
-        gas_range = tmp & 0x0F;
+    // Gas range read
+    device_read(device_bme688, &forced_gas_range_reg[0], &tmp, 1, TAG);
+    gas_range = tmp & 0x0F;
 
-        uint32_t temp = temp_celsius(temp_adc);
-        uint32_t press = press_pascal(press_adc);
-        float hum = hum_percent(hum_adc);
-        uint32_t gas = gas_resistance_ohms(gas_adc, gas_range);
-        
-        printf("temp_bme688: %f °C\n", (float)temp / 100);
-        printf("press: %f hPa\n", (float)press/100);
-        printf("hum: %f percent\n", hum/1000);
-        printf("gas: %f Ohms\n\n", (float)gas);
+    int16_t temp = temp_celsius(temp_adc);
+    uint32_t press = press_pascal(press_adc);
+    float hum = hum_percent(hum_adc);
+    uint32_t gas = gas_resistance_ohms(gas_adc, gas_range);
+    
+    ESP_LOGI(TAG, "temp_bme688: %f C", (float)temp / 100);
+    ESP_LOGI(TAG, "press: %f hPa", (float)press / 100);
+    ESP_LOGI(TAG, "hum: %f percent", hum / 1000);
+    ESP_LOGI(TAG, "gas: %f Ohms", (float)gas);
 
-        if (data != NULL) {
-            // Guarda las medidas en protobuf.
-            if (act_temp) {
-                data->temperature = (float)temp/100;
-            }
-            if (act_press) {
-                data->press = (int32_t)(press / 100);
-            }
-            if (act_hum) { 
-                data->hum = (int32_t)(hum / 1000);
-            }
-            if (act_gas) {
-                data->co = (float)gas;
-            }
-        }
+    if (data != NULL) {
+        // Guarda las medidas en protobuf.
+        data->temperature = (float)temp/100;
+        data->press = (int32_t)(press / 100);
+        data->hum = (int32_t)(hum / 1000);
+        data->co = (float)gas;
     }
-    while (loop);
 }
 
 /* Función para ser llamada desde el script main. Contiene llamados a todas las
  * funciones que se encargan de inicializar el sensor. */
-void bme688_init(void) {
-    chipid();
-    softreset();
+void bme688_init(int temp_ovs, int press_ovs, int hum_ovs) {
+    temp_ovs_global = temp_ovs;
+    press_ovs_global = press_ovs;
+    hum_ovs_global = hum_ovs;
+    is_bme688_active = false;
+
+    ret = chipid();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Init abortada: CHIPID inválido (%s)", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = softreset();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Init abortada: softreset falló (%s)", esp_err_to_name(ret));
+        return;
+    }
+
     get_mode();
+    set_oversampling_tph();
 }
 
 // void app_main(void) {

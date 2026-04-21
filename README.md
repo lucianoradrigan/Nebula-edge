@@ -1,103 +1,58 @@
 # NebulaEdge
 
-Sistema edge con múltiples ESP32 que envían telemetría de sensores a una Raspberry Pi central.
+Sistema edge con multiples ESP32 que envian telemetria de sensores a una Raspberry Pi central.
 
-La Raspberry:
+## 1) Que hace el sistema
 
-- Entrega configuración inicial vía BLE a cada ESP32.
-- Recibe telemetría por el protocolo configurado por dispositivo (MQTT, UDP, TCP o BLE).
-- Guarda los datos en PostgreSQL.
-- Detecta cambios de configuración en base de datos y los aplica en caliente sin apagar el sistema.
+Flujo en runtime:
 
-## 1) Arquitectura funcional
+1. La Raspberry descubre dispositivos por BLE.
+2. Busca la configuracion del ESP32 por MAC (`id_device`) en `nebulaedge_schema.config`.
+3. Envia configuracion inicial por BLE.
+4. El ESP32 entra al protocolo indicado (`0 MQTT`, `1 UDP`, `2 TCP`, `3 BLE`).
+5. El ESP32 envia telemetria protobuf (`Data_1`, `Data_2`).
+6. La Raspberry persiste en PostgreSQL (`nebulaedge_schema.data_1`, `nebulaedge_schema.data_2`).
+7. Si sube `config_version`, ambos cambian de config/protocolo en caliente (con `ConfigAck`).
 
-Flujo esperado en runtime:
+## 2) Requisitos minimos
 
-1. El servidor en Raspberry escanea dispositivos BLE objetivo.
-2. Al detectar un ESP32, busca su configuración en la tabla `config` (por `id_device`, MAC).
-3. Envía esa configuración por BLE.
-4. El ESP32 aplica la config y entra al protocolo seleccionado:
-	- `0 = MQTT`
-	- `1 = UDP`
-	- `2 = TCP`
-	- `3 = BLE`
-5. El ESP32 envía telemetría (`Data_1`) usando protobuf.
-6. La Raspberry inserta los datos en `data_1`.
-7. Si cambia `config_version` en DB, la Raspberry reconfigura al ESP32 y ambos cambian de protocolo sin reinicio.
+Hardware:
 
-## 2) Estructura del repositorio
+1. PC con Windows, Mac o Linux.
+2. 1 Raspberry Pi 5.
+3. 1 a 6 placas de desarrollo IM-V2 (ESP32-S3) (mas no validado en este repo).
+4. Dongle Bluetooth USB en Raspberry (probado con TP-LINK).
 
-- `esp32/`: firmware ESP-IDF para los nodos ESP32.
-- `raspberry/`: servidor Python + Docker Compose + PostgreSQL.
-- `raspberry/db_init/`: scripts SQL de inicialización (`config`, `log`, `data_1`).
-- `raspberry/server/`: lógica de escaneo BLE, sesiones MQTT/UDP/TCP/BLE y persistencia en DB.
+Software en PC:
 
-## 3) Guía por rol
-
-Si estás trabajando en el firmware del dispositivo:
-
-- Revisar `esp32/README.md`.
-
-Si estás trabajando en el servidor central:
-
-- Revisar `raspberry/README.md`.
-
-Este README raíz mantiene la visión completa e integración entre ambos.
-
-## 4) Requisitos
-
-Hardware mínimo:
-
-1. Raspberry Pi 5.
-2. De 1 a 8 placas ESP32 (no se ha testeado con mayor cantidad).
-3. Dongle USB Bluetooth para la Raspberry (obligatorio para ejecutar el servidor, probado con TP-LINK).
+1. ESP-IDF `v5.4.1` limpio.
+2. Target del proyecto: `esp32s3`.
 
 Software en Raspberry:
 
-1. Raspberry Pi OS.
+1. Raspberry Pi OS (Linux).
 2. Docker + Docker Compose.
-3. Linux con acceso a Bluetooth (`bluez`, `rfkill`).
-4. Cliente PostgreSQL (`psql`) para cambios de configuración en caliente.
-4. (Opcional desarrollo local) Python 3.11.2.
+3. Bluetooth habilitado (`bluez`, `rfkill`).
+4. Cliente PostgreSQL (`psql`).
+5. NetworkManager operativo (`nmcli`).
 
-Software para firmware ESP32:
+## 3) Setup
 
-1. ESP-IDF instalado (toolchain + `idf.py`).
-2. Target usado en el proyecto: `esp32s3`.
 
-## 5) Puesta en marcha rápida (Raspberry + DB + servidor)
-
-Desde la raíz del repo:
+### Paso 1: Verificar entorno ESP-IDF en PC
 
 ```bash
-cd raspberry
-sudo docker compose build
-sudo docker compose up -d
+cd esp32
+idf.py --version
+git -C "$IDF_PATH" status --porcelain
 ```
 
-Ver logs del servidor:
+Esperado:
 
-```bash
-sudo docker logs -f nebulaedge_server
-```
+- `idf.py --version` debe mostrar `ESP-IDF v5.4.1`.
+- `git status --porcelain` no debe mostrar cambios.
 
-Ver logs de base de datos:
-
-```bash
-sudo docker logs -f nebulaedge_db
-```
-
-Si quieres reinicializar completamente el server + base de datos (incluye seed):
-
-```bash
-cd raspberry
-sudo docker compose down -v
-sudo docker compose up --build -d
-```
-
-## 6) Firmware ESP32 (compilar y flashear)
-
-Desde la raíz del repo:
+### Paso 2: Compilar y flashear ESP32-S3
 
 ```bash
 cd esp32
@@ -106,156 +61,156 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-Notas:
+Nota: ajusta el puerto `/dev/ttyUSB0`, `/dev/ttyACM0` dependiendo del sistema en que operes.
 
-- Ajusta el puerto serial (`/dev/ttyUSB0`, `/dev/ttyACM0`, etc.).
-- El flujo implementado inicia con BLE para recibir config inicial.
+Completando estos pasos la ESP32-S3 quedará con el firmware para conectarse al server y quedará ejecutando, imprimiendo sus logs en la consola (*importante para los pasos siguientes).
 
-## 7) Bluetooth en Raspberry (problema común)
+### Paso 3: Preparar Bluetooth en Raspberry
 
-Al primer uso del dongle puede venir bloqueado (`Soft blocked: yes`):
+Si el Bluetooth esta bloqueado:
 
 ```bash
 rfkill list
 sudo rfkill unblock bluetooth
 ```
 
-El servidor intenta usar un adaptador USB automáticamente (`BLE_ADAPTER=auto`).
-Si necesitas forzar uno específico:
+Si necesitas forzar adaptador BLE:
 
 ```bash
 cd raspberry
 BLE_ADAPTER=hci1 sudo docker compose up -d --build
 ```
 
-## 8) Modelo de configuración por dispositivo
-
-Cada ESP32 se identifica por MAC (`id_device`) en la tabla `config`.
-
-Campos clave:
-
-- `config_version`: debe incrementarse en cada cambio para gatillar reconfiguración.
-- `protocol_conf`: protocolo activo (`0 MQTT`, `1 UDP`, `2 TCP`, `3 BLE`).
-- `send_interval_ms`: intervalo de envío de datos.
-- `discontinuous_sleep_time`: si `> 0`, habilita modo discontinuo con deep sleep.
-- `discontinuous_window_size`: cantidad de paquetes enviados antes de dormir.
-- `tcp_port`, `udp_port`, `mqtt_broker`.
-
-## 9) Cambiar protocolo en caliente (sin apagar)
-
-Instalar `psql` en Raspberry (si no está instalado):
-
-```bash
-sudo apt update
-sudo apt install -y postgresql-client
-```
-
-Entrar a PostgreSQL en el contenedor:
-
-```bash
-sudo docker exec -it nebulaedge_db psql -U nebulaedge -d nebulaedge
-```
-
-Alternativa usando `psql` local contra el puerto publicado por Docker:
-
-```bash
-psql "postgresql://nebulaedge:1234@localhost:5432/nebulaedge"
-```
-
-Ejemplo: cambiar un ESP32 de TCP (`2`) a UDP (`1`) y actualizar versión:
-
-```sql
-UPDATE config
-SET protocol_conf = 1,
-	 config_version = config_version + 1,
-	 udp_port = 1240,
-	 send_interval_ms = 1000
-WHERE id_device = '58:BF:25:99:B4:92';
-```
-
-Resultado esperado:
-
-1. Raspberry detecta versión nueva.
-2. Envía nueva config al ESP32 por el canal activo.
-3. ESP32 responde ACK (`ConfigAck`).
-4. Ambos migran al nuevo protocolo.
-
-## 10) Modo continuo vs discontinuo (deep sleep)
-
-Continuo:
-
-- `discontinuous_sleep_time = 0`
-
-Discontinuo:
-
-- `discontinuous_sleep_time > 0`
-- `discontinuous_window_size >= 1`
-
-Ejemplo: enviar cada 1 segundo, 5 paquetes, dormir 60 segundos:
-
-```sql
-UPDATE config
-SET send_interval_ms = 1000,
-	 discontinuous_window_size = 5,
-	 discontinuous_sleep_time = 60000,
-	 config_version = config_version + 1
-WHERE id_device = '58:BF:25:99:B4:92';
-```
-
-## 11) Verificar que todo está funcionando
-
-Checklist mínimo:
-
-1. `nebulaedge_db` y `nebulaedge_server` en estado `Up`.
-2. El servidor muestra descubrimiento BLE y conexión de cada ESP32.
-3. Existen filas en `data_1`.
-4. Al cambiar `config_version`, se observa reconfiguración y ACK.
-
-Consulta rápida:
-
-```sql
-SELECT id_device, config_version_applied, temperature, press
-FROM data_1
-ORDER BY id_device
-LIMIT 20;
-```
-
-## 12) Desarrollo local sin Docker (opcional)
+### Paso 4: Levantar base de datos y servidor en Raspberry
 
 ```bash
 cd raspberry
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cd server
-python3 classes.py
+sudo docker compose up --build -d
 ```
 
-Necesitas una instancia PostgreSQL accesible en `localhost` con:
+Verifica logs:
 
-- DB: `nebulaedge`
-- user: `nebulaedge`
-- password: `1234`
+```bash
+sudo docker logs -f nebulaedge_db
+sudo docker logs -f nebulaedge_server
+```
 
-## 13) Problemas frecuentes
+### Paso 5: Registrar dispositivos ESP32-S3 en DB usando su MAC Bluetooth
 
-1. No aparece el ESP32 en BLE:
-	- Revisa `rfkill list` y desbloquea Bluetooth.
-	- Revisa que el dongle USB esté detectado (`hci1`/`hci0`).
-2. No aplica cambios de config:
-	- Verifica que incrementaste `config_version`.
-3. No llegan datos por TCP/UDP/MQTT:
-	- Revisa SSID/password entregados en config.
-	- Verifica puertos y broker configurados.
-4. La DB no se resetea con `up --build`:
-	- Usa `docker compose down -v` antes de levantar.
+El servidor (Raspberry) posee en su base de datos una lista de dispositivos que se pueden conectar a él, junto con configuraciones de sensores y credenciales de comunicación. El id de los dispositivos está dado por su dirección MAC Bluetooth.
 
-## 14) Estado actual
+En el paso 2, al imprimirse los logs de la ESP32-S3 en consola, se debe buscar la dirección MAC impresa que tiene el siguiente formato:
 
-El repositorio implementa:
+- `ID del device detectado: XX:XX:XX:XX:XX:XX`
 
-- Configuración inicial vía BLE.
-- Telemetría protobuf por MQTT/UDP/TCP/BLE.
-- Persistencia en PostgreSQL.
-- Cambio de protocolo/configuración en caliente basado en versión.
-- Modo discontinuo con deep sleep.
+Luego, editar [raspberry/db_init/03_seed.sql](raspberry/db_init/03_seed.sql) añadiendo la nueva tupla asociada al nuevo dispositivo. Ahí se encuentran los valores iniciales de las configuraciones de dispositivos. Ejemplo:
+
+```sql
+('C0:49:EF:08:CE:82', 0, 1, 400, 500, 8, 1, 1, 10, 1827, 1243, 'mqtt://broker.hivemq.com:1883')
+```
+
+Para que este cambio sea efectivo se debe hacer rebuild de la componente docker nebulaedge_db con los siguientes comandos:
+
+```bash
+cd raspberry
+sudo docker compose down -v
+sudo docker compose up --build -d
+```
+
+### Paso 6: Verificar que llega telemetria
+
+En `psql`:
+
+```sql
+SELECT id_device, config_version_applied, temperature, press, time_client
+FROM nebulaedge_schema.data_1
+ORDER BY time_client DESC
+LIMIT 20;
+```
+
+### Paso 7: Probar cambio de protocolo en caliente
+
+En `psql`:
+
+```sql
+UPDATE nebulaedge_schema.config
+SET protocol_conf = 1,
+    config_version = config_version + 1,
+    udp_port = 1240,
+    send_interval_s = 1
+WHERE id_device = '58:BF:25:99:B4:92';
+```
+
+Esperado:
+
+1. Raspberry detecta nueva version.
+2. Envia nueva config.
+3. ESP32 responde `ConfigAck`.
+4. Ambos migran al nuevo protocolo.
+
+## 4) Base de datos
+
+La base vive en PostgreSQL y usa el schema `nebulaedge_schema`. Ahí se guardan tres tipos de datos: configuracion inicial del dispositivo, telemetria de sensores y logs operativos del servidor.
+
+Tablas principales:
+
+- `nebulaedge_schema.config`: una fila por dispositivo (`id_device`) con la configuracion activa que la Raspberry lee por BLE.
+- `nebulaedge_schema.data_1`: telemetria de sensores del paquete `Data_1`.
+- `nebulaedge_schema.data_2`: telemetria de sensores del paquete `Data_2`.
+- `nebulaedge_schema.log`: eventos de operacion del servidor, como conexion inicial, heartbeat y desconexion.
+
+Qué guarda cada una:
+
+- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `host_ip_addr`, `ssid`, `passwd`, `mqtt_broker`.
+- `data_1`: `temperature`, `press`, `hum`, `co`, `rms`, ejes y frecuencias del acelerometro y magnetometro, mas `config_version_applied` y `time_client`.
+- `data_2`: `acc_x`, `acc_y`, `acc_z`, `gyr_x`, `gyr_y`, `gyr_z`, `config_version_applied` y `time_client`.
+- `log`: `status_report`, `protocol_report`, `batt_level`, `time_client`, `time_server`.
+
+Consultas utiles:
+
+```sql
+SELECT *
+FROM nebulaedge_schema.data_1
+ORDER BY time_client DESC
+LIMIT 20;
+```
+
+```sql
+SELECT *
+FROM nebulaedge_schema.data_2
+ORDER BY time_client DESC
+LIMIT 20;
+```
+
+```sql
+SELECT *
+FROM nebulaedge_schema.log
+ORDER BY time_server DESC
+LIMIT 20;
+```
+
+Si quieres modificar los dispositivos que arrancan con datos precargados, edita [raspberry/db_init/03_seed.sql](raspberry/db_init/03_seed.sql).
+
+## 5) Campos clave de configuracion
+
+- `id_device`: MAC Bluetooth del ESP32.
+- `config_version`: incrementa en cada cambio.
+- `protocol_conf`: `0 MQTT`, `1 UDP`, `2 TCP`, `3 BLE`.
+- `send_interval_s`: intervalo de envio en segundos.
+- `sleep_time_s`: deep sleep en segundos (`0` = continuo).
+- `sleep_window_size`: cantidad de paquetes antes de dormir.
+- `tcp_port`, `udp_port`, `mqtt_broker`.
+
+## 6) Observaciones / limitaciones
+
+1. Al tener `sleep_window_size` de tamaño 1, el cambio de protocolo no funciona bien.
+2. Es fundamental hacer los cambios de protocolo de a uno, y esperar a que complete para hacer otro, de otra manera podría colapsar el servidor/no funcionar bien el sistema de ACK's.
+3. El módulo microSD está en desarrollo para la nueva versión de placa de desarrollo IM-V3.
+4. La raspberry enviará las credenciales de la SSID a la que esté actualmente conectada. Se está trabajando en un modo AP.
+
+## 7) Estructura del repositorio
+
+- `esp32/`: firmware ESP-IDF de los nodos.
+- `raspberry/`: servidor Python, Docker Compose y PostgreSQL.
+- `raspberry/db_init/`: scripts SQL de inicializacion.
+- `raspberry/server/`: logica BLE, sesiones MQTT/UDP/TCP/BLE y persistencia.

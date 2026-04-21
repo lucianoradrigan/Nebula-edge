@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import datetime
 import psycopg2
 import schema_pb2
 import asyncio
@@ -18,7 +19,14 @@ from bleak.exc import BleakDBusError
 from bleak.backends.device import BLEDevice
 from enum import Enum
 from dataclasses import dataclass
-from psycopg2.extensions import connection
+
+
+def local_epoch_now() -> int:
+    """Retorna epoch local ajustado al huso horario del servidor."""
+    utc_epoch = int(time.time())
+    local_offset = datetime.now().astimezone().utcoffset()
+    local_offset_sec = int(local_offset.total_seconds()) if local_offset else 0
+    return utc_epoch + local_offset_sec
 
 class BLEAdapterResolver:
     """Utilidades para resolver qué adaptador BLE usar."""
@@ -142,6 +150,7 @@ class LocalWifiConfig:
                 continue
             device, dev_type, state = parts
             if dev_type == "wifi" and state == "connected":
+                print(f"Adaptador WIFI a usar: {device}")
                 return device
         return ""
 
@@ -219,9 +228,13 @@ class LocalWifiConfig:
     @classmethod
     def _active_wifi_psk(cls, conn_name: str) -> str:
         """Obtiene la PSK guardada de la conexión activa (si existe)."""
-        if not conn_name:
-            return ""
-        return cls._run_cmd(["sudo", "nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", conn_name])
+        for _ in range(3):
+            psk = cls._run_cmd(["sudo", "nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", conn_name])
+            if psk and psk != "--":
+                return psk
+            time.sleep(0.05)
+
+        return ""
 
     @classmethod
     def active_wifi_ip(cls, device: str) -> str:
@@ -256,7 +269,9 @@ class LocalWifiConfig:
                 str(cls._CACHE.get("passwd", "")),
             )
 
-        device = cls.active_wifi_device()
+        # device = cls.active_wifi_device()
+        device = "wlan0"
+        # device = "wlan1"
         conn_name = cls._active_connection_name(device)
         ssid = cls._active_wifi_ssid(device, conn_name)
         passwd = cls._active_wifi_psk(conn_name)
@@ -269,19 +284,6 @@ class LocalWifiConfig:
             "host_ip_addr": host_ip_addr or "",
         })
         return host_ip_addr or "", ssid or "", passwd or ""
-
-@dataclass
-class Timeouts:
-    ble_connect_sec: float = 30.0          # Timeout de intentos de conexión BLE (BleakClient)
-    scan_restart_sec: float = 60.0         # Reinicio periódico de scanner BLE
-    connect_cooldown_sec: float = 20.0     # Cooldown entre reconexiones por device
-    config_ack_sec: float = 5.0           # Ventana para ACK de config (MQTT/UDP/TCP/BLE)
-    config_ack_retries: int = 3           # Reintentos de ACK de config (MQTT/UDP/TCP/BLE)
-    no_data_grace_sec: float = 60.0        # Gracia extra al esperar un dato
-    mqtt_poll_sec: float = 0.1             # Sleep de polling MQTT
-    mqtt_queue_timeout_sec: float = 1.0    # Timeout de device_queue.get()
-    ble_ack_short_sec: float = 3.0         # Timeout corto por intento en _wait_ble_ack
-    ble_conn_retries: int = 10             # Reintentos de conexión BLE persistente
 
 class MasterConnection:
     """Gestiona el descubrimiento BLE y crea sesiones por dispositivo.
@@ -316,7 +318,7 @@ class MasterConnection:
         self.scanner = None                                                 # Instancia de BleakScanner
         self.scanner_lock = asyncio.Lock()                                  # Lock para start/stop del scanner
         self.scanner_running = False                                        # Estado de escaneo
-        self.ble_adapter = BLEAdapterResolver.resolve()                      # Forzar adaptador BLE
+        self.ble_adapter = BLEAdapterResolver.resolve()                     # Forzar adaptador BLE
         print(f"[BLE] Usando adaptador: {self.ble_adapter}")
 
     async def _scanner_stop(self):
@@ -394,20 +396,15 @@ class MasterConnection:
             self.devices[addr] = self.State.CONNECTING
             print(f"Device {addr} encontrado")
 
-            db_conn = None
             config = None
             try:
-                db_conn = psycopg2.connect(self.db_dsn)
-                config = ConfigRepository(db_conn).get(addr)
+                config = DatabaseRepository(self.db_dsn).get_config(addr)
                 if config:
                     print(f"[WiFi] SSID: {config.ssid}, Contraseña: {config.passwd}")
             except Exception as e:
                 print(f"Error al conectar/obtener config para {addr}: {e}")
                 self.devices.pop(addr, None)
                 continue
-            finally:
-                if db_conn is not None:
-                    db_conn.close()
 
             if config is None:
                 print(f"No se encontró configuración para device_id {addr}")
@@ -431,6 +428,18 @@ class MasterConnection:
                     self.devices[addr] = self.State.CONNECTED
                     await client.write_gatt_char(UUID_CHAR_A, serialized_config, response=True)
 
+                    # Registra envío de configuración inicial al dispositivo.
+                    DatabaseRepository(self.db_dsn).insert_log(
+                        Log(
+                            id_device=config.id_device,
+                            status_report=1,
+                            protocol_report=config.protocol_conf,
+                            batt_level=100,
+                            time_client=config.time_client,
+                            time_server=config.time_client
+                        )
+                    )
+
                 if self.active_tasks:
                     print(f"Tasks activas: {len(self.active_tasks)} -> {list(self.active_tasks.keys())}")
                 else:
@@ -441,7 +450,8 @@ class MasterConnection:
 
             except Exception as e:
                 print(f"Fallo en la primera conexión BLE con {addr}: {type(e).__name__}: {e!r}")
-                traceback.print_exc()
+                # traceback.print_exc()
+                print(f"Pop device {addr}")
                 self.devices.pop(addr, None)
 
             finally:
@@ -452,8 +462,9 @@ class MasterConnection:
 
     async def _device_session(self, device: BLEDevice, initial_config: "ConfigData"):
         """Wrapper de sesión por dispositivo, asegura limpieza al terminar."""
+        last_protocol = -1
         try:
-            await handle_protocol(
+            last_protocol = await handle_protocol(
                 device,
                 self.db_dsn,
                 initial_config,
@@ -466,8 +477,20 @@ class MasterConnection:
         finally:
             addr = device.address
             self.active_tasks.pop(addr, None)
+            server_time = local_epoch_now()
             # Permite re-descubrimiento si se pierde la conexión
             print(f"Pop device {addr}")
+            # Registra la desconexión
+            DatabaseRepository(self.db_dsn).insert_log(
+                Log(
+                    id_device=addr,
+                    status_report=0,
+                    protocol_report=last_protocol,
+                    batt_level=100,
+                    time_client=server_time,
+                    time_server=server_time
+                )
+            )
             self.devices.pop(addr, None)
 
     async def run(self):
@@ -493,79 +516,60 @@ async def handle_protocol(
     db_dsn: str,
     initial_config: ConfigData,
     scanner_lock: asyncio.Lock | None = None,
-    scanner_stop=None,
-    scanner_start=None,
+    scanner_stop = None,
+    scanner_start = None,
     ble_adapter: str | None = None,
     timeouts: Timeouts | None = None,
 ):
     """Despacha la sesión según el protocolo configurado en `ConfigData`."""
     config = initial_config
+    idx = None
     timeouts = timeouts or Timeouts()
-    db_conn = psycopg2.connect(db_dsn)
-    config_repo = ConfigRepository(db_conn)
-    telemetry_repo = TelemetryRepository(db_conn)
+    database_repo = DatabaseRepository(db_dsn)
+    session_classes = {
+        0: MQTTDeviceSession,
+        1: UDPDeviceSession,
+        2: TCPDeviceSession,
+        3: BLEDeviceSession,
+    }
 
     device_id = device.address
-    try:
-        while True:
-            idx = config.protocol_conf
-            if idx == 0:
-                config = await MQTTDeviceSession(
-                    device,
-                    config,
-                    config_repo,
-                    telemetry_repo,
-                    scanner_lock,
-                    scanner_stop,
-                    scanner_start,
-                    ble_adapter,
-                    timeouts,
-                ).run()
-            elif idx == 1:
-                config = await UDPDeviceSession(
-                    device,
-                    config,
-                    config_repo,
-                    telemetry_repo,
-                    scanner_lock,
-                    scanner_stop,
-                    scanner_start,
-                    ble_adapter,
-                    timeouts,
-                ).run()
-            elif idx == 2:
-                config = await TCPDeviceSession(
-                    device,
-                    config,
-                    config_repo,
-                    telemetry_repo,
-                    scanner_lock,
-                    scanner_stop,
-                    scanner_start,
-                    ble_adapter,
-                    timeouts,
-                ).run()
-            elif idx == 3:
-                config = await BLEDeviceSession(
-                    device,
-                    config,
-                    config_repo,
-                    telemetry_repo,
-                    scanner_lock,
-                    scanner_stop,
-                    scanner_start,
-                    ble_adapter,
-                    timeouts,
-                ).run()
-            else:
-                print(f"Protocol_conf inválido ({idx}) para {device_id}. Cerrando sesión.")
-                break
+    while True:
+        idx = config.protocol_conf
+        session_cls = session_classes.get(idx)
+        if session_cls is None:
+            print(f"Protocol_conf inválido ({idx}) para {device_id}. Cerrando sesión.")
+            idx = -1
+            break
 
-            if config is None:
-                print(f"Sesión finalizada para {device_id}")
-                break
-    finally:
-        db_conn.close()
+        session = session_cls(
+            device,
+            config,
+            database_repo,
+            scanner_lock,
+            scanner_stop,
+            scanner_start,
+            ble_adapter,
+            timeouts,
+        )
+
+        # Heartbeat / loggeo rutinario
+        heartbeat_task = asyncio.create_task(session._protocol_heartbeat_loop())
+        try:
+            config = await session.run()
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
+        if config is None:
+            print(f"Sesión finalizada para {device_id}")
+            break
+        
+    # Se retorna último protocolo, con propósito de loggeo
+    return idx
 
 class DeviceSession:
     """Clase base para sesiones de protocolo (MQTT/UDP/TCP/BLE)."""
@@ -573,8 +577,7 @@ class DeviceSession:
         self,
         device: BLEDevice,                              # Dispositivo BLE asociado a la sesión
         initial_config: ConfigData,                     # Configuración inicial del dispositivo
-        config_repo: ConfigRepository,                  # Repositorio de configuración (BD)
-        telemetry_repo: TelemetryRepository,            # Repositorio de telemetría (BD)
+        database_repo: DatabaseRepository,              # Repositorio general de base de datos
         scanner_lock: asyncio.Lock | None = None,       # Lock para coordinar el scanner BLE
         scanner_stop: Callable[[], Any] | None = None,  # Callback para detener el scanner
         scanner_start: Callable[[], Any] | None = None, # Callback para iniciar el scanner
@@ -584,8 +587,7 @@ class DeviceSession:
         """Inicializa contexto de dispositivo y repositorios."""
         self.device = device                            # Dispositivo BLE asociado a la sesión
         self.device_id = device.address                 # ID del dispositivo (MAC)
-        self.config_repo = config_repo                  # Acceso a configuraciones en BD
-        self.telemetry_repo = telemetry_repo            # Acceso a telemetría en BD
+        self.database_repo = database_repo              # Repositorio compartido para config y telemetría
         self.config = initial_config                    # Configuración actual en memoria del device
         self.scanner_lock = scanner_lock                # Lock para coordinar el scanner BLE
         self.scanner_stop = scanner_stop                # Función para detener el scanner
@@ -593,17 +595,45 @@ class DeviceSession:
         self.ble_adapter = ble_adapter or "hci1"         # Adaptador BLE a usar
         self.timeouts = timeouts or Timeouts()          # Timeouts centralizados
         self.ble_conn_retries = timeouts.ble_conn_retries
+        self._last_client_time: int | None = None       # Último time_client recibido desde Data_1/Data_2
+
+    def _update_last_client_time(self, data: Any):
+        """Actualiza el último timestamp de cliente observado en paquetes de datos."""
+        ts = getattr(data, "time_client", None)
+        if isinstance(ts, int):
+            self._last_client_time = ts
+
+    async def _protocol_heartbeat_loop(self, interval_sec: float = 10.0):
+        """Inserta un log periódico mientras el protocolo de sesión está activo."""
+        while True:
+            await asyncio.sleep(interval_sec)
+            if self._last_client_time is None:
+                continue
+            server_time = local_epoch_now()
+            try:
+                self.database_repo.insert_log(
+                    Log(
+                        id_device=self.device_id,
+                        status_report=2,
+                        protocol_report=self.config.protocol_conf,
+                        batt_level=100,
+                        time_client=self._last_client_time,
+                        time_server=server_time,
+                    )
+                )
+            except Exception as e:
+                print(f"No se pudo insertar heartbeat para {self.device_id}: {e}")
 
     def _sleep_timeout_sec(self) -> float:
-        """Calcula timeout de recepción según `send_interval_ms` y `discontinuous_sleep_time` (ms)."""
-        send_interval_ms = max(0, self.config.send_interval_ms or 0)
-        discontinuous_sleep_ms = max(0, self.config.discontinuous_sleep_time or 0)
-        send_interval = send_interval_ms / 1000.0
-        discontinuous_sleep = discontinuous_sleep_ms / 1000.0
+        """Calcula timeout de recepción según `send_interval_s` (s) y `sleep_time_s` (s)."""
+        send_interval_s = max(0, self.config.send_interval_s or 0)
+        discontinuous_sleep_s = max(0, self.config.sleep_time_s or 0)
+        send_interval = float(send_interval_s)
+        discontinuous_sleep = float(discontinuous_sleep_s)
         base = max(send_interval, discontinuous_sleep)
 
         if base > 0:
-            grace = max(self.timeouts.no_data_grace_sec, 2 * base)
+            grace = max(self.timeouts.no_data_grace_sec, 1.2 * base) # default 2 * base
             return base + grace
         return self.timeouts.no_data_grace_sec
 
@@ -613,55 +643,58 @@ class MQTTDeviceSession(DeviceSession):
         mqtt_start()
 
         device_queue = get_data_queue(self.device_id)
-        ack_queue = get_ack_queue(self.device_id)
+        ack_queue =  get_ack_queue(self.device_id)
         data_topic = f"/topic/nebulaedge/{self.device_id}/data"
         config_topic = f"/topic/nebulaedge/{self.device_id}/config"
-        
+        timeout_sec = self.timeouts.no_data_grace_sec
+
         while True:
-            data_1 = None
+            data = None
             try:
                 # Espera por un paquete
-                serialized_data_1 = device_queue.get(timeout=self.timeouts.mqtt_queue_timeout_sec)
+                packet = await asyncio.to_thread(
+                    device_queue.get,
+                    True,
+                    timeout_sec,
+                )
 
                 # Flag que indica deep sleep
-                if serialized_data_1 == b"ds":
+                if packet == b"ds":
                     print("Se detectó deep sleep")
                     continue
 
-                data_1, data_2 = DataCodec.deserialize_typed_packet(serialized_data_1)
-                if data_2 is not None:
-                    print(f"Paquete Data_2 recibido de {self.device_id}")
-                    self.telemetry_repo.insert_data_2(data_2)
+                # # (este código se repite mucho)
+                # Desempaqueta y obtiene protobuf tipo Data1/Data2
+                data, data_type = DataCodec.deserialize_typed_packet(packet)
+                if data == None or data_type == -1:
                     continue
-                
-                if data_1 is None:
-                    print("Paquete MQTT vacío")
+                if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
+                    self._update_last_client_time(data)
+                if data_type == DataCodec.TYPE_DATA_1:
+                    print(f"MQTT: Paquete Data_1 recibido de {self.device_id}")
+                    self.database_repo.insert_data_1(data)
+                elif data_type == DataCodec.TYPE_DATA_2:
+                    print(f"MQTT: Paquete Data_2 recibido de {self.device_id}")
+                    self.database_repo.insert_data_2(data)
+                else:
                     continue
-                
-                print(f'Paquete MQTT recibido de {self.device_id}')
-                self.telemetry_repo.insert_data_1(data_1)    
 
             except queue.Empty:
-                pass  
-
+                print(f"Timeout MQTT ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
+                return None
             except Exception as e:
                 print(f"Error procesando datos: {e}")
 
-            # ???
+            # Pausa para que otras tareas de asyncio se ejecuten (otras sesiones)
             await asyncio.sleep(self.timeouts.mqtt_poll_sec)
 
-            # Sin telemetría válida no se puede inferir la versión aplicada del device
-            if data_1 is None:
-                continue
-            
             # Obtiene configuración desde DB
-            db_config = self.config_repo.get(self.device_id)
+            db_config = self.database_repo.get_config(self.device_id)
             if db_config is None:
                 continue
 
             # Compara versiones actuales de config DEVICE vs versión BD
-            applied_version = data_1.config_version_applied
-
+            applied_version = data.config_version_applied
             if applied_version > db_config.config_version:
                 print(f"Config aplicada detectada en MQTT ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
                 mqtt_shutdown()
@@ -671,7 +704,6 @@ class MQTTDeviceSession(DeviceSession):
                 if db_config.config_version <= self.config.config_version:
                     # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
                     continue
-
                 print(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
 
                 # Serializa y envía nueva configuración (espera ACK antes de cambiar)
@@ -680,7 +712,11 @@ class MQTTDeviceSession(DeviceSession):
                 mqtt_publish(config_topic, serialized_config)
                 for _ in range(self.timeouts.config_ack_retries):
                     try:
-                        payload = ack_queue.get(timeout=self.timeouts.config_ack_sec)
+                        payload = await asyncio.to_thread(
+                            ack_queue.get,
+                            True,
+                            self.timeouts.config_ack_sec,
+                        )
                         ack = DataCodec.deserialize_config_ack(payload)
                         if (
                             ack
@@ -688,6 +724,7 @@ class MQTTDeviceSession(DeviceSession):
                             and ack.config_version == db_config.config_version
                             and ack.applied
                         ):
+                            print(f"ACK MQTT de recibido para {self.device_id} v{db_config.config_version}")
                             mqtt_shutdown()
                             return db_config
                     except queue.Empty:
@@ -741,16 +778,19 @@ class UDPDeviceSession(DeviceSession):
                     return db_config
 
                 # Si llega telemetría durante la espera, se inserta y se sigue esperando
-                pkt_type, payload = DataCodec.split_typed_packet(pkt)
-                if pkt_type == DataCodec.TYPE_DATA_1:
-                    data_1 = DataCodec.deserialize_data_1(payload)
-                    if data_1 is not None:
-                        self.telemetry_repo.insert_data_1(data_1)
-                        continue
-                if pkt_type == DataCodec.TYPE_DATA_2:
-                    data_2 = DataCodec.deserialize_data_2(payload)
-                    if data_2 is not None:
-                        self.telemetry_repo.insert_data_2(data_2)
+                # Desempaqueta y obtiene protobuf tipo Data1/Data2
+                data, data_type = DataCodec.deserialize_typed_packet(pkt)
+                if data == None or data_type == -1:
+                    continue
+                if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
+                    self._update_last_client_time(data)
+                if data_type == DataCodec.TYPE_DATA_1:
+                    print(f"UDP: Paquete Data_1 recibido de {self.device_id}.")
+                    self.database_repo.insert_data_1(data)
+                if data_type == DataCodec.TYPE_DATA_2:
+                    print(f"UDP: Paquete Data_2 recibido de {self.device_id}.")
+                    self.database_repo.insert_data_2(data)
+                else:
                     continue
 
         print(f"ACK UDP de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
@@ -789,37 +829,42 @@ class UDPDeviceSession(DeviceSession):
                 # Escucha para recibir paquete (no bloqueante)
                 timeout_sec = self._sleep_timeout_sec()
                 try:
-                    serialized_data_1, udp_addr = await asyncio.wait_for(loop.sock_recvfrom(s, 1024), timeout=timeout_sec)
+                    packet, udp_addr = await asyncio.wait_for(loop.sock_recvfrom(s, 1024), timeout=timeout_sec)
                 except asyncio.TimeoutError:
                     print(f"Timeout UDP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
                     return None
 
-                # Flag que indica deep sleep
-                if serialized_data_1 == b"ds":
-                    print("Se detectó deep sleep")
-                    continue
+                ## Común
 
-                print(f'UDP: Paquete Data_1 recibido de {self.device_id} en puerto {port}')
+                # Flag que indica deep sleep
+                if packet == b"ds":
+                    print("Se detectó deep sleep, reinicia socket")
+                    break
 
                 # Desempaqueta y obtiene protobuf tipo Data1/Data2
-                data_1, data_2 = DataCodec.deserialize_typed_packet(serialized_data_1)
-                if data_2 is not None:
-                    print(f"UDP: Paquete Data_2 recibido de {self.device_id} en puerto {port}")
-                    self.telemetry_repo.insert_data_2(data_2)
+                data, data_type = DataCodec.deserialize_typed_packet(packet)
+                if data == None or data_type == -1:
                     continue
-                if data_1 is None:
+                if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
+                    self._update_last_client_time(data)
+                if data_type == DataCodec.TYPE_DATA_1:
+                    print(f"UDP: Paquete Data_1 recibido de {self.device_id} en puerto {port}")
+                    self.database_repo.insert_data_1(data)
+                if data_type == DataCodec.TYPE_DATA_2:
+                    print(f"UDP: Paquete Data_2 recibido de {self.device_id} en puerto {port}")
+                    self.database_repo.insert_data_2(data)
+                else:
                     continue
 
-                # Inserta en la base de datos
-                self.telemetry_repo.insert_data_1(data_1)
-                
                 # Obtiene configuración desde DB
-                db_config = self.config_repo.get(self.device_id)
+                db_config = self.database_repo.get_config(self.device_id)
                 if db_config is None:
                     continue
 
+                ## Común
+
                 # Compara versiones actuales de config DEVICE vs versión BD
-                applied_version = data_1.config_version_applied
+                applied_version = data.config_version_applied
                 if applied_version > db_config.config_version:
                     print(f"Config aplicada detectada en UDP ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
                     return db_config
@@ -831,7 +876,7 @@ class UDPDeviceSession(DeviceSession):
                         return None
                     new_cfg = await self._wait_ack(s, db_config)
                     return new_cfg
-                
+
 class TCPDeviceSession(DeviceSession):
     """Sesión TCP: recibe data, persiste y aplica cambios de config con ACK."""
     async def _send_config(self, conn: socket.socket, db_config: "ConfigData") -> bool:
@@ -878,17 +923,19 @@ class TCPDeviceSession(DeviceSession):
                     print(f"ACK TCP recibido para {self.device_id} v{db_config.config_version}")
                     return db_config
 
-                # Si llega telemetría durante la espera, se inserta y se sigue esperando
-                pkt_type, payload = DataCodec.split_typed_packet(pkt)
-                if pkt_type == DataCodec.TYPE_DATA_1:
-                    data_1 = DataCodec.deserialize_data_1(payload)
-                    if data_1 is not None:
-                        self.telemetry_repo.insert_data_1(data_1)
-                        continue
-                if pkt_type == DataCodec.TYPE_DATA_2:
-                    data_2 = DataCodec.deserialize_data_2(payload)
-                    if data_2 is not None:
-                        self.telemetry_repo.insert_data_2(data_2)
+                # Si llega telemetría durante la espera, se inserta y se sigue esperando (este código se repite mucho)
+                data, data_type = DataCodec.deserialize_typed_packet(pkt)
+                if data == None or data_type == -1:
+                    continue
+                if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
+                    self._update_last_client_time(data)
+                if data_type == DataCodec.TYPE_DATA_1:
+                    print(f"TCP: Paquete Data_1 recibido de {self.device_id}")
+                    self.database_repo.insert_data_1(data)
+                if data_type == DataCodec.TYPE_DATA_2:
+                    print(f"TCP: Paquete Data_2 recibido de {self.device_id}")
+                    self.database_repo.insert_data_2(data)
+                else:
                     continue
 
         print(f"ACK TCP de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
@@ -927,46 +974,52 @@ class TCPDeviceSession(DeviceSession):
 
                     # While de recepción de datos y consulta de config a DB
                     while True:
+
+                        # Recibe dato
+                        timeout_sec = self._sleep_timeout_sec()
                         try:
-                            # Recibe dato
-                            timeout_sec = self._sleep_timeout_sec()
-                            try:
-                                packet = await asyncio.wait_for(loop.sock_recv(conn, 1024), timeout=timeout_sec)
-                            except asyncio.TimeoutError:
-                                print(f"Timeout TCP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
-                                return None
-
-                            if not packet:
-                                return None
-
-                            # Flag que indica deep sleep
-                            if packet == b"ds":
-                                print("Se detectó deep sleep, reinicia socket")
-                                break
-
-                            print(f'Paquete TCP recibido de {self.device_id}')
-
-                            # Deserializa y guarda en DB
-                            data_1, data_2 = DataCodec.deserialize_typed_packet(packet)
-                            if data_2 is not None:
-                                print(f"Paquete Data_2 recibido de {self.device_id}")
-                                self.telemetry_repo.insert_data_2(data_2)
-                                continue
-                            if data_1 is None:
-                                continue
-                            self.telemetry_repo.insert_data_1(data_1)
-
-                        except Exception as e:
-                            print(f"Error inesperado: {e}")
+                            packet = await asyncio.wait_for(loop.sock_recv(conn, 1024), timeout=timeout_sec)
+                        except asyncio.TimeoutError:
+                            print(f"Timeout TCP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
                             return None
+                        except Exception as e:
+                            print(f"Recepción TCP falló: {e}")
+                        if not packet:
+                            print("Conexión TCP cerrada por el otro extremo.")
+                            break
+
+                        ## Común
+
+                        # Flag que indica deep sleep
+                        if packet == b"ds":
+                            print("Se detectó deep sleep, reinicia socket")
+                            break
+
+                        # (este código se repite mucho)
+                        # Desempaqueta y obtiene protobuf tipo Data1/Data2
+                        data, data_type = DataCodec.deserialize_typed_packet(packet)
+                        if data == None or data_type == -1:
+                            continue
+                        if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
+                            self._update_last_client_time(data)
+                        if data_type == DataCodec.TYPE_DATA_1:
+                            print(f"TCP: Paquete Data_1 recibido de {self.device_id} en puerto {port}")
+                            self.database_repo.insert_data_1(data)
+                        if data_type == DataCodec.TYPE_DATA_2:
+                            print(f"TCP: Paquete Data_2 recibido de {self.device_id} en puerto {port}")
+                            self.database_repo.insert_data_2(data)
+                        else:
+                            continue
 
                         # Obtiene configuración desde DB
-                        db_config = self.config_repo.get(self.device_id)
+                        db_config = self.database_repo.get_config(self.device_id)
                         if db_config is None:
                             continue
 
+                        ## Común
+
                         # Compara versiones actuales de config DEVICE vs versión BD
-                        applied_version = data_1.config_version_applied
+                        applied_version = data.config_version_applied
                         if applied_version > db_config.config_version:
                             print(f"Config aplicada detectada en TCP ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
                             return db_config
@@ -1079,7 +1132,13 @@ class BLEDeviceSession(DeviceSession):
 
     async def run(self):
         """Mantiene una conexión BLE persistente y procesa notificaciones."""
-        for attempt in range(self.ble_conn_retries):
+
+        # While para soportar cierres y aperturas de socket por deep sleep
+        while True:
+
+            # Variable para hacer continue de este while desde el while anidado
+            # continue_outer = False
+            
             try:
                 paused_scanner = False
 
@@ -1088,10 +1147,12 @@ class BLEDeviceSession(DeviceSession):
                         await self.scanner_stop()
                         paused_scanner = True
 
+                print(f"BLE: Modo persistente. Intentando conectar al dispositivo {self.device_id}")
+
                 # Durante este bloque estará emparejado con la ESP32
                 async with BleakClient(self.device, adapter=self.ble_adapter) as client:
                     if not client.is_connected:
-                        print(f"No se pudo conectar a {self.device_id} para RECIBIR DATOS")
+                        print(f"No se pudo conectar a {self.device_id} para RECIBIR DATOS. Reintentando")
                         await asyncio.sleep(0.2)
                         continue
 
@@ -1099,15 +1160,6 @@ class BLEDeviceSession(DeviceSession):
                         async with self.scanner_lock:
                             await self.scanner_start()
                         paused_scanner = False
-
-                    ## MODIFICACIÓN GPT
-                    try:
-                        if hasattr(client, "_backend") and hasattr(client._backend, "_get_services"):
-                            await client._backend._get_services()
-                        if hasattr(client, "_backend") and hasattr(client._backend, "_acquire_mtu"):
-                            await client._backend._acquire_mtu()
-                    except Exception as e:
-                        print(f"[BLE] MTU negotiation falló: {e}")
 
                     print(f"BLE persistente iniciado correctamente para {self.device_id}")
                         
@@ -1133,50 +1185,53 @@ class BLEDeviceSession(DeviceSession):
                     await client.start_notify(UUID_CHAR_B, _on_data)
 
                     # Bucle recepción telemetría
-                    packet_count = 0
-                    window_size = self.config.discontinuous_window_size or 0
-                    use_window = (self.config.discontinuous_sleep_time or 0) > 0 and window_size > 0
                     while True:
-                        try:               
+                        try:            
                             await asyncio.sleep(0.1)
-
-                            print(f"Esperando datos vía notify...")
+                            
                             timeout_sec = self._sleep_timeout_sec()
-                            data_1_packet = await asyncio.wait_for(data_queue.get(), timeout=timeout_sec)
-                            data_1, data_2 = DataCodec.deserialize_typed_packet(data_1_packet)
-                            if data_2 is not None:
-                                print(f"Paquete Data_2 recibido de {self.device_id}")
-                                self.telemetry_repo.insert_data_2(data_2)
-                                continue
-                            if data_1 is None:
-                                continue
-                            print(f'Paquete BLE recibido de {self.device_id}')
+                            packet = await asyncio.wait_for(data_queue.get(), timeout=timeout_sec)
 
-                            # Caso deep sleep
-                            packet_count += 1
-                            if use_window and packet_count >= window_size:
-                                print(
-                                    f"Ventana BLE completa ({packet_count}/{window_size}) para {self.device_id}. "
-                                    "Cerrando sesión para permitir deep sleep/reconexión."
-                                )
+                            # Común
+
+                            # (este código se repite mucho)
+                            # Desempaqueta y obtiene protobuf tipo Data1/Data2
+                            data, data_type = DataCodec.deserialize_typed_packet(packet)
+                            if data == None or data_type == -1:
+                                continue
+                            if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
+                                self._update_last_client_time(data)
+                            if data_type == DataCodec.TYPE_DATA_1:
+                                print(f"BLE: Paquete Data_1 recibido de {self.device_id}")
+                                self.database_repo.insert_data_1(data)
+                            if data_type == DataCodec.TYPE_DATA_2:
+                                print(f"BLE: Paquete Data_2 recibido de {self.device_id}")
+                                self.database_repo.insert_data_2(data)
+                            if data_type == DataCodec.TYPE_DEEP_SLEEP:
+                                print(f"BLE: Dispositivo {self.device_id} entrando en deep sleep. Cerrando sesión para permitir reconexión.")
                                 await client.stop_notify(UUID_CHAR_B)
                                 await client.stop_notify(UUID_CHAR_D)
-
                                 # Cierra la task
-                                return None
+                                # return None
+                                # continue_outer = True
 
-                            # Inserta en la base de datos
-                            self.telemetry_repo.insert_data_1(data_1)
+                                # Vuelve a intentar conexión BLE persistente (cuando despierte)
+                                await asyncio.sleep(timeout_sec)
+                                break
+
+                            else:
+                                continue
   
                             # Obtiene configuración de BD
-                            db_config = self.config_repo.get(self.device_id)
-
+                            db_config = self.database_repo.get_config(self.device_id)
                             if db_config is None:
                                 continue
 
+                            print("esto se ejecuta")
+
                             # Compara versiones actuales de config DEVICE vs versión BD
                             # Caso mayor: una configuración nueva ya se aplicó por lo que el server tiene que adecuarse
-                            applied_version = data_1.config_version_applied
+                            applied_version = data.config_version_applied
                             if applied_version > db_config.config_version:
                                 print(f"Config aplicada detectada en BLE ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
                                 await client.stop_notify(UUID_CHAR_B)
@@ -1208,10 +1263,7 @@ class BLEDeviceSession(DeviceSession):
                             continue
                     
             except TimeoutError:
-                print(
-                    f"Timeout conectando al dispositivo {self.device_id} "
-                    f"(intento {attempt + 1}/{self.ble_conn_retries})"
-                )
+                print(f"Timeout conectando al dispositivo {self.device_id}. Reintentando")
                 await asyncio.sleep(0.2)
             finally:
                 if (
@@ -1225,122 +1277,155 @@ class BLEDeviceSession(DeviceSession):
 
         return None
 
-class ConfigRepository:
-    """Repositorio de configuración de ESP32.
+class DatabaseRepository:
+    """Repositorio general para interactuar con la BD."""
+    def __init__(self, db_dsn: str):
+        """Guarda DSN para crear conexiones a BD por operación."""
+        self.db_dsn = db_dsn
 
-    Encapsula lecturas de configuración desde la BD para un dispositivo.
-    """
-    def __init__(self, db: connection):
-        """Guarda la conexión a BD a reutilizar en consultas."""
-        self.db = db
+    @staticmethod
+    def _int_to_db_datetime(value: int) -> datetime:
+        """Convierte un Unix timestamp en segundos a datetime naive UTC."""
+        return datetime.utcfromtimestamp(int(value))
 
-    def get(self, device_id: str) -> ConfigData | None:
+    def get_config(self, device_id: str) -> ConfigData | None:
         """Obtiene la configuración de un dispositivo específico."""
-        cursor = self.db.cursor()
-        try:
-            cursor.execute("""
-                SELECT id_device, config_version, protocol_conf, acc_sampling, gyro_sensibility,
-                    bme688_sampling, send_interval_ms, discontinuous_sleep_time, discontinuous_window_size,
-                    tcp_port, udp_port, mqtt_broker
-                FROM config
-                WHERE id_device = %s;
-            """, (device_id,))
-            
-            row = cursor.fetchone()
-            
-            if row:
-                host_ip_addr, ssid, passwd = LocalWifiConfig.get(cache_ttl_sec=0)
-                return ConfigData(
-                    id_device=row[0],
-                    config_version=row[1],
-                    protocol_conf=row[2],
-                    acc_sampling=row[3],
-                    gyro_sensibility=row[4],
-                    bme688_sampling=row[5],
-                    send_interval_ms=row[6],
-                    discontinuous_sleep_time=row[7],
-                    discontinuous_window_size=row[8],
-                    tcp_port=row[9],
-                    udp_port=row[10],
-                    host_ip_addr=host_ip_addr,
-                    ssid=ssid,
-                    passwd=passwd,
-                    mqtt_broker=row[11]
-                )
-            else:
-                return None
-        finally:
-            cursor.close()
+        with psycopg2.connect(self.db_dsn) as db:
+            with db.cursor() as cursor:
+                cursor.execute("""
+                    SELECT id_device, config_version, protocol_conf, acc_sampling, gyro_sensibility,
+                        bme688_sampling, send_interval_s, sleep_time_s, sleep_window_size,
+                        tcp_port, udp_port, mqtt_broker
+                    FROM nebulaedge_schema.config
+                    WHERE id_device = %s;
+                """, (device_id,))
 
-class TelemetryRepository:
-    """Repositorio de datos generados por ESP32."""
-    def __init__(self, db: connection):
-        """Guarda la conexión a BD a reutilizar en inserts."""
-        self.db = db
+                row = cursor.fetchone()
+
+                if row:
+                    host_ip_addr, ssid, passwd = LocalWifiConfig.get(cache_ttl_sec=0)
+                    time_cli = local_epoch_now()
+                    # print(
+                    #     f"[TIME] send_local_epoch={time_cli} "
+                    #     f"local_now={datetime.fromtimestamp(time_cli)}"
+                    # )
+                    return ConfigData(
+                        id_device=row[0],
+                        config_version=row[1],
+                        protocol_conf=row[2],
+                        acc_sampling=row[3],
+                        gyro_sensibility=row[4],
+                        bme688_sampling=row[5],
+                        send_interval_s=row[6],
+                        sleep_time_s=row[7],
+                        sleep_window_size=row[8],
+                        tcp_port=row[9],
+                        udp_port=row[10],
+                        host_ip_addr=host_ip_addr,
+                        ssid=ssid,
+                        passwd=passwd,
+                        mqtt_broker=row[11],
+                        time_client=time_cli        # Timestamp en segundos
+                    )
+                else:
+                    return None
 
     def insert_data_1(self, data_1: Data_1):
         """Inserta datos de sensor en la BD."""
-        cursor = self.db.cursor()
         try:
-            cursor.execute("""
-                INSERT INTO data_1 (
-                    id_device, temperature, press, hum, co, rms,
-                    amp_x, freq_x, amp_y, freq_y, amp_z, freq_z,
-                    mag_x, mag_y, mag_z, config_version_applied
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                data_1.id_device,
-                data_1.temperature,
-                data_1.press,
-                data_1.hum,
-                data_1.co,
-                data_1.rms,
-                data_1.amp_x,
-                data_1.freq_x,
-                data_1.amp_y,
-                data_1.freq_y,
-                data_1.amp_z,
-                data_1.freq_z,
-                data_1.mag_x,
-                data_1.mag_y,
-                data_1.mag_z,
-                data_1.config_version_applied
-            ))
-            self.db.commit()
-        finally:
-            cursor.close()
+            with psycopg2.connect(self.db_dsn) as db:
+                with db.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO nebulaedge_schema.data_1 (
+                            id_device, temperature, press, hum, co, rms,
+                            amp_x, freq_x, amp_y, freq_y, amp_z, freq_z,
+                            mag_x, mag_y, mag_z, config_version_applied, time_client
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        data_1.id_device,
+                        data_1.temperature,
+                        data_1.press,
+                        data_1.hum,
+                        data_1.co,
+                        data_1.rms,
+                        data_1.amp_x,
+                        data_1.freq_x,
+                        data_1.amp_y,
+                        data_1.freq_y,
+                        data_1.amp_z,
+                        data_1.freq_z,
+                        data_1.mag_x,
+                        data_1.mag_y,
+                        data_1.mag_z,
+                        data_1.config_version_applied,
+                        self._int_to_db_datetime(data_1.time_client)
+                    ))
+                    db.commit()
+        except AttributeError:
+            return
+        except Exception as e:
+            print(e)
 
     def insert_data_2(self, data_2: "Data_2"):
         """Inserta datos Data_2 en la BD."""
-        cursor = self.db.cursor()
         try:
-            cursor.execute("""
-                INSERT INTO data_2 (
-                    id_device, acc_x, acc_y, acc_z,
-                    gyr_x, gyr_y, gyr_z,
-                    time_client, config_version_applied
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                data_2.id_device,
-                data_2.acc_x,
-                data_2.acc_y,
-                data_2.acc_z,
-                data_2.gyr_x,
-                data_2.gyr_y,
-                data_2.gyr_z,
-                data_2.time_client,
-                data_2.config_version_applied,
-            ))
-            self.db.commit()
-        finally:
-            cursor.close()
+            with psycopg2.connect(self.db_dsn) as db:
+                with db.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO nebulaedge_schema.data_2 (
+                            id_device, acc_x, acc_y, acc_z,
+                            gyr_x, gyr_y, gyr_z,
+                            config_version_applied, time_client
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        data_2.id_device,
+                        data_2.acc_x,
+                        data_2.acc_y,
+                        data_2.acc_z,
+                        data_2.gyr_x,
+                        data_2.gyr_y,
+                        data_2.gyr_z,
+                        data_2.config_version_applied,
+                        self._int_to_db_datetime(data_2.time_client),
+                    ))
+                    db.commit()
+        except AttributeError:
+            return
+        except Exception as e:
+            print(e)
+
+    def insert_log(self, log: "Log"):
+        """Inserta un evento de log en la BD."""
+        try:
+            with psycopg2.connect(self.db_dsn) as db:
+                with db.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO nebulaedge_schema.log (
+                            id_device, status_report, protocol_report, batt_level,
+                            time_client, time_server
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (
+                        log.id_device,
+                        log.status_report,
+                        log.protocol_report,
+                        log.batt_level,
+                        self._int_to_db_datetime(log.time_client),
+                        self._int_to_db_datetime(log.time_server),
+                    ))
+                    db.commit()
+        except AttributeError:
+            return
+        except Exception as e:
+            print(e)
 
 class DataCodec:
-    """Esta clase permite que TelemetryRepository se desligue de protobuf.
+    """Esta clase permite que DatabaseRepository se desligue de protobuf.
     En caso de querer cambiar la forma de enviar los datos (JSON por ejemplo)
     solo se tendrá que modificar esto."""
     TYPE_DATA_1 = 0x01
     TYPE_DATA_2 = 0x02
+    # TYPE_ACK = 0x03 sería bueno implementarlo
+    TYPE_DEEP_SLEEP = 0x04
 
     @staticmethod
     def split_typed_packet(packet: bytes) -> tuple[int | None, bytes]:
@@ -1350,14 +1435,17 @@ class DataCodec:
         return packet[0], packet[1:]
 
     @staticmethod
-    def deserialize_typed_packet(packet: bytes) -> tuple["Data_1 | None", "Data_2 | None"]:
-        """Parsea un paquete con prefijo de tipo y devuelve Data_1 o Data_2."""
+    def deserialize_typed_packet(packet: bytes) -> tuple["Data_1 | Data_2 | None", int]:
+        """Parsea un paquete con prefijo de tipo y devuelve una tupla cuya primera posición es Data_1 o Data_2
+           y en la segunda posición el indicador de tipo de paquete. En caso de no ser ninguno retorna [None, -1]"""
         pkt_type, payload = DataCodec.split_typed_packet(packet)
         if pkt_type == DataCodec.TYPE_DATA_1:
-            return DataCodec.deserialize_data_1(payload), None
+            return DataCodec.deserialize_data_1(payload), DataCodec.TYPE_DATA_1
         if pkt_type == DataCodec.TYPE_DATA_2:
-            return None, DataCodec.deserialize_data_2(payload)
-        return None, None
+            return DataCodec.deserialize_data_2(payload), DataCodec.TYPE_DATA_2
+        if pkt_type == DataCodec.TYPE_DEEP_SLEEP:
+            return payload, DataCodec.TYPE_DEEP_SLEEP
+        return None, -1
 
     @staticmethod
     def serialize_data_1(data: Data_1) -> bytes:
@@ -1379,6 +1467,7 @@ class DataCodec:
         pb.mag_y = data.mag_y
         pb.mag_z = data.mag_z
         pb.config_version_applied = data.config_version_applied
+        pb.time_client = data.time_client
         return pb.SerializeToString()
 
     @staticmethod
@@ -1409,6 +1498,7 @@ class DataCodec:
             mag_y=pb.mag_y,
             mag_z=pb.mag_z,
             config_version_applied=pb.config_version_applied,
+            time_client=pb.time_client
         )
 
     @staticmethod
@@ -1422,8 +1512,8 @@ class DataCodec:
         pb.gyr_x = data.gyr_x
         pb.gyr_y = data.gyr_y
         pb.gyr_z = data.gyr_z
-        pb.time_client = data.time_client
         pb.config_version_applied = data.config_version_applied
+        pb.time_client = data.time_client
         return pb.SerializeToString()
 
     @staticmethod
@@ -1444,8 +1534,8 @@ class DataCodec:
             gyr_x=pb.gyr_x,
             gyr_y=pb.gyr_y,
             gyr_z=pb.gyr_z,
-            time_client=pb.time_client,
             config_version_applied=pb.config_version_applied,
+            time_client=pb.time_client,
         )
 
     @staticmethod
@@ -1458,15 +1548,16 @@ class DataCodec:
         pb.acc_sampling = config.acc_sampling
         pb.gyro_sensibility = config.gyro_sensibility
         pb.bme688_sampling = config.bme688_sampling
-        pb.send_interval_ms = config.send_interval_ms
-        pb.discontinuous_sleep_time = config.discontinuous_sleep_time
-        pb.discontinuous_window_size = config.discontinuous_window_size
+        pb.send_interval_s = config.send_interval_s
+        pb.sleep_time_s = config.sleep_time_s
+        pb.sleep_window_size = config.sleep_window_size
         pb.tcp_port = config.tcp_port
         pb.udp_port = config.udp_port
         pb.host_ip_addr = config.host_ip_addr
         pb.ssid = config.ssid
         pb.passwd = config.passwd
         pb.mqtt_broker = config.mqtt_broker
+        pb.time_client = config.time_client
         return pb.SerializeToString()
 
     @staticmethod
@@ -1486,15 +1577,16 @@ class DataCodec:
             acc_sampling=pb.acc_sampling,
             gyro_sensibility=pb.gyro_sensibility,
             bme688_sampling=pb.bme688_sampling,
-            send_interval_ms=pb.send_interval_ms,
-            discontinuous_sleep_time=pb.discontinuous_sleep_time,
-            discontinuous_window_size=pb.discontinuous_window_size,
+            send_interval_s=pb.send_interval_s,
+            sleep_time_s=pb.sleep_time_s,
+            sleep_window_size=pb.sleep_window_size,
             tcp_port=pb.tcp_port,
             udp_port=pb.udp_port,
             host_ip_addr=pb.host_ip_addr,
             ssid=pb.ssid,
             passwd=pb.passwd,
             mqtt_broker=pb.mqtt_broker,
+            time_client=pb.time_client
         )
 
     @staticmethod
@@ -1504,6 +1596,7 @@ class DataCodec:
         pb.id_device = ack.id_device
         pb.config_version = ack.config_version
         pb.applied = ack.applied
+        pb.time_client = ack.time_client
         return pb.SerializeToString()
 
     @staticmethod
@@ -1520,7 +1613,21 @@ class DataCodec:
             id_device=pb.id_device,
             config_version=pb.config_version,
             applied=pb.applied,
+            time_client=pb.time_client,
         )
+
+@dataclass
+class Timeouts:
+    ble_connect_sec: float = 30.0          # Timeout de intentos de conexión BLE (BleakClient)
+    scan_restart_sec: float = 60.0         # Reinicio periódico de scanner BLE
+    connect_cooldown_sec: float = 20.0     # Cooldown entre reconexiones por device
+    config_ack_sec: float = 2.0            # Ventana para ACK de config (MQTT/UDP/TCP/BLE)
+    config_ack_retries: int = 10           # Reintentos de ACK de config (MQTT/UDP/TCP/BLE)
+    no_data_grace_sec: float = 50.0       # Gracia extra al esperar un dato
+    mqtt_poll_sec: float = 0.1             # Sleep de polling MQTT
+    mqtt_queue_timeout_sec: float = 1.0    # Timeout de device_queue.get()
+    ble_ack_short_sec: float = 3.0         # Timeout corto por intento en _wait_ble_ack
+    ble_conn_retries: int = 10             # Reintentos de conexión BLE persistente
 
 @dataclass
 class Data_1:
@@ -1541,6 +1648,7 @@ class Data_1:
     mag_y: float
     mag_z: float
     config_version_applied: int
+    time_client: int
 
 @dataclass
 class Data_2:
@@ -1552,8 +1660,8 @@ class Data_2:
     gyr_x: float
     gyr_y: float
     gyr_z: float
-    time_client: int
     config_version_applied: int
+    time_client: int
 
 @dataclass
 class ConfigData:
@@ -1564,15 +1672,16 @@ class ConfigData:
     acc_sampling: int
     gyro_sensibility: int
     bme688_sampling: int
-    send_interval_ms: int
-    discontinuous_sleep_time: int
-    discontinuous_window_size: int
+    send_interval_s: int
+    sleep_time_s: int
+    sleep_window_size: int
     tcp_port: int
     udp_port: int
-    host_ip_addr: str     
+    host_ip_addr: str
     ssid: str             
     passwd: str
     mqtt_broker: str
+    time_client: int
 
 @dataclass
 class ConfigAckData:
@@ -1580,6 +1689,17 @@ class ConfigAckData:
     id_device: str
     config_version: int
     applied: bool
+    time_client: int
+
+@dataclass
+class Log:
+    """Modelo neutro de log de eventos."""
+    id_device: str
+    status_report: int
+    protocol_report: int
+    batt_level: int
+    time_client: int
+    time_server: int
 
 if __name__ == "__main__":
     master = MasterConnection()

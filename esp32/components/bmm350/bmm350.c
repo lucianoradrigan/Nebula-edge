@@ -25,19 +25,11 @@
 /* Promedio entre muestras. Puede ser 0, 2, 4 u 8. OJO: hay combinaciones 
  * de AVG y ODR NO VÁLIDAS (ver datasheet BMM350). */
 #define AVG                                 4
+#define BMM350_INIT_RETRIES                 3
 
-/* Cantidad de mediciones a tomar y escribir en la tarjeta SD. 
- * Dejar en 0 para imprimir mediciones en loop sin escribir en
- * la tarjeta SD. */
-#define NUM_MEASURES                        0
-
-/* -------------------------------------------------------------------------- */
-/* -------------------------------------------------------------------------- */
-/* -------------------------------------------------------------------------- */
-/* -------------------------------------------------------------------------- */
-
-static const char *TAG = "BMM350";
+static const char *TAG = "bmm350";
 static esp_err_t ret;
+static bool is_bmm350_active = false;
 
 /* Arreglo para almacenar la memoria otp al comienzo de cada boot. */
 static uint16_t data_otp[BMM350_OTP_DATA_LENGTH];
@@ -59,12 +51,16 @@ static const float mag_y_factor = ((float)(1000000.0 / 1048576.0) / (14.55f * 19
 static const float mag_z_factor = ((float)(1000000.0 / 1048576.0) / (9.0f * 31.0 * (1 / 1.5f) * 0.714607238769531f));
 static const float temp_factor = (1 / (0.00204f * (1 / 1.5f) * 0.714607238769531f * 1048576));
 
-/* OBSERVACIÓN 1: Al hacer la lectura en chip_id de 1 solo byte el sensor retornó
+/* Función que lee el Chip ID del BMM350. Sirve para comprobar que funciona bien
+ * la comuncicación con el sensor. Realiza reintentos en caso de no devolver el
+ * valor esperado: 0x33. 
+ * 
+ * OBSERVACIÓN 1: Al hacer la lectura en chip_id de 1 solo byte el sensor retornó
  * 0x00 todas las ejecuciones. Es por eso que la lectura se hizo de más de 1 byte,
  * esto solucionaba el problema.
  * OBSERVACIÓN 2: El valor chip_id está en 0x02, no en 0x00. Se ha observado que 
  * este offset solo aplica en la lectura. */
-static void chipid(void) {
+static esp_err_t chipid(void) {
     // Inicio del rango de registros
     uint8_t reg = 0x00;
 
@@ -72,45 +68,69 @@ static void chipid(void) {
     uint8_t reg_chip_id = 0x02;
     
     // Cantidad de registros a leer
-    uint8_t data[4];     
-    
-    device_read(device_bmm350, &reg, data, sizeof(data), TAG);
-    printf("valor de CHIPID: 0x%02X\n\n", data[reg_chip_id]);
+    uint8_t data[4];
 
-    if (data[2] == 0x33) {
-        printf("Chip reconocido.\n\n");
+    for (int attempt = 1; attempt <= BMM350_INIT_RETRIES; ++attempt) {
+        ret = device_read(device_bmm350, &reg, data, sizeof(data), TAG);
+        
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Intento %d/%d de lectura CHIPID falló: %s", attempt, BMM350_INIT_RETRIES, esp_err_to_name(ret));
+            vTaskDelay((attempt * 100) / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        ESP_LOGI(TAG, "Valor de CHIPID: 0x%02X", data[reg_chip_id]);
+
+        if (data[2] == 0x33) {
+            ESP_LOGI(TAG, "Chip reconocido exitosamente");
+            is_bmm350_active = true;
+            return ESP_OK;
+        } 
+        else {
+            ESP_LOGW(TAG, "Intento %d/%d. Chip no reconocido. CHIP ID: 0x%02X", attempt, BMM350_INIT_RETRIES, data[reg_chip_id]);
+            vTaskDelay((attempt * 100) / portTICK_PERIOD_MS);
+            continue;
+        }
     }
-    else {
-        printf("Chip no reconocido. \nCHIP ID: %2x\n\n", data[reg_chip_id]); /* %2X */
-        exit(EXIT_SUCCESS);
-    }
+
+    ESP_LOGE(TAG, "Verificación CHIPID agotó reintentos");
+    return ESP_ERR_INVALID_RESPONSE;
 }
 
-/* Reinicia el BMM350. */
-static void softreset(void) {
+/* Reinicia el BMM350. Realiza varios reintentos en caso de fallar. */
+static esp_err_t softreset(void) {
     uint8_t reg_softreset = 0x7E;
     uint8_t val_softreset_1 = 0xB6;
     uint8_t val_softreset_2 = 0x00;
 
-    ret = device_write(device_bmm350, &reg_softreset, &val_softreset_1, 1, TAG);
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    for (int attempt = 1; attempt <= BMM350_INIT_RETRIES; ++attempt) {
+        ret = device_write(device_bmm350, &reg_softreset, &val_softreset_1, 1, TAG);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
 
-    if (ret != ESP_OK) {
-        printf("\nError en softreset BMM350 %s\n", esp_err_to_name(ret));
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Intento %d/%d softreset fallido: %s", attempt, BMM350_INIT_RETRIES, esp_err_to_name(ret));
+            continue;
+        }
+
+        ret = device_write(device_bmm350, &reg_softreset, &val_softreset_2, 1, TAG);
+        vTaskDelay(300 / portTICK_PERIOD_MS);
+
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Intento %d/%d softreset fallido: %s", attempt, BMM350_INIT_RETRIES, esp_err_to_name(ret));
+            continue;
+        }
+
+        // Esperar tras el reset exitoso
+        ESP_LOGI(TAG, "Reset exitoso");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        return ESP_OK;
     }
 
-    ret = device_write(device_bmm350, &reg_softreset, &val_softreset_2, 1, TAG);
-    vTaskDelay(300 / portTICK_PERIOD_MS);
-
-    if (ret != ESP_OK) {
-        printf("\nError en softreset BMM350 %s\n", esp_err_to_name(ret));
-    }
-
-    // Esperar tras el reset
-    vTaskDelay(pdMS_TO_TICKS(500)); 
+    ESP_LOGE(TAG, "Softreset BMM350 agotó reintentos");
+    return ret;
 }
 
-/* Se copia la memoria OTP. Estos datos corresponden a compensación
+/* Se copia la memoria OTP del sensor. Estos datos corresponden a compensación
  * magnética y temperatura. */
 static void download_otp(void) {
     uint8_t reg_otp_cmd = 0x50;
@@ -120,7 +140,7 @@ static void download_otp(void) {
     uint8_t reg = 0x00; 
     uint8_t data[100];
 
-    printf("Copiando memoria OTP ... Esto puede demorar.\n");
+    ESP_LOGI(TAG, "Copiando memoria OTP... Esto puede demorar.");
     for (uint8_t i = 0; i < BMM350_OTP_DATA_LENGTH; i++) {
 
         // Data address
@@ -154,10 +174,10 @@ static void download_otp(void) {
     vTaskDelay(100 / portTICK_PERIOD_MS);
 
     if (ret != ESP_OK) {
-        printf("Error en inicializacion: %s \n",esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error en inicializacion: %s", esp_err_to_name(ret));
     }
 
-    printf("\nAlgoritmo de inicializacion finalizado.\n\n");
+    ESP_LOGI(TAG, "Algoritmo de inicializacion finalizado.");
 }
 
 /* Convierte un unsigned int a signed int. */
@@ -306,7 +326,7 @@ static void odr_avg_config(int odr_set, int avg_set) {
             odr = 0x02;
             break;
         default:
-            printf("FRECUENCIA DE MUESTREO BMM350 INCORRECTO.\n");
+            ESP_LOGE(TAG, "FRECUENCIA DE MUESTREO BMM350 INCORRECTO.");
             exit(EXIT_SUCCESS);
     }
     switch (avg_set) {
@@ -323,7 +343,7 @@ static void odr_avg_config(int odr_set, int avg_set) {
             avg = 0x03;
             break;
         default:
-            printf("PROMEDIO DE MUESTRAS BMM350 INCORRECTO.\n");
+            ESP_LOGE(TAG, "PROMEDIO DE MUESTRAS BMM350 INCORRECTO.");
             exit(EXIT_SUCCESS);
     }
     val_pmu_cmd_aggr_set = (avg << 4) | odr;
@@ -367,183 +387,166 @@ static void internal_status(void) {
 
     device_read(device_bmm350, &reg, data, sizeof(data), TAG);
 
-    printf("PMU CMD Status 0: 0x%02X\n", (data[reg_pmu_cmd_status_0] & 0b00011111));
-    printf("PMU CMD Status 1: 0x%02X\n\n", (data[reg_pmu_cmd_status_1] & 0b00111111));
+    ESP_LOGI(TAG, "PMU CMD Status 0: 0x%02X", (data[reg_pmu_cmd_status_0] & 0b00011111));
+    ESP_LOGI(TAG, "PMU CMD Status 1: 0x%02X", (data[reg_pmu_cmd_status_1] & 0b00111111));
 }
 
 /* Extrae datos magnéticos y de temperatura del sensor BMM350, los procesa 
- * e imprime en la salida estándar. 
- * 
- * Si el parámetro loop es TRUE realiza lecturas indefinidamente y el 
- * parámetro measure DEBE ser NULL. Es lo que se usa en este script para
- * debuggear.
- * 
- * Por otro lado, si loop es FALSE se realizará UNA sola lectura. En este caso
- * measure puede ser NULL o corresponder a un puntero a una estructura Measure. 
- * Lo primero es para almacenar datos y lo segundo para no hacerlo. Esto fue
- * diseñado así para ser llamado repetidas veces en un script externo (main). 
- * 
- * Parámetros:
- * 
- * Measure *measure: puntero a una estructura protobuf donde se almacenará el dato leído.
- *                   Debe ser NULL si loop es TRUE.
- * 
- * bool loop: true para imprimir datos en loop: esto solo tiene utilidad en la ejecución
- * independiente de este script. */                   
-void readout_data_bmm350(Data1 *data, bool loop, bool act_mag) {
-    // Se declara el arreglo sensor_data_buffer afuera de la función ya que readout_data_bmm350() 
-    // es llamado repetidamente desde main(se evitan ineficiencias al pedir memoria solo una vez).   
-    if (act_mag) {
-        if (data != NULL && loop == true) {
-            printf("PARÁMETROS DE LECTURA BMM350 INCORRECTOS.\n");
-            exit(EXIT_SUCCESS);
-        }
+ * e imprime en la salida estándar. */           
+void readout_data_bmm350(Data1 *data) {
 
-        // Registro inicial
-        uint8_t reg = 0x00;
-                        
-        // Donde empiezan los valores magnéticos. Offset +2
-        uint8_t data_reg = 0x33;
-        
-        // Cantidad de bytes a leer
-        uint8_t data_bytes = 12;
-        
-        // Valores magnéticos brutos
-        uint32_t raw_mag_x, raw_mag_y, raw_mag_z, raw_temp;   
-        
-        // Valores convertidos a enteros con signo
-        float out_data[4] = { 0.0f };
+    if (!is_bmm350_active) {
+        ESP_LOGW(TAG, "BMM350 no activo, se omite lectura");
+        return;
+    }
 
-        do {
-            // Lectura en el sensor
-            device_read(device_bmm350, &reg, sensor_data_buffer, sizeof(sensor_data_buffer), TAG);
-
-            // Data ready condition
-            if ((sensor_data_buffer[50] & 0b00000100) == 4) {
-
-                // Read data
-                ret = device_read(device_bmm350, &data_reg, (uint8_t*) sensor_data_buffer, data_bytes, TAG);
-                
-                raw_mag_x = ((uint32_t) sensor_data_buffer[2] << 16) + ((uint32_t) sensor_data_buffer[1] << 8) + (uint32_t) sensor_data_buffer[0];
-                raw_mag_y = ((uint32_t) sensor_data_buffer[5] << 16) + ((uint32_t) sensor_data_buffer[4] << 8) + (uint32_t) sensor_data_buffer[3];
-                raw_mag_z = ((uint32_t) sensor_data_buffer[8] << 16) + ((uint32_t) sensor_data_buffer[7] << 8) + (uint32_t) sensor_data_buffer[6];
-                raw_temp = ((uint32_t) sensor_data_buffer[11] << 16) + ((uint32_t) sensor_data_buffer[10] << 8) + (uint32_t) sensor_data_buffer[9];
-
-                // Fix sign and apply factor
-                out_data[0] = fix_sign(raw_mag_x, 24) * mag_x_factor;
-                out_data[1] = fix_sign(raw_mag_y, 24) * mag_y_factor;
-                out_data[2] = fix_sign(raw_mag_z, 24) * mag_z_factor;
-                out_data[3] = fix_sign(raw_temp, 24) * temp_factor;
-
-                // Fix temp 
-                if (out_data[3] > 0.0) {
-                    out_data[3] = out_data[3] - 25.49;
-                }
-                else if (out_data[3] < 0.0) {
-                    out_data[3] = out_data[3] + 25.49;
-                }
-
-                // Compensación de datos magnéticos
-                for (uint8_t i = 0; i < 3; i++) {
-                    out_data[i] *= 1 + sens[i];
-                    out_data[i] += offset[i];
-                    out_data[i] += tco[i] * (out_data[3] - dut_t0[0]);
-                    out_data[i] /= 1 + tcs[i] * (out_data[3] - dut_t0[0]);
-                }
-
-                out_data[0] = (out_data[0] - cross[0] * out_data[1]) / (1 - cross[1] * cross[0]);
-                out_data[1] = (out_data[1] - cross[1] * out_data[0]) / (1 - cross[1] * cross[0]);
-                out_data[2] = (out_data[2] + (out_data[0] * (cross[1] * cross[3] - cross[2]) - out_data[1] * (cross[3] - cross[0] * cross[2])) / (1 - cross[1] * cross[0]));
-
-                // Compensación temperatura
-                out_data[3] = (1 + sens[3]) * out_data[3] + offset[3];
-
-                printf("\nmag_x: %f uT    mag_y: %f uT    mag_z: %f uT\n", out_data[0], out_data[1], out_data[2]);  
-                printf("temp_bmm350: %f °C\n\n", out_data[3]);
-
-                if (ret != ESP_OK) {
-                    printf("Error lectura: %s \n",esp_err_to_name(ret));
-                }
-
-                if (data != NULL) {
-                    // Guarda las medidas en protobuf. Se guardan datos
-                    // magnéticos y no de temperatura.
-                    data->mag_x = out_data[0];
-                    data->mag_y = out_data[1];
-                    data->mag_z = out_data[2];
-                }
-            }
-        } 
-        // Ejecuta DO al menos una vez y entra en bucle si loop es TRUE
-        while (loop); 
-}
-}
-
-/* Funcion para debugging: lee un rango de registros. */
-static void read_register_range(void) {
-    /* Inicio del rango de registros */
+    // Registro inicial
     uint8_t reg = 0x00;
+                    
+    // Donde empiezan los valores magnéticos. Offset +2
+    uint8_t data_reg = 0x33;
+    
+    // Cantidad de bytes a leer
+    uint8_t data_bytes = 12;
+    
+    // Valores magnéticos brutos
+    uint32_t raw_mag_x, raw_mag_y, raw_mag_z, raw_temp;   
+    
+    // Valores convertidos a enteros con signo
+    float out_data[4] = { 0.0f };
 
-    /* Cantidad de registros a leer */
-    uint8_t data[130];   
-    ret = device_read(device_bmm350, &reg, data, sizeof(data), TAG);
+    // Lectura en el sensor
+    device_read(device_bmm350, &reg, sensor_data_buffer, sizeof(sensor_data_buffer), TAG);
 
-    if (ret == ESP_OK) {
-        printf("Datos leídos desde el sensor:\n");
-        for (int i = 0; i < sizeof(data); i++) {
-            /* Offset -2 */
-            printf("Registro 0x%02X: 0x%02X\n", reg + i - 2, data[i]);
+    // Data ready condition
+    if ((sensor_data_buffer[50] & 0b00000100) == 4) {
+
+        // Read data
+        ret = device_read(device_bmm350, &data_reg, (uint8_t*) sensor_data_buffer, data_bytes, TAG);
+        
+        raw_mag_x = ((uint32_t) sensor_data_buffer[2] << 16) + ((uint32_t) sensor_data_buffer[1] << 8) + (uint32_t) sensor_data_buffer[0];
+        raw_mag_y = ((uint32_t) sensor_data_buffer[5] << 16) + ((uint32_t) sensor_data_buffer[4] << 8) + (uint32_t) sensor_data_buffer[3];
+        raw_mag_z = ((uint32_t) sensor_data_buffer[8] << 16) + ((uint32_t) sensor_data_buffer[7] << 8) + (uint32_t) sensor_data_buffer[6];
+        raw_temp = ((uint32_t) sensor_data_buffer[11] << 16) + ((uint32_t) sensor_data_buffer[10] << 8) + (uint32_t) sensor_data_buffer[9];
+
+        // Fix sign and apply factor
+        out_data[0] = fix_sign(raw_mag_x, 24) * mag_x_factor;
+        out_data[1] = fix_sign(raw_mag_y, 24) * mag_y_factor;
+        out_data[2] = fix_sign(raw_mag_z, 24) * mag_z_factor;
+        out_data[3] = fix_sign(raw_temp, 24) * temp_factor;
+
+        // Fix temp (alineado con API oficial)
+        out_data[3] = out_data[3] - 25.49f;
+
+        // Compensación de datos magnéticos
+        for (uint8_t i = 0; i < 3; i++) {
+            out_data[i] *= 1 + sens[i];
+            out_data[i] += offset[i];
+            out_data[i] += tco[i] * (out_data[3] - dut_t0[0]);
+            out_data[i] /= 1 + tcs[i] * (out_data[3] - dut_t0[0]);
         }
-    } else {
-        ESP_LOGE(TAG, "Error leyendo múltiples registros: %s", esp_err_to_name(ret));
+
+        float cross_denom = 1.0f - (cross[1] * cross[0]);
+        float cr_ax_comp_x = (out_data[0] - (cross[0] * out_data[1])) / cross_denom;
+        float cr_ax_comp_y = (out_data[1] - (cross[1] * out_data[0])) / cross_denom;
+        float cr_ax_comp_z = out_data[2] + ((out_data[0] * ((cross[1] * cross[3]) - cross[2])) -
+                      (out_data[1] * (cross[3] - (cross[0] * cross[2])))) / cross_denom;
+
+        out_data[0] = cr_ax_comp_x;
+        out_data[1] = cr_ax_comp_y;
+        out_data[2] = cr_ax_comp_z;
+
+        // Compensación temperatura
+        out_data[3] = (1 + sens[3]) * out_data[3] + offset[3];
+
+        ESP_LOGI(TAG, "mag_x: %.6f uT    mag_y: %.6f uT    mag_z: %.6f uT", out_data[0], out_data[1], out_data[2]);
+        ESP_LOGI(TAG, "temp: %.6f °C", out_data[3]);
+
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Error lectura: %s", esp_err_to_name(ret));
+        }
+
+        if (data != NULL) {
+            // Guarda las medidas en protobuf. Se guardan datos
+            // magnéticos y no de temperatura.
+            data->mag_x = out_data[0];
+            data->mag_y = out_data[1];
+            data->mag_z = out_data[2];
+        }
     }
 }
 
-/* Funcion para debugging: imprime los valores de compensación 
- * que ya han sido procesados. */
-static void print_otp_data(void) {
-    printf("OTP stored data\n");
-    for (uint8_t i=0; i<BMM350_OTP_DATA_LENGTH; i++) {
-        printf("%d\n", data_otp[i]);
-    }
-    printf("\n");
+// /* Funcion para debugging: lee un rango de registros. */
+// static void read_register_range(void) {
+//     /* Inicio del rango de registros */
+//     uint8_t reg = 0x00;
 
-    printf("Offset stored data\n");
-    for (uint8_t i=0; i<4; i++) {
-        printf("%f\n", offset[i]);
-    }
-    printf("\n");
+//     /* Cantidad de registros a leer */
+//     uint8_t data[130];   
+//     ret = device_read(device_bmm350, &reg, data, sizeof(data), TAG);
 
-    printf("Sens stored data\n");
-    for (uint8_t i=0; i<4; i++) {
-        printf("%f\n", sens[i]);
-    }
-    printf("\n");
+//     if (ret == ESP_OK) {
+//         ESP_LOGI(TAG, "Datos leidos desde el sensor:");
+//         for (int i = 0; i < sizeof(data); i++) {
+//             /* Offset -2 */
+//             ESP_LOGI(TAG, "Registro 0x%02X: 0x%02X", reg + i - 2, data[i]);
+//         }
+//     } else {
+//         ESP_LOGE(TAG, "Error leyendo múltiples registros: %s", esp_err_to_name(ret));
+//     }
+// }
 
-    printf("TCO stored data\n");
-    for (uint8_t i=0; i<3; i++) {
-        printf("%f\n", tco[i]);
-    }
-    printf("\n");
+// /* Funcion para debugging: imprime los valores de compensación 
+//  * que ya han sido procesados. */
+// static void print_otp_data(void) {
+//     ESP_LOGI(TAG, "OTP stored data");
+//     for (uint8_t i=0; i<BMM350_OTP_DATA_LENGTH; i++) {
+//         ESP_LOGI(TAG, "%d", data_otp[i]);
+//     }
 
-    printf("TCS stored data\n");
-    for (uint8_t i=0; i<3; i++) {
-        printf("%f\n", tcs[i]);
-    }
-    printf("\n");
+//     ESP_LOGI(TAG, "Offset stored data");
+//     for (uint8_t i=0; i<4; i++) {
+//         ESP_LOGI(TAG, "%f", offset[i]);
+//     }
 
-    printf("Cross stored data\n");
-    for (uint8_t i=0; i<4; i++) {
-        printf("%f\n", cross[i]);
-    }
-    printf("\n");
-}
+//     ESP_LOGI(TAG, "Sens stored data");
+//     for (uint8_t i=0; i<4; i++) {
+//         ESP_LOGI(TAG, "%f", sens[i]);
+//     }
+
+//     ESP_LOGI(TAG, "TCO stored data");
+//     for (uint8_t i=0; i<3; i++) {
+//         ESP_LOGI(TAG, "%f", tco[i]);
+//     }
+
+//     ESP_LOGI(TAG, "TCS stored data");
+//     for (uint8_t i=0; i<3; i++) {
+//         ESP_LOGI(TAG, "%f", tcs[i]);
+//     }
+
+//     ESP_LOGI(TAG, "Cross stored data");
+//     for (uint8_t i=0; i<4; i++) {
+//         ESP_LOGI(TAG, "%f", cross[i]);
+//     }
+// }
 
 /* Función para ser llamada desde el script main. Contiene llamados a todas las
  * funciones que se encargan de inicializar el sensor. */
 void bmm350_init(int odr, int avg) {
-    softreset();
-    chipid();
+    is_bmm350_active = false;
+
+    ret = softreset();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Init abortada: softreset falló (%s)", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = chipid();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Init abortada: CHIPID inválido (%s)", esp_err_to_name(ret));
+        return;
+    }
+
     download_otp();
     process_otp_data();
     odr_avg_config(odr, avg);
@@ -551,6 +554,7 @@ void bmm350_init(int odr, int avg) {
     internal_status();
 }
 
+// Main para ocupar este archivo por separado.
 // void app_main(void) {
 //     ESP_ERROR_CHECK(i2c_master_init(&bus_handle));
 //     ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmm350, BMM350_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));

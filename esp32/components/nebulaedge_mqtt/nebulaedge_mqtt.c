@@ -236,7 +236,7 @@ int mqtt_subscribe(const char *topic, int qos) {
     int msg_id = -1;
     while (msg_id < 0) {
         msg_id = esp_mqtt_client_subscribe(client, topic, qos); 
-        vTaskDelay(200 / portTICK_PERIOD_MS);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 
     return msg_id;

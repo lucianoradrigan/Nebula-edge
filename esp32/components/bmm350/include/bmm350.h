@@ -1,7 +1,6 @@
 #ifndef BMM350
 #define BMM350
 
-#include <stdbool.h>
 #include "schema.pb-c.h"
 
 #define ODR_1_5625                          15625
@@ -14,7 +13,7 @@
 #define ODR_200                             200
 #define ODR_400                             400
 
-void readout_data_bmm350(Data1 *data, bool loop, bool act_mag);
+void readout_data_bmm350(Data1 *data);
 void bmm350_init(int odr, int avg);
 
 #endif

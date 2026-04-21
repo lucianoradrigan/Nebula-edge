@@ -1,6 +1,6 @@
 idf_component_register(SRCS "nebulaedge_mqtt.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES esp_netif mqtt nebulaedge_defs nebulaedge_protobuf)
+                    REQUIRES esp_netif mqtt nebulaedge_defs nebulaedge_proto_schema)
 
 if(CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE)
    # some variables are only used by asserts

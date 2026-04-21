@@ -74,14 +74,14 @@ Notas:
 
 Campos de configuración relevantes:
 
-- `send_interval_ms`: intervalo entre envíos.
-- `discontinuous_sleep_time`: tiempo de deep sleep en ms.
-- `discontinuous_window_size`: cantidad de paquetes antes de dormir.
+- `send_interval_s`: intervalo entre envíos en segundos.
+- `sleep_time_s`: tiempo de deep sleep en segundos.
+- `sleep_window_size`: cantidad de paquetes antes de dormir.
 
 Comportamiento:
 
-- Si `discontinuous_sleep_time = 0`, el envío es continuo.
-- Si `discontinuous_sleep_time > 0`, el envío es discontinuo y luego entra a deep sleep.
+- Si `sleep_time_s = 0`, el envío es continuo.
+- Si `sleep_time_s > 0`, el envío es discontinuo y luego entra a deep sleep.
 
 ## 7) Validación rápida
 
@@ -105,4 +105,3 @@ Comportamiento:
 ## 9) Relación con la documentación general
 
 - Guía completa del sistema: `README.md` (raíz).
-- Guía del servidor central: `raspberry/README.md`.

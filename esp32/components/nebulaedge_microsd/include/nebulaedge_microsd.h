@@ -1,12 +1,15 @@
 #ifndef NEBULAEDGE_MICROSD
 #define NEBULAEDGE_MICROSD
 
+#include <stdint.h>
 #include <stdio.h>
-#include "schema.pb-c.h"
+#include <stdbool.h>
+#include "esp_err.h"
 
-void mount_sd(void);
-void unmount_sd(void);
-void save_measure_to_sd(Measure *m, FILE *f, char *file_path);
-void read_measures_from_sd(char *file_path);
+esp_err_t mount_sd(void);
+esp_err_t format_sd(void);
+esp_err_t format_sd_if_no_space(void);
+esp_err_t unmount_sd(void);
+bool is_sd_mounted(void);
 
 #endif

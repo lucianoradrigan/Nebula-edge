@@ -95,14 +95,22 @@ void tcp_open_socket(tcp_params_t *params) {
         ESP_LOGE(TAG, "Unable to create socket: errno %d (%s)", errno, strerror(errno));
         return;
     }
+
+    int opt = 1;
+
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        ESP_LOGW(TAG, "Failed to set SO_REUSEADDR: errno %d (%s)", errno, strerror(errno));
+    }
+
     ESP_LOGI(TAG, "Socket created, connecting to %s:%d", params->ip_host, params->port);
 }
 
 /* Realiza conexión TCP con el host preconfigurado. Se debe haber abierto
  * el socket previamente. Retorna el número de socket */
 int nebula_tcp_connect(void) {
-// Conecta al server
-    printf("socket is %d\n", sock);
+    // Conecta al server
+    ESP_LOGI(TAG, "socket is %d\n", sock);
+
     int err = connect(sock, dest_addr, sizeof(*dest_addr));
     if (err != 0) {
         ESP_LOGE(TAG, "Socket unable to connect: errno %d (%s)", errno, strerror(errno));
@@ -166,7 +174,7 @@ size_t tcp_receive(uint8_t *buffer, size_t len) {
  * script. */
 void tcp_close_socket(void) {
     if (sock != -1) {
-        shutdown(sock, 0);
+        shutdown(sock, SHUT_RDWR);
         close(sock);
         ESP_LOGI(TAG, "Socket closed");
         sock = -1;

@@ -1,20 +1,50 @@
+/* Componente encargado de gestión de tarjetas SD. Montar, desmontar y escritura. 
+ * Script modular que debería ser fácil de testear por separado. 
+ *
+ * Dependencias: 
+ * - esp_driver_sdspi 
+ * - fatfs 
+ */
+
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
+#include <errno.h>
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
 #include "esp_vfs_fat.h"
-#include "nebulaedge_defs.h"
-#include "schema.pb-c.h"
+#include "esp_err.h"
+
+#define PIN_NUM_MOSI                        GPIO_NUM_2         // GPIO pin
+#define PIN_NUM_CLK                         GPIO_NUM_43        // GPIO pin
+#define PIN_NUM_MISO                        GPIO_NUM_44        // GPIO pin
+#define PIN_NUM_CS                          GPIO_NUM_1         // GPIO pin
+#define FORMAT_IF_MOUNT_FAILED              true
+#define SD_NEAR_FULL_THRESHOLD_BYTES        128 * 1024 * 1000  // 64 MB de threshold
 
 sdmmc_card_t *card;
 sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+static bool s_spi_bus_inited = false;
+static bool s_sd_mounted = false;
+static const char *TAG = "nebulaedge_microsd";
 
-/* Monta la tarjeta SD asignando recursos correspondientes. */
-void mount_sd(void) {
+/* Responde si la sd está montada o no. */
+bool is_sd_mounted(void) {
+    return s_sd_mounted;
+}
+
+/* Monta la tarjeta SD en /sdcard asignando recursos correspondientes. */
+esp_err_t mount_sd(void) {
     esp_err_t ret;
-    
+
+    if (s_sd_mounted) {
+        ESP_LOGI(TAG, "Filesystem already mounted");
+        return ESP_OK;
+    }
+
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = PIN_NUM_MOSI,
         .miso_io_num = PIN_NUM_MISO,
@@ -25,10 +55,13 @@ void mount_sd(void) {
     };
 
     // Inicializar el bus SPI
-    ret = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
-    if (ret != ESP_OK) {
-        ESP_LOGE("SPI", "Failed to initialize SPI bus");
-        return;
+    if (!s_spi_bus_inited) {
+        ret = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        s_spi_bus_inited = true;
     }
 
     // Configuración del dispositivo SPI para la tarjeta SD
@@ -44,96 +77,98 @@ void mount_sd(void) {
     };
 
     ret = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_config, &mount_config, &card);
-
     if (ret != ESP_OK) {
-        ESP_LOGE("SPI", "Failed to mount filesystem. Error: %s", esp_err_to_name(ret));
-        return;
+        // Si falla el mount, liberamos bus para permitir retry limpio.
+        spi_bus_free(host.slot);
+        s_spi_bus_inited = false;
+        card = NULL;
+        ESP_LOGW(TAG, "Failed to mount filesystem. Error: %s", esp_err_to_name(ret));
+        return ret;
     }
 
-    ESP_LOGI("SPI", "Filesystem mounted");
+    s_sd_mounted = true;
+    ESP_LOGI(TAG, "SDCARD mounted succesfully on /sdcard");
+    return ESP_OK;
+}
+
+/* Formatea la tarjeta SD montada en /sdcard. */
+esp_err_t format_sd(void) {
+    esp_err_t ret;
+
+    if (!s_sd_mounted) {
+        ret = mount_sd();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Cannot format SD: mount failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    }
+
+    ret = esp_vfs_fat_sdcard_format("/sdcard", card);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to format SD card: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "SD card formatted successfully");
+    return ESP_OK;
+}
+
+/* Verifica espacio libre y formatea preventivamente si queda muy poco. */
+esp_err_t format_sd_if_no_space(void) {
+    uint64_t total_bytes = 0;
+    uint64_t free_bytes = 0;
+
+    esp_err_t ret = esp_vfs_fat_info("/sdcard", &total_bytes, &free_bytes);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Cannot query SD free space: %s", esp_err_to_name(ret));
+        return ESP_OK;
+    }
+
+    if (free_bytes > SD_NEAR_FULL_THRESHOLD_BYTES) {
+        return ESP_OK;
+    }
+
+    ESP_LOGW(TAG,
+             "SD near full: free=%u bytes (threshold=%u). Formatting card.",
+             (unsigned)free_bytes,
+             (unsigned)SD_NEAR_FULL_THRESHOLD_BYTES);
+
+    ret = format_sd();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to format SD card: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "SD formatted");
+    return ESP_OK;
 }
 
 /* Desmonta la tarjeta SD y libera recursos asociados. */
-void unmount_sd(void) {
-    // Desmontar el sistema de archivos
-    esp_vfs_fat_sdcard_unmount("/sdcard", card);
-    ESP_LOGI("SPI", "Filesystem unmounted");
+esp_err_t unmount_sd(void) {
+    esp_err_t ret = ESP_OK;
 
-    // Liberar el bus SPI
-    spi_bus_free(host.slot);
-}
-
-/* Guarda UN paquete protobuf de medición (tipo Measure) en la tarjeta SD.
- * Esto lo hace modularmente, si hay un archivo existente escribe concatenando 
- * los bytes del paquete sobre el archivo en la SD. Esta función está diseñada 
- * para ser llamada una vez por cada ventana de medidas.
- * 
- * IMPORTANTE: los primeros 4 bytes del paquete consisten en el largo 
- * del payload, y los bytes siguientes son el payload. De esta
- * forma a la hora de desempaquetar se puede saber el fin de cada paquete.
- * 
- * La SD DEBE haber sido montada anteriormente. */
-void save_measure_to_sd(Measure *m, FILE *f, char *file_path) {
-    size_t packed_size = measure__get_packed_size(m);
-    uint8_t buffer[packed_size];
-
-    // Serializar el mensaje
-    measure__pack(m, buffer);
-
-    // Escribir primero el tamaño del mensaje
-    fwrite(&packed_size, sizeof(packed_size), 1, f);
-
-    // Escribir el mensaje serializado
-    fwrite(buffer, 1, packed_size, f);
-    
-    ESP_LOGI("SPI", "Medida guardada en la SD (%d bytes)", (int)packed_size);
-}
-
-/* Función para debugging: lee el archivo en file_path
- * y desempaqueta los protobuf. Imprime medidas. La SD 
- * debe haber sido montada con anterioridad. */
-void read_measures_from_sd(char *file_path) {
-    FILE *f = fopen(file_path, "rb");
-    if (!f) {
-        printf("Error: No se pudo abrir el archivo en la SD.\n");
-        return;
+    if (!s_sd_mounted && !s_spi_bus_inited) {
+        ESP_LOGI(TAG, "Filesystem already unmounted");
+        return ESP_OK;
     }
 
-    while (!feof(f)) {
-        size_t packed_size;
-        
-        // Leer el tamaño del siguiente mensaje
-        if (fread(&packed_size, sizeof(packed_size), 1, f) != 1) {
-            break; // Se alcanzó el final del archivo o hubo un error
-        }
-
-        uint8_t buffer[packed_size];
-
-        // Leer el mensaje serializado
-        if (fread(buffer, 1, packed_size, f) != packed_size) {
-            ESP_LOGE("SPI", "Error leyendo mensaje desde la SD");
-            break;
-        }
-
-        // Deserializar el mensaje
-        Measure *m = measure__unpack(NULL, packed_size, buffer);
-        if (m == NULL) {
-            ESP_LOGE("SPI", "Error al deserializar mensaje");
-            break;
-        }
-
-        // Imprimir los valores
-        printf("Medida:\n");
-        printf("  Gyro:  x=%f, y=%f, z=%f\n", m->gyr_x_rads, m->gyr_y_rads, m->gyr_z_rads);
-        printf("  Accel: x=%f, y=%f, z=%f\n", m->acc_x_ms2, m->acc_y_ms2, m->acc_z_ms2);
-        printf("  Mag:   x=%f, y=%f, z=%f\n", m->mag_x_ut, m->mag_y_ut, m->mag_z_ut);
-        printf("  Temp: %f°C, Hum: %f%%, Pres: %f hPa, Q_Air: %f\n",
-               m->temp_c, m->hum_percent, m->press_hpa, m->gas_res_ohms);
-        printf("----------------------------------\n");
-
-        // Liberar memoria
-        measure__free_unpacked(m, NULL);
+    if (s_sd_mounted) {
+        // Desmontar el sistema de archivos
+        esp_vfs_fat_sdcard_unmount("/sdcard", card);
+        s_sd_mounted = false;
+        card = NULL;
+        ESP_LOGI(TAG, "Filesystem unmounted");
     }
 
-    fclose(f);
+    if (s_spi_bus_inited) {
+        // Liberar el bus SPI
+        ret = spi_bus_free(host.slot);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to free SPI bus: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        s_spi_bus_inited = false;
+    }
+
+    return ESP_OK;
 }

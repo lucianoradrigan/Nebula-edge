@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "esp_task.h"
+#include "esp_log.h"
 
 #include "nebulaedge_defs.h"
 #include "nebulaedge_i2c.h"
@@ -11,9 +12,11 @@
 #define ACC_RANGE               8
 #define GYR_ODR                 ODR_400
 #define GYR_RANGE               500
+#define BMI270_INIT_RETRIES     3
 
-static const char *TAG = "BMI270";
+static const char *TAG = "bmi270";
 static esp_err_t ret;
+static bool is_bmi270_active = false;
 
 /*! @name  Global array that stores the configuration file of BMI270 */
 static const uint8_t bmi270_config_file[] = {
@@ -451,41 +454,61 @@ static const uint8_t bmi270_config_file[] = {
     0x2e, 0x00, 0xc1
 };
 
-/* Comprueba la comunicación con el sensor. */
-static void chipid(void) {
-    uint8_t reg_id=0x00;
+/* Comprueba la comunicación con el sensor. Realiza reintentos en caso de no
+ * devolver el valor esperado: 0x24. */
+static esp_err_t chipid(void) {
+    uint8_t reg_id = 0x00;
     uint8_t tmp;
-    
-    device_read(device_bmi270, &reg_id, &tmp, 1, TAG);
-    printf("valor de CHIPID: %2X \n\n",tmp);
-    if(tmp == 0x24) {
-        printf("Chip reconocido.\n\n");
+
+    for (int attempt = 1; attempt <= BMI270_INIT_RETRIES; ++attempt) {
+        ret = device_read(device_bmi270, &reg_id, &tmp, 1, TAG);
+
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "[%d/%d] Lectura CHIPID falló: %s", attempt, BMI270_INIT_RETRIES, esp_err_to_name(ret));
+            vTaskDelay((attempt * 100) / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        ESP_LOGI(TAG, "Valor de CHIPID: 0x%02X", tmp);
+
+        if (tmp == 0x24) {
+            ESP_LOGI(TAG, "Chip reconocido exitosamente");
+            return ESP_OK;
+        }
+
+        ESP_LOGW(TAG, "[%d/%d] Chip no reconocido. CHIP ID: 0x%02X", attempt, BMI270_INIT_RETRIES, tmp);
+        vTaskDelay((attempt * 100) / portTICK_PERIOD_MS);
     }
-    if(tmp != 0x24) {
-        printf("Chip no reconocido. \nCHIP ID: %2x\n\n", tmp); // %2X
-        exit(EXIT_SUCCESS);
-    }
+
+    ESP_LOGE(TAG, "Verificación CHIPID agotó reintentos");
+    return ESP_ERR_INVALID_RESPONSE;
 }
 
-/* Realiza soft reset del sensor. */
-static void softreset(void) {
-    uint8_t reg_softreset = 0x7E; 
+/* Realiza soft reset del sensor. Realiza varios reintentos en caso de fallar. */
+static esp_err_t softreset(void) {
+    uint8_t reg_softreset = 0x7E;
     uint8_t val_softreset = 0xB6;
-    
-    ret = device_write(device_bmi270, &reg_softreset, &val_softreset, 1, TAG);
-    vTaskDelay(1000 /portTICK_PERIOD_MS);
 
-    if(ret != ESP_OK) {
-        printf("\nError en softreset BMI270: %s \n", esp_err_to_name(ret));
+    for (int attempt = 1; attempt <= BMI270_INIT_RETRIES; ++attempt) {
+        ret = device_write(device_bmi270, &reg_softreset, &val_softreset, 1, TAG);
+
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Intento %d/%d softreset BMI270 falló: %s", attempt, BMI270_INIT_RETRIES, esp_err_to_name(ret));
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        ESP_LOGI(TAG, "Softreset BMI270: OK");
+        vTaskDelay(pdMS_TO_TICKS(200));
+        return ESP_OK;
     }
-    else {
-         printf("\nSoftreset BMI270: OK\n\n");
-    }
+
+    ESP_LOGE(TAG, "Softreset BMI270 agotó reintentos");
+    return ret;
 }
 
 /* Inicializa el sensor. */
 static void initialization(void) {
-
     uint8_t reg_pwr_conf_advpowersave = 0x7C;
     uint8_t val_pwr_conf_advpowersave = 0x00;
     uint8_t reg_init_ctrl = 0x59;
@@ -493,38 +516,39 @@ static void initialization(void) {
     uint8_t val_init_ctrl2 = 0x01;
     uint8_t reg_init_data = 0x5E;
 
-    printf("Inicializando BMI270 ...\n");
+    ESP_LOGI(TAG, "Inicializando BMI270...");
 
-    device_write(device_bmi270, &reg_pwr_conf_advpowersave, &val_pwr_conf_advpowersave, 1, TAG);
-    vTaskDelay(1000 /portTICK_PERIOD_MS);
-
+    ret = device_write(device_bmi270, &reg_pwr_conf_advpowersave, &val_pwr_conf_advpowersave, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo pwr_conf_advpowersave: %s", esp_err_to_name(ret));
+        return;
+    }
+    vTaskDelay(500 /portTICK_PERIOD_MS);    // se puede reducir
+    
     ret = device_write(device_bmi270, &reg_init_ctrl, &val_init_ctrl, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo init_ctrl=0: %s", esp_err_to_name(ret));
+        return;
+    }
 
     int config_size = sizeof(bmi270_config_file);
-    //printf("Tamano config_file: %d\n\n",config_size);
-
     ret = device_write(device_bmi270, &reg_init_data, (uint8_t*)bmi270_config_file, config_size, TAG);
 
     if(ret != ESP_OK) {
-        printf("\nError cargando config_file\n");
+        ESP_LOGE(TAG, "Error cargando config_file");
     }
     else {
-        printf("\nConfig_file cargado.\n");
+        ESP_LOGI(TAG, "Config_file cargado.");
     }
 
-    vTaskDelay(1000 /portTICK_PERIOD_MS);
-
+    vTaskDelay(500 /portTICK_PERIOD_MS);
     ret = device_write(device_bmi270, &reg_init_ctrl, &val_init_ctrl2, 1, TAG);
-    // if(ret != ESP_OK){
-    //     printf("Error en write4: %s \n",esp_err_to_name(ret));
-    // }
-    // else {
-    //      printf("Init_ctrl = 1\n");
-    // }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo init_ctrl=1: %s", esp_err_to_name(ret));
+        return;
+    }
 
-    printf("\nAlgoritmo de inicializacion BMI270 finalizado.\n\n");
-    
-    //vTaskDelay(1000 /portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "Algoritmo de inicializacion BMI270 finalizado.");
 }
 
 /* Chequea que el sensor esté correctamente inicializado. */
@@ -534,15 +558,20 @@ static void check_initialization(void){
     
     vTaskDelay(500 /portTICK_PERIOD_MS);
 
-    device_read(device_bmi270,  &reg_internalstatus, &tmp, 1, TAG);
-    printf("Init_status.0: %x \n", (tmp & 0b00001111));
+    ret = device_read(device_bmi270,  &reg_internalstatus, &tmp, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error leyendo internal status para check_initialization: %s", esp_err_to_name(ret));
+        return;
+    }
+    ESP_LOGI(TAG, "Init_status.0: %x", (tmp & 0b00001111));
 
     if ((tmp & 0b00001111) == 1) {
-        printf("Comprobacion Inicializacion BMI270: OK\n\n");
+        ESP_LOGI(TAG, "Comprobacion Inicializacion BMI270: OK");
+        is_bmi270_active = true;
     }
     else {
-        printf("Error en la inicialización BMI270.\n\n");
-        exit(EXIT_SUCCESS);
+        ESP_LOGE(TAG, "Error en la inicialización BMI270.");
+        return;
     }
 }
 
@@ -551,9 +580,13 @@ static void internal_status(void) {
     uint8_t reg_internalstatus=0x21;
     uint8_t tmp;
 
-    device_read(device_bmi270,  &reg_internalstatus, &tmp, 1, TAG);
-    //printf("Initial status: %x \n",(tmp & 0b00001111));
-    printf("Internal Status BMI270: %2X\n\n", tmp);
+    ret = device_read(device_bmi270,  &reg_internalstatus, &tmp, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error leyendo internal status: %s", esp_err_to_name(ret));
+        return;
+    }
+    // Log de depuración eliminado.
+    ESP_LOGI(TAG, "Internal Status BMI270: %2X", tmp);
 
 }
 
@@ -564,13 +597,15 @@ static void toggle_sensors(int aux, int gyr, int acc, int temp) {
     uint8_t val_pwr_ctrl;
 
     if ((aux != 0 && aux != 1) || (gyr != 0 && gyr != 1) || (acc != 0 && acc != 1) || (temp != 0 && temp != 1)) {
-        printf("PARÁMETRO INCORRECTO EN FUNCIÓN toggle_sensors.\n");
-        exit(EXIT_SUCCESS);
+        ESP_LOGE(TAG, "PARÁMETRO INCORRECTO EN FUNCIÓN toggle_sensors.");
     }
 
     val_pwr_ctrl = (temp << 3) | (acc << 2) | (gyr << 1) | aux;
 
-    device_write(device_bmi270, &reg_pwr_ctrl, &val_pwr_ctrl, 1, TAG);
+    ret = device_write(device_bmi270, &reg_pwr_ctrl, &val_pwr_ctrl, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo pwr_ctrl: %s", esp_err_to_name(ret));
+    }
 }
 
 /* Configura el acelerómetro. Variables son ODR, AVG y RANGE. Revisar datasheet
@@ -608,8 +643,8 @@ static void acc_conf(int odr_set, int avg_set, int range_set) {
             odr = 0x0C;
             break;
         default:
-            printf("FRECUENCIA DE MUESTREO ACELERÓMETRO BMI270 INCORRECTO.\n");
-            exit(EXIT_SUCCESS);
+            ESP_LOGE(TAG, "FRECUENCIA DE MUESTREO ACELERÓMETRO BMI270 INCORRECTO.");
+            return;
     }
     
     switch (avg_set) {
@@ -638,8 +673,8 @@ static void acc_conf(int odr_set, int avg_set, int range_set) {
             avg = 0x07;
             break;
         default:
-            printf("PROMEDIO DE MUESTRAS ACELERÓMETRO BMI270 INCORRECTO.\n");
-            exit(EXIT_SUCCESS);
+            ESP_LOGE(TAG, "PROMEDIO DE MUESTRAS ACELERÓMETRO BMI270 INCORRECTO.");
+            return;
     }
 
     switch (range_set) {
@@ -656,8 +691,8 @@ static void acc_conf(int odr_set, int avg_set, int range_set) {
             range = 0x03;
             break;
         default:
-            printf("RANGO ACELERÓMETRO BMI270 INCORRECTO.\n");
-            exit(EXIT_SUCCESS);
+            ESP_LOGE(TAG, "RANGO ACELERÓMETRO BMI270 INCORRECTO.");
+            return;
     }
 
     // 0x08 activa el filtro en modo performance (por defecto)
@@ -665,10 +700,18 @@ static void acc_conf(int odr_set, int avg_set, int range_set) {
     val_acc_range = range;
 
     // Configuración general del acc
-    device_write(device_bmi270, &reg_acc_conf, &val_acc_conf, 1, TAG);
+    ret = device_write(device_bmi270, &reg_acc_conf, &val_acc_conf, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo acc_conf: %s", esp_err_to_name(ret));
+        return;
+    }
     
     // Set range
-    device_write(device_bmi270, &reg_acc_range, &val_acc_range, 1, TAG);
+    ret = device_write(device_bmi270, &reg_acc_range, &val_acc_range, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo acc_range: %s", esp_err_to_name(ret));
+        return;
+    }
 
     vTaskDelay(100 /portTICK_PERIOD_MS);   
 }
@@ -711,8 +754,8 @@ static void gyr_conf(int odr_set, int range_set) {
             odr = 0x0D;
             break;
         default:
-            printf("FRECUENCIA DE MUESTREO GIROSCOPIO BMI270 INCORRECTO.\n");
-            exit(EXIT_SUCCESS);
+            ESP_LOGE(TAG, "FRECUENCIA DE MUESTREO GIROSCOPIO BMI270 INCORRECTO.");
+            return;
     }
 
     switch (range_set) {
@@ -732,8 +775,8 @@ static void gyr_conf(int odr_set, int range_set) {
             range = 0x04;
             break;            
         default:
-            printf("RANGO GIROSCOPIO BMI270 INCORRECTO.\n");
-            exit(EXIT_SUCCESS);
+            ESP_LOGE(TAG, "RANGO GIROSCOPIO BMI270 INCORRECTO.");
+            return;
     }
 
     // 0xA0 ajusta los modos de performance y filtro (default conf)
@@ -741,10 +784,18 @@ static void gyr_conf(int odr_set, int range_set) {
     val_gyr_range = range;
 
     // Configuración general del gyr
-    device_write(device_bmi270, &reg_gyr_conf, &val_gyr_conf, 1, TAG);
+    ret = device_write(device_bmi270, &reg_gyr_conf, &val_gyr_conf, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo gyr_conf: %s", esp_err_to_name(ret));
+        return;
+    }
 
     // Set range
-    device_write(device_bmi270, &reg_gyr_range, &val_gyr_range, 1, TAG);
+    ret = device_write(device_bmi270, &reg_gyr_range, &val_gyr_range, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo gyr_range: %s", esp_err_to_name(ret));
+        return;
+    }
 
     vTaskDelay(100 /portTICK_PERIOD_MS);   
 }
@@ -754,33 +805,19 @@ void power_config(void) {
     uint8_t reg_pwr_conf = 0x7C;
     uint8_t val_pwr_conf = 0x00;
 
-    device_write(device_bmi270, &reg_pwr_conf, &val_pwr_conf, 1, TAG);
+    ret = device_write(device_bmi270, &reg_pwr_conf, &val_pwr_conf, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error escribiendo power_config: %s", esp_err_to_name(ret));
+    }
 }
 
 /* Extrae datos de aceleración y giroscopio del sensor BMI270, los procesa 
- * e imprime en la salida estándar. Se puede implementar lectura de temperatura.
- * 
- * Si el parámetro loop es TRUE realiza lecturas indefinidamente y el 
- * parámetro measure DEBE ser NULL. Es lo que se usa en este script para
- * debuggear.
- * 
- * Por otro lado, si loop es FALSE se realizará UNA sola lectura. En este caso
- * measure puede ser NULL o corresponder a un puntero a una estructura Measure. 
- * Lo primero es para almacenar datos y lo segundo para no hacerlo. Esto fue
- * diseñado así para ser llamado repetidas veces en un script externo (main). 
- * 
- * Parámetros:
- * 
- * Measure *measure: puntero a una estructura protobuf donde se almacenará el dato leído.
- *                   Debe ser NULL si loop es TRUE.
- * 
- * bool loop: true para imprimir datos en loop: esto solo tiene utilidad en la ejecución
- * independiente de este script. */     
-void readout_data_bmi270(Data2 *data, bool loop, bool act_acc, bool act_gyr) {
-
-    if (data != NULL && loop == true) {
-        printf("PARÁMETROS DE LECTURA BMM350 INCORRECTOS.\n");
-        exit(EXIT_SUCCESS);
+ * e imprime en la salida estándar. Se puede implementar lectura de temperatura. */
+void readout_data_bmi270(Data2 *data) {
+    // No lee nada si el sensor está inactivo
+    if (!is_bmi270_active) {
+        ESP_LOGW(TAG, "Sensor BMI270 inactivo. Omitiendo lectura.");
+        return;
     }
 
     uint8_t reg_intstatus = 0x03, tmp;
@@ -794,73 +831,79 @@ void readout_data_bmi270(Data2 *data, bool loop, bool act_acc, bool act_gyr) {
     float acc_x_g, acc_y_g, acc_z_g;
     float gyr_x_rads, gyr_y_rads, gyr_z_rads;
 
-    do {
-        device_read(device_bmi270, &reg_intstatus, &tmp, 1, TAG);
-        // printf("Init_status.0: %x - mask: %x \n", tmp, (tmp & 0b10000000));
-        //ESP_LOGI("leturabmi", "acc_data_ready: %x - mask(80): %x \n", tmp, (tmp & 0b10000000));
+    ret = device_read(device_bmi270, &reg_intstatus, &tmp, 1, TAG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error leyendo intstatus: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    // Data ready condition
+    if ((tmp & 0b10000000) == 0x80) { 
+        ret = device_read(device_bmi270, &reg_data, (uint8_t*) sensor_data_buffer, bytes_data8, TAG);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Error leyendo datos de acelerómetro y giroscopio: %s", esp_err_to_name(ret));
+            return;
+        }
+
+        // Valores brutos aceleración y giroscopio
+        acc_x = ((uint16_t) sensor_data_buffer[1] << 8) | (uint16_t) sensor_data_buffer[0];
+        acc_y = ((uint16_t) sensor_data_buffer[3] << 8) | (uint16_t) sensor_data_buffer[2];
+        acc_z = ((uint16_t) sensor_data_buffer[5] << 8) | (uint16_t) sensor_data_buffer[4];
+        gyr_x = ((uint16_t) sensor_data_buffer[7] << 8) | (uint16_t) sensor_data_buffer[6];
+        gyr_y = ((uint16_t) sensor_data_buffer[9] << 8) | (uint16_t) sensor_data_buffer[8];
+        gyr_z = ((uint16_t) sensor_data_buffer[11] << 8) | (uint16_t) sensor_data_buffer[10];
+
+        // Aceleración en m/s2
+        acc_x_ms2 = (int16_t)acc_x*(78.4532/32768);
+        acc_y_ms2 = (int16_t)acc_y*(78.4532/32768);
+        acc_z_ms2 = (int16_t)acc_z*(78.4532/32768);
+
+        // Aceleración en g
+        acc_x_g = (int16_t)acc_x*(8.000/32768);
+        acc_y_g = (int16_t)acc_y*(8.000/32768);
+        acc_z_g = (int16_t)acc_z*(8.000/32768);
+
+        // Giroscopio en rad/s
+        gyr_x_rads = (int16_t)gyr_x*(34.90659/32768);
+        gyr_y_rads = (int16_t)gyr_y*(34.90659/32768);
+        gyr_z_rads = (int16_t)gyr_z*(34.90659/32768);
         
-        // Data ready condition
-        if ((tmp & 0b10000000) == 0x80) { 
-            ret = device_read(device_bmi270, &reg_data, (uint8_t*) sensor_data_buffer, bytes_data8, TAG);
+        ESP_LOGI(TAG, "acc_x: %f m/s2     acc_y: %f m/s2     acc_z: %f m/s2", acc_x_ms2, acc_y_ms2, acc_z_ms2);
+        ESP_LOGI(TAG, "acc_x: %f g     acc_y: %f g     acc_z: %f g", acc_x_g, acc_y_g, acc_z_g);
+        ESP_LOGI(TAG, "gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s", gyr_x_rads, gyr_y_rads, gyr_z_rads);
 
-            // for (i=0; i<bytes_data8; i++) {
-            //     printf("Lectura RAW: %2X \n",sensor_data_buffer[i]);
-            // }
-            
-            // Valores brutos aceleración y giroscopio
-            acc_x = ((uint16_t) sensor_data_buffer[1] << 8) | (uint16_t) sensor_data_buffer[0];
-            acc_y = ((uint16_t) sensor_data_buffer[3] << 8) | (uint16_t) sensor_data_buffer[2];
-            acc_z = ((uint16_t) sensor_data_buffer[5] << 8) | (uint16_t) sensor_data_buffer[4];
-            gyr_x = ((uint16_t) sensor_data_buffer[7] << 8) | (uint16_t) sensor_data_buffer[6];
-            gyr_y = ((uint16_t) sensor_data_buffer[9] << 8) | (uint16_t) sensor_data_buffer[8];
-            gyr_z = ((uint16_t) sensor_data_buffer[11] << 8) | (uint16_t) sensor_data_buffer[10];
+        if (ret != ESP_OK){
+            ESP_LOGE(TAG, "Error lectura: %s", esp_err_to_name(ret));
+        }
 
-            // Aceleración en m/s²
-            acc_x_ms2 = (int16_t)acc_x*(78.4532/32768);
-            acc_y_ms2 = (int16_t)acc_y*(78.4532/32768);
-            acc_z_ms2 = (int16_t)acc_z*(78.4532/32768);
-
-            // Aceleración en g
-            acc_x_g = (int16_t)acc_x*(8.000/32768);
-            acc_y_g = (int16_t)acc_y*(8.000/32768);
-            acc_z_g = (int16_t)acc_z*(8.000/32768);
-
-            // Giroscopio en rad/s
-            gyr_x_rads = (int16_t)gyr_x*(34.90659/32768);
-            gyr_y_rads = (int16_t)gyr_y*(34.90659/32768);
-            gyr_z_rads = (int16_t)gyr_z*(34.90659/32768);
-            
-            printf("acc_x: %f m/s2     acc_y: %f m/s2     acc_z: %f m/s2\n", acc_x_ms2, acc_y_ms2, acc_z_ms2);
-            printf("acc_x: %f g     acc_y: %f g     acc_z: %f g\n", acc_x_g, acc_y_g, acc_z_g);
-            printf("gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s\n\n", gyr_x_rads, gyr_y_rads, gyr_z_rads);
-
-            if(ret != ESP_OK){
-                printf("Error lectura: %s \n",esp_err_to_name(ret));
-            }
-
-            if (data != NULL) {
-                // Guarda las medidas en protobuf. Se guardan datos
-                // magnéticos y no de temperatura.
-                if (act_acc) {
-                    data->racc_x = acc_x_ms2;
-                    data->racc_y = acc_y_ms2;
-                    data->racc_z = acc_z_ms2;
-                }
-                if (act_gyr) {
-                    data->rgyr_x = gyr_x_rads;
-                    data->rgyr_y = gyr_y_rads;
-                    data->rgyr_z = gyr_z_rads;
-                }
-            }
+        if (data != NULL) {
+            // Guarda las medidas en protobuf. Se guardan datos
+            // magnéticos y no de temperatura.
+            data->acc_x = acc_x_ms2;
+            data->acc_y = acc_y_ms2;
+            data->acc_z = acc_z_ms2;
+            data->gyr_x = gyr_x_rads;
+            data->gyr_y = gyr_y_rads;
+            data->gyr_z = gyr_z_rads;
         }
     }
-    while (loop);
 }
 
 /* Función para ser llamada desde script main. */
 void bmi270_init(int acc_odr, int acc_avg, int acc_range, int gyr_odr, int gyr_range) {
-    softreset();
-    chipid();
+    is_bmi270_active = false;
+
+    ret = softreset();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Init abortada: softreset falló (%s)", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = chipid();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Init abortada: CHIPID inválido (%s)", esp_err_to_name(ret));        return;
+    }
+
     initialization();
     check_initialization();
     toggle_sensors(0, 1, 1, 0);
@@ -882,6 +925,5 @@ void bmi270_init(int acc_odr, int acc_avg, int acc_range, int gyr_odr, int gyr_r
 //     gyr_conf(GYR_ODR, GYR_RANGE);
 //     power_config();
 //     internal_status();
-//     printf("Comienza lectura\n\n");
 //     readout_data_bmi270(NULL, true, true, true);
 // }

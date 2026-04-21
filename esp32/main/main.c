@@ -3,12 +3,15 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_mac.h"
 #include "esp_sleep.h"
+#include "esp_attr.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "freertos/semphr.h"
@@ -23,6 +26,8 @@
 #include "bmm350.h"
 #include "bme688.h"
 #include "bmi270.h"
+#include "nebulaedge_microsd.h"
+#include "nebulaedge_sdstorage.h"
 
 #include "schema.pb-c.h"
 
@@ -42,10 +47,8 @@ TaskHandle_t xHandleGetResponseMQTT = NULL;
 TaskHandle_t xHandleSendBLE = NULL;
 TaskHandle_t xHandleGetResponseBLE = NULL;
 
-
-
 const char *TAG = "main_task";
-const char *TAG_COLLECT_DATA = "task_rand_data"; 
+const char *TAG_COLLECT_DATA = "task_collect_data"; 
 
 const char *TAG_SEND_MQTT = "task_send_mqtt";
 const char *TAG_SEND_UDP = "task_send_udp";
@@ -58,13 +61,88 @@ const char *TAG_GET_RSP_TCP = "task_get_rsp_tcp";
 const char *TAG_GET_RSP_UDP = "task_get_rsp_udp";
 
 static uint32_t data_window_count = 0;
+RTC_DATA_ATTR static uint32_t rtc_unix_time_s = 0;
 static char this_device_id[18] = "00:00:00:00:00:00";
 
 #define NVS_NAMESPACE "nebulaedge"
 #define NVS_KEY_CONFIG "config_blob"
 
-/* Obtiene dirección MAC bluetooth. */
-static void get_device_id(void) {
+/* Suspende la task de sensores solo cuando el bus I2C está libre.
+ * Evita pausar la task en mitad de una transacción I2C. */
+static void suspend_collect_task_when_i2c_idle(void) {
+    // Si la task no existe todavía, no hay nada que suspender.
+    if (!xHandleCollectSensorData) {
+        return;
+    }
+
+    // Fallback defensivo: si el mutex aún no fue creado, suspende igual.
+    if (i2c_bus_mutex == NULL) {
+        ESP_LOGW(TAG, "i2c_bus_mutex es NULL, se suspende task de sensores sin validación");
+        vTaskSuspend(xHandleCollectSensorData);
+        return;
+    }
+
+    // Espera hasta tomar el mutex y suspende antes de liberarlo.
+    // Así se evita la carrera entre "mutex libre" y "vTaskSuspend".
+    while (1) {
+        if (xSemaphoreTake(i2c_bus_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+            vTaskSuspend(xHandleCollectSensorData);
+            xSemaphoreGive(i2c_bus_mutex);
+            ESP_LOGI(TAG, "Task de sensores suspendida con mutex I2C libre");
+            return;
+        }
+
+        ESP_LOGW(TAG, "Esperando mutex I2C libre para suspender task de sensores...");
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+/* Ajusta la hora del sistema con epoch UNIX recibido en configuración. */
+static void set_device_time_from_unix_s(int64_t unix_time_s) {
+    if (unix_time_s <= 0) {
+        ESP_LOGW(TAG, "time_client inválido: %lld", (long long)unix_time_s);
+        return;
+    }
+
+    struct timeval tv = {
+        .tv_sec = (time_t)unix_time_s,
+        .tv_usec = 0,
+    };
+
+    if (settimeofday(&tv, NULL) != 0) {
+        ESP_LOGW(TAG, "No se pudo ajustar la hora del sistema a %lld", (long long)unix_time_s);
+        return;
+    }
+
+    time_t now = 0;
+    time(&now);
+    ESP_LOGI(TAG, "Hora del sistema ajustada a %lld", (long long)now);
+}
+
+/* Guarda la hora estimada de despertar para restaurarla tras deep sleep. */
+static void save_device_time_before_deep_sleep(uint64_t sleep_us) {
+    time_t now = 0;
+    time(&now);
+
+    // Redondea microsegundos a segundos y calcula epoch esperado al despertar.
+    uint32_t sleep_s = (uint32_t)((sleep_us + 999999ULL) / 1000000ULL);
+        rtc_unix_time_s = (uint32_t)((uint64_t)now + sleep_s);
+
+    ESP_LOGI(TAG, "Hora guardada para restaurar tras deep sleep: %lu", (unsigned long)rtc_unix_time_s);
+}
+
+/* Restaura la hora del sistema al volver desde deep sleep. */
+static void restore_device_time_after_deep_sleep(void) {
+    if (rtc_unix_time_s == 0) {
+        ESP_LOGW(TAG, "No hay hora RTC guardada para restaurar tras deep sleep");
+        return;
+    }
+
+    set_device_time_from_unix_s(rtc_unix_time_s);
+}
+
+/* Obtiene la MAC BT y la deja en formato string como ID del dispositivo. */
+static void get_bt_mac(void) {
     uint8_t mac[6] = {0};
 
     esp_err_t ret = esp_read_mac(mac, ESP_MAC_BT);
@@ -78,6 +156,7 @@ static void get_device_id(void) {
     ESP_LOGI(TAG, "ID del device detectado: %s", this_device_id);
 }
 
+/* Borra los datos de la NVS. */
 static void nvs_clear_config(void) {
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
@@ -88,6 +167,7 @@ static void nvs_clear_config(void) {
     nvs_close(nvs);
 }
 
+/* Guarda un paquete Config en la NVS */
 static void nvs_save_config(const Config *cfg) {
     if (!cfg) return;
 
@@ -111,6 +191,7 @@ static void nvs_save_config(const Config *cfg) {
     free(buf);
 }
 
+/* Carga un paquete Config desde la NVS. */
 static Config *nvs_load_config(void) {
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
@@ -142,86 +223,113 @@ static Config *nvs_load_config(void) {
 /* Deep sleep helper para modo discontinuo.
  * Se llama en la función de envío de cada protocolo. */
 static void deep_sleep_if_needed(void) {
+
+    // Si no existe configuración actual
     if (!current_config) {
         return;
     }
+
     data_window_count++;
-    if (current_config->discontinuous_sleep_time <= 0) {
+
+    // Caso en que deep sleep está desactivado
+    if (current_config->sleep_time_s <= 0) {
         return;
     }
 
-    int window_size = current_config->discontinuous_window_size;
+    int window_size = current_config->sleep_window_size;
     if (window_size <= 0) {
         window_size = 1;
     }
 
+    // Aún no se envía toda la ventana, retorna
     if (data_window_count < (uint32_t)window_size) {
         return;
     }
     data_window_count = 0;
 
-    uint64_t sleep_us = (uint64_t)current_config->discontinuous_sleep_time * 1000ULL;
-    ESP_LOGI(TAG, "Entrando deep sleep por %ld ms", (long)current_config->discontinuous_sleep_time);
-
-
+    // Acá se tiene condición de ventana completa, ya se puede entrar en deep sleep
+    uint64_t sleep_us = (uint64_t)current_config->sleep_time_s * 1000000ULL;
+    
+    // Suspende recogida de datos
+    ESP_LOGI(TAG, "Suspendiendo vTaskCollectSensorData");
+    suspend_collect_task_when_i2c_idle();
+    
     // En MQTT
     if (current_config->protocol_conf == 0) {
         // Suspende porque envío de flag cierra socket 
         if (xHandleGetResponseMQTT) {
             vTaskSuspend(xHandleGetResponseMQTT);
         }
-        char topic_data[128];
-        snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
-        mqtt_publish(topic_data, DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN, 0);
+        mqtt_finish();
     }
     
-
     // En UDP
-    if (current_config->protocol_conf == 1) {
+    else if (current_config->protocol_conf == 1) {
         // Suspende porque envío de flag cierra socket 
         if (xHandleGetResponseUDP) {
             vTaskSuspend(xHandleGetResponseUDP);
         }
-        nebulaedge_udp_send((uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+        nebulaedge_udp_close_socket();
     }
-
+    
     // En TCP
-    if (current_config->protocol_conf == 2) {
-        // Suspende porque envío de flag cierra socket 
+    else if (current_config->protocol_conf == 2) {
+        // Suspende para luego cerrar socket
         if (xHandleGetResponseTCP) {
             vTaskSuspend(xHandleGetResponseTCP);
         }
-        tcp_send((uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+        tcp_close_socket();
     }
     
-    // En BLE: no persistir config, partir desde cero al despertar
-    if (current_config->protocol_conf == 3) {
-        nvs_clear_config();
+    // En BLE
+    else if (current_config->protocol_conf == 3) {
+        if (xHandleGetResponseBLE) {
+            vTaskSuspend(xHandleGetResponseBLE);
+        }
+        set_char_with_notify(IDX_CHAR_VAL_B_BLE, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+        // nvs_clear_config();
     } 
-    else {
-        nvs_save_config(current_config);
-    }
-
+    
+    nvs_save_config(current_config);
+    
+    // Deinicializa slaves sensores BMM350, BME688, BMI270
+    i2c_slave_deinit(&device_bmm350);
+    i2c_slave_deinit(&device_bme688);
+    i2c_slave_deinit(&device_bmi270);
+    i2c_master_deinit(&bus_handle);
+    
     // Delay de precaución
     vTaskDelay(pdMS_TO_TICKS(3000));
-
+    
+    ESP_LOGI(TAG, "Entrando deep sleep por %lu s", (unsigned long)current_config->sleep_time_s);
+    save_device_time_before_deep_sleep(sleep_us);
+    
     esp_sleep_enable_timer_wakeup(sleep_us);
     esp_deep_sleep_start();
 }
 
 // Recibe dos configuraciones y retorna un booleano si son diferentes o iguales
 bool config_has_changed(Config *old, Config *new) {
-    if (new->config_version > old->config_version) return true;
-    if (new->config_version < old->config_version) return false;
+    if (new->config_version > old->config_version) {
+        ESP_LOGI(TAG, "Nueva configuración recibida. Versión %ld.", new->config_version);
+        return true;
+    }
+    if (new->config_version < old->config_version) {
+        return false;
+    }
     return false;
 }
 
+/* Envía ACK en protocolo MQTT después de recibir una nueva configuración del servidor. */
 static void send_config_ack_mqtt(const Config *cfg, bool applied) {
     if (!cfg || !cfg->id_device) return;
     ConfigAck ack = CONFIG_ACK__INIT;
+    time_t now_s = 0;
+    time(&now_s);
     ack.id_device = cfg->id_device;
     ack.config_version = cfg->config_version;
     ack.applied = applied;
+    ack.time_client = now_s > 0 ? (uint32_t)now_s : 0;
 
     size_t size = config_ack__get_packed_size(&ack);
     uint8_t *buf = malloc(size);
@@ -235,14 +343,19 @@ static void send_config_ack_mqtt(const Config *cfg, bool applied) {
     snprintf(topic_ack, sizeof(topic_ack), "/topic/nebulaedge/%s/config/ack", cfg->id_device);
     mqtt_publish(topic_ack, buf, size, 0);
     free(buf);
+    ESP_LOGI(TAG, "MQTT: ACK de config enviado.");
 }
 
+/* Envía ACK en protocolo BLE después de recibir una nueva configuración del servidor. */
 static void send_config_ack_ble(const Config *cfg, bool applied) {
     if (!cfg || !cfg->id_device) return;
     ConfigAck ack = CONFIG_ACK__INIT;
+    time_t now_s = 0;
+    time(&now_s);
     ack.id_device = cfg->id_device;
     ack.config_version = cfg->config_version;
     ack.applied = applied;
+    ack.time_client = now_s > 0 ? (uint32_t)now_s : 0;
 
     size_t size = config_ack__get_packed_size(&ack);
     uint8_t *buf = malloc(size);
@@ -253,14 +366,19 @@ static void send_config_ack_ble(const Config *cfg, bool applied) {
     config_ack__pack(&ack, buf);
     set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
     free(buf);
+    ESP_LOGI(TAG, "BLE: ACK de config enviado.");
 }
 
+/* Envía ACK en protocolo UDP después de recibir una nueva configuración del servidor. */
 static void send_config_ack_udp(const Config *cfg, bool applied) {
     if (!cfg || !cfg->id_device) return;
     ConfigAck ack = CONFIG_ACK__INIT;
+    time_t now_s = 0;
+    time(&now_s);
     ack.id_device = cfg->id_device;
     ack.config_version = cfg->config_version;
     ack.applied = applied;
+    ack.time_client = now_s > 0 ? (uint32_t)now_s : 0;
 
     size_t size = config_ack__get_packed_size(&ack);
     uint8_t *buf = malloc(size);
@@ -271,14 +389,19 @@ static void send_config_ack_udp(const Config *cfg, bool applied) {
     config_ack__pack(&ack, buf);
     nebulaedge_udp_send(buf, size);
     free(buf);
+    ESP_LOGI(TAG, "UDP: ACK de config enviado.");
 }
 
+/* Envía ACK en protocolo TCP después de recibir una nueva configuración del servidor. */
 static void send_config_ack_tcp(const Config *cfg, bool applied) {
     if (!cfg || !cfg->id_device) return;
     ConfigAck ack = CONFIG_ACK__INIT;
+    time_t now_s = 0;
+    time(&now_s);
     ack.id_device = cfg->id_device;
     ack.config_version = cfg->config_version;
     ack.applied = applied;
+    ack.time_client = now_s > 0 ? (uint32_t)now_s : 0;
 
     size_t size = config_ack__get_packed_size(&ack);
     uint8_t *buf = malloc(size);
@@ -289,6 +412,7 @@ static void send_config_ack_tcp(const Config *cfg, bool applied) {
     config_ack__pack(&ack, buf);
     tcp_send(buf, size);
     free(buf);
+    ESP_LOGI(TAG, "TCP: ACK de config enviado.");
 }
 
 // GEN_DATA: Lee datos de sensores, los empaqueta y los inserta en una xQueue.
@@ -302,13 +426,20 @@ void vTaskCollectSensorData(void *pvParameters) {
         data_2.id_device = this_device_id;
         data_2.config_version_applied = current_config ? current_config->config_version : 0;
 
+        // Deja timestamp en paquetes
+        time_t now_s = 0;
+        time(&now_s);
+        uint32_t now_unix_s = now_s > 0 ? (uint32_t)now_s : 0;
+        data_1.time_client = now_unix_s;
+        data_2.time_client = now_unix_s;
+
         packet_t packet_1;
         packet_t packet_2;
 
         // Recogida de datos de sensores
-        readout_data_bmm350(&data_1, false, true);
-        readout_data_bme688(&data_1, false, true, true, true, true, 2, 16, 1); 
-        readout_data_bmi270(&data_2, false, true, true);
+        readout_data_bmi270(&data_2);
+        readout_data_bmm350(&data_1);
+        readout_data_bme688(&data_1);
         
         // Serializa el mensaje protobuf
         packet_1.size = data_1__get_packed_size(&data_1) + 1;
@@ -347,7 +478,7 @@ void vTaskCollectSensorData(void *pvParameters) {
         ESP_LOGI(TAG_COLLECT_DATA, "Paquete Data2 generado");
 
         // Inserción en la queue
-        xQueueSend(xQueueData, &packet_2, portMAX_DELAY);
+        send = xQueueSend(xQueueData, &packet_2, portMAX_DELAY);
         if (send == pdTRUE) {
             ESP_LOGI(TAG_COLLECT_DATA, "Se ha insertado correctamente en la xQueue");
         }
@@ -357,7 +488,7 @@ void vTaskCollectSensorData(void *pvParameters) {
         }
 
         // Ritma la producción
-        vTaskDelay(1);
+        vTaskDelay(pdMS_TO_TICKS((uint32_t)current_config->send_interval_s * 1000U) + 1);
     }
 }
 
@@ -386,9 +517,13 @@ void vTaskSendMQTT(void *pvParameters) {
                 ESP_LOGI(TAG_SEND_MQTT, "Paquete publicado por MQTT. msg_id=%d", msg_id);
             }
 
+            // Escribe en SD si está en modo deep sleep
+            if (current_config->sleep_time_s > 0) {
+                data_to_sd(packet.data, packet.size);
+            }
+
             // Libera memoria de paquete
             free(packet.data);
-            vTaskDelay(pdMS_TO_TICKS((uint32_t)current_config->send_interval_ms) + 1);
             deep_sleep_if_needed();
         }
 
@@ -427,8 +562,6 @@ void vTaskGetResponseMQTT(void *pvParameters) {
             current_config = new_config;
             data_window_count = 0;
 
-            send_config_ack_mqtt(current_config, true);
-            
             if (xHandleSendMQTT) {     
                 vTaskSuspend(xHandleSendMQTT);
                 ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskSendMQTT");
@@ -437,9 +570,12 @@ void vTaskGetResponseMQTT(void *pvParameters) {
             if (xHandleCollectSensorData) { 
                 // Se resetea queue para que quede vacía
                 xQueueReset(xQueueData);
-                vTaskSuspend(xHandleCollectSensorData);
+                suspend_collect_task_when_i2c_idle();
                 ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskCollectSensorData");  
             }
+
+            send_config_ack_mqtt(current_config, true);
+            vTaskDelay(4000 / portTICK_PERIOD_MS);
 
             mqtt_finish();
 
@@ -467,19 +603,18 @@ void vTaskSendBLE(void *pvParameters) {
         int receive = xQueueReceive(xQueueData, &packet, portMAX_DELAY);
         if (receive == pdTRUE) {
 
-            // Delay entre paquetes
-            vTaskDelay(pdMS_TO_TICKS((uint32_t)current_config->send_interval_ms) + 1);
-
             // Delay de precaución en caso de modo discontinuo
-            if (current_config->discontinuous_sleep_time > 0) {
+            // Escribe en SD si está en modo deep sleep
+            if (current_config->sleep_time_s > 0) {
                 vTaskDelay(pdMS_TO_TICKS(1000));
+                data_to_sd(packet.data, packet.size);
             }
 
             set_char_with_notify(IDX_CHAR_VAL_B_BLE, packet.data, packet.size);
             free(packet.data);
 
             // Para evitar que se pierda el último paquete
-            if (data_window_count + 1 == (uint32_t)current_config->discontinuous_window_size) {
+            if (data_window_count + 1 == (uint32_t)current_config->sleep_window_size) {
                 vTaskDelay(pdMS_TO_TICKS(3000));
             }
             deep_sleep_if_needed();
@@ -535,7 +670,7 @@ void vTaskGetResponseBLE(void *pvParameters) {
                 // Se resetea queue para que quede vacía
                 xQueueReset(xQueueData);
                 ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskCollectSensorData");
-                vTaskSuspend(xHandleCollectSensorData);
+                suspend_collect_task_when_i2c_idle();
             }
 
             // Señala a app_main que debe cambiar de protocolo
@@ -561,14 +696,11 @@ void vTaskSendUDP(void *pvParameters) {
     for (;;) {
         if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) == pdTRUE) {
             nebulaedge_udp_send(packet.data, packet.size);
+            // Escribe en SD si está en modo deep sleep
+            if (current_config->sleep_time_s > 0) {
+                data_to_sd(packet.data, packet.size);
+            }
             free(packet.data);
-            vTaskDelay(pdMS_TO_TICKS((uint32_t)current_config->send_interval_ms) + 1);
-
-            // // Delay de precaución en caso de modo discontinuo
-            // if (current_config->discontinuous_sleep_time > 0) {
-            //     vTaskDelay(pdMS_TO_TICKS(1000));
-            // }
-
             deep_sleep_if_needed();
         }
     }
@@ -620,10 +752,11 @@ void vTaskGetResponseUDP(void *pvParameters) {
                 // Se resetea queue para que quede vacía
                 xQueueReset(xQueueData);
                 ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo vTaskCollectSensorData");
-                vTaskSuspend(xHandleCollectSensorData);
+                suspend_collect_task_when_i2c_idle();
             }
 
             send_config_ack_udp(current_config, true);
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
 
             // Se cierra el socket UDP
             nebulaedge_udp_close_socket();
@@ -651,8 +784,11 @@ void vTaskSendTCP(void *pvParameters) {
     for (;;) {
         if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) == pdTRUE) {
             tcp_send(packet.data, packet.size);
+            // Escribe en SD si está en modo deep sleep
+            if (current_config->sleep_time_s > 0) {
+                data_to_sd(packet.data, packet.size);
+            }
             free(packet.data);
-            vTaskDelay(pdMS_TO_TICKS((uint32_t)current_config->send_interval_ms) + 1);
             deep_sleep_if_needed();
         }
     }
@@ -706,10 +842,11 @@ void vTaskGetResponseTCP(void *pvParameters) {
                 // Se resetea queue para que quede vacía
                 xQueueReset(xQueueData);
                 ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskCollectSensorData");
-                vTaskSuspend(xHandleCollectSensorData);
+                suspend_collect_task_when_i2c_idle();
             }
 
             send_config_ack_tcp(current_config, true);
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
 
             // Cierra el socket
             tcp_close_socket();
@@ -732,38 +869,23 @@ void vTaskGetResponseTCP(void *pvParameters) {
 void app_main() {
 
     /****************************************************************/
-    /******************** INICIALIZACIÓN SENSORES *******************/
+    /***********************  INICIALIZACIÓN ************************/
     /****************************************************************/
-
-    // Inicializa master bus
-    ESP_ERROR_CHECK(i2c_master_init(&bus_handle));
-
-    // Inicializa slaves BMM350, BME688, BMI270
-    ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmm350, BMM350_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
-    ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bme688, BME688_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
-    ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmi270, BMI270_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
-
-
-
-    /****************************************************************/
-    /**************************  COMUNES ****************************/
-    /****************************************************************/
-
-    srand((unsigned)time(NULL));
-    get_device_id();
 
     // Inicializa NVS
     ESP_ERROR_CHECK(nvs_flash_init());
 
-    // Inicializa semáforos binario. Parten cerrados.
+    // Obtiene MAC BT del dispositivo
+    get_bt_mac();
+
+    // Inicializa semáforos binario. Inician cerrados.
     semaphore = xSemaphoreCreateBinary();
     semaphore_ble = xSemaphoreCreateBinary();
 
-    // Crea queue para pasar datos entre tasks
+    // Crea queues para pasar datos entre tasks
     xQueueData = xQueueCreate(100, sizeof(packet_t));
     xQueueConfig = xQueueCreate(5, sizeof(Config *));
     xQueueConfigBle = xQueueCreate(5, sizeof(packet_t));
-
 
     /********************************************************************/
     /********************* CONFIG INICIAL (NVS/BLE) *********************/
@@ -776,9 +898,10 @@ void app_main() {
         current_config = nvs_load_config();
         if (current_config) {
             ESP_LOGI(TAG, "Config cargada desde NVS (wake-up por deep sleep)");
+            restore_device_time_after_deep_sleep();
             data_window_count = 0;
         }
-    } 
+    }
     else {
         nvs_clear_config();
     }
@@ -806,22 +929,43 @@ void app_main() {
                 ESP_LOGI(TAG, "error al desempaquetar paquete de configuración. Reiniciando...");
                 esp_restart();
             }
+            set_device_time_from_unix_s(current_config->time_client);
+            rtc_unix_time_s = (uint32_t)current_config->time_client;
             data_window_count = 0;
             ESP_LOGI(TAG, "configuración leída correctamente");
         }
-    }
+    } 
 
-    // Inicializa sensores BMM350, BME688, BMI270 con respectivas configuraciones
-    bmm350_init(400, 4);                // bmm350_init(ODR = 4, AVG = 4);
-    bme688_init();                      // bme688_init();
-    bmi270_init(400, 4, 8, 400, 500);   // bmi270_init(ACC_ODR, ACC_AVG, ACC_RANGE, GYR_ODR, GYR_RANGE);
+    // Monta la tarjeta SD en /sdcard y abre archivos para guardar data en deep sleep
+    // AL MONTAR OCUPANDO GPIO 1 (im-v2) FALLA BRUTALMENTE
+    // esp_err_t sd_ret = mount_sd();
+    // if (sd_ret != ESP_OK) {
+    //     ESP_LOGW(TAG, "SD no disponible, se continúa sin persistencia local: %s", esp_err_to_name(sd_ret));
+    // }
 
     /****************************************************************/
     /********** ITERACIÓN QUE MANEJA DE CAMBIOS DE PROTOCOLO ********/
     /****************************************************************/
     while (1) {
-        // Precaución
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        // Deinicializa master y slave al cambiar de protocolo (en la primera iteración no ocurre nada).
+        // Asegura transmisión i2c limpia.
+        i2c_slave_deinit(&device_bmi270);
+        i2c_slave_deinit(&device_bme688);
+        i2c_slave_deinit(&device_bmm350);
+        i2c_master_deinit(&bus_handle);
+        
+        // Inicializa master bus
+        ESP_ERROR_CHECK(i2c_master_init(&bus_handle));
+
+        // Inicializa slaves sensores BMM350, BME688, BMI270
+        ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmm350, BMM350_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+        ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bme688, BME688_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+        ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmi270, BMI270_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+
+        // Inicializa sensores BME688, BMM350, BMI270 con respectivas configuraciones
+        bmm350_init(400, 4);
+        bme688_init(current_config->bme688_sampling, current_config->bme688_sampling, current_config->bme688_sampling);
+        bmi270_init(current_config->acc_sampling, 4, 8, 400, current_config->gyro_sensibility); 
     
         switch (current_config->protocol_conf) {
 
@@ -836,15 +980,13 @@ void app_main() {
 
                     // Hacer enums para simplificar
                     .auth_mode = WIFI_AUTH_WPA_WPA2_PSK,
-                    .max_retry = 15,                           // Después de 10 intentos reinicia la ESP
-                    .retry_delay_ms = 2500,
+                    .max_retry = 15,                           // Después de 15 intentos reinicia la ESP
+                    .retry_delay_ms = 0,
                 };
                 wifi_start_if_needed(&wifi_config);
 
-                // Broker MQTT provisto por configuración (fallback a valor por defecto)
-                const char *broker = (current_config && current_config->mqtt_broker && current_config->mqtt_broker[0])
-                    ? current_config->mqtt_broker
-                    : "mqtt://broker.hivemq.com:1883";
+                // Broker MQTT provisto por configuración
+                const char *broker = current_config->mqtt_broker;
 
                 // Estructura de configuración MQTT: debe ser visible desde main
                 mqtt_config_global mqtt_config = {
@@ -897,7 +1039,7 @@ void app_main() {
                     // Hacer enums para simplificar
                     .auth_mode = WIFI_AUTH_WPA_WPA2_PSK,
                     .max_retry = 15,                           // Después de 10 intentos reinicia la ESP
-                    .retry_delay_ms = 2500,
+                    .retry_delay_ms = 0,
                 };
                 wifi_start_if_needed(&wifi_config);
                 
@@ -943,7 +1085,7 @@ void app_main() {
                     // Hacer enums para simplificar
                     .auth_mode = WIFI_AUTH_WPA_WPA2_PSK,
                     .max_retry = 15,                           // Después de 10 intentos reinicia la ESP
-                    .retry_delay_ms = 2500,
+                    .retry_delay_ms = 0,
                 };
                 wifi_start_if_needed(&wifi_config);
 

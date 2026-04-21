@@ -44,7 +44,7 @@ typedef struct {
     ip_version_t ip_version;  // tipo. IPv4 o IPv6
 } tcp_params_t;
 
-#define DEEP_SLEEP_FLAG_LEN 2U
+#define DEEP_SLEEP_FLAG_LEN 3U
 extern const uint8_t DEEP_SLEEP_FLAG[DEEP_SLEEP_FLAG_LEN];
 
 extern SemaphoreHandle_t semaphore;
@@ -56,11 +56,11 @@ extern SemaphoreHandle_t semaphore_ble;
 /*****************************************************************/
 
 /* Frecuencia MASTER */
-#define I2C_MASTER_FREQ_HZ              10000
+#define I2C_MASTER_FREQ_HZ              100000
 
 /* Pines I2C */
-#define I2C_MASTER_SCL_IO				GPIO_NUM_47			    // GPIO pin I2C master GPIO_NUM_47 imv2 GPIO_NUM_2 imv3
-#define I2C_MASTER_SDA_IO				GPIO_NUM_48				// GPIO pin I2C master GPIO_NUM_48 imv2 GPIO_NUM_42 imv3
+#define I2C_MASTER_SCL_IO				GPIO_NUM_2			    // GPIO pin I2C master GPIO_NUM_47 imv1 GPIO_NUM_2 imv2
+#define I2C_MASTER_SDA_IO				GPIO_NUM_42				// GPIO pin I2C master GPIO_NUM_48 imv1 GPIO_NUM_42 imv2
 
 /* Direcciones slave de sensores (I2C) */
 #define BMM350_SLAVE_ADDR           0x14
@@ -68,10 +68,10 @@ extern SemaphoreHandle_t semaphore_ble;
 #define BME688_SLAVE_ADDR           0x76
 
 /* Pines SPI (microsd)*/
-#define PIN_NUM_CS                          GPIO_NUM_1         // GPIO pin
-#define PIN_NUM_MOSI                        GPIO_NUM_2         // GPIO pin
-#define PIN_NUM_CLK                         GPIO_NUM_43        // GPIO pin
-#define PIN_NUM_MISO                        GPIO_NUM_44        // GPIO pin
+#define PIN_NUM_CS                          GPIO_NUM_1         // GPIO pin GPIO_NUM_1 im-v1
+#define PIN_NUM_MOSI                        GPIO_NUM_21        // GPIO pin GPIO_NUM_2 im-v1
+#define PIN_NUM_CLK                         GPIO_NUM_38        // GPIO pin GPIO_NUM_43 im-v1
+#define PIN_NUM_MISO                        GPIO_NUM_47        // GPIO pin GPIO_NUM_44 im-v1
 
 /* SD */
 #define FORMAT_IF_MOUNT_FAILED              true

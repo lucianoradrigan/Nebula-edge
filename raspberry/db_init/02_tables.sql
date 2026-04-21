@@ -1,13 +1,15 @@
-CREATE TABLE config (
+CREATE SCHEMA IF NOT EXISTS nebulaedge_schema;
+
+CREATE TABLE nebulaedge_schema.config (
     id_device VARCHAR(45) PRIMARY KEY,
     config_version INT,
     protocol_conf INT,
     acc_sampling INT,
     gyro_sensibility INT,
     bme688_sampling INT,
-    send_interval_ms INT,
-    discontinuous_sleep_time INT,
-    discontinuous_window_size INT,
+    send_interval_s INT,
+    sleep_time_s INT,
+    sleep_window_size INT,
     tcp_port INT,
     udp_port INT,
     host_ip_addr VARCHAR(45),
@@ -16,13 +18,16 @@ CREATE TABLE config (
     mqtt_broker VARCHAR(128)
 );
 
-CREATE TABLE log (
-    id_device INT,
-    time_client BIGINT,
-    time_server BIGINT
+CREATE TABLE nebulaedge_schema.log (
+    id_device VARCHAR(45),
+    status_report INT,
+    protocol_report INT,
+    batt_level INT,
+    time_client TIMESTAMP,
+    time_server TIMESTAMP
 );
 
-CREATE TABLE data_1 (
+CREATE TABLE nebulaedge_schema.data_1 (
     id_device VARCHAR(45),
     temperature FLOAT,
     press INT,
@@ -38,10 +43,11 @@ CREATE TABLE data_1 (
     mag_x FLOAT,
     mag_y FLOAT,
     mag_z FLOAT,
-    config_version_applied INT
+    config_version_applied INT,
+    time_client TIMESTAMP
 );
 
-CREATE TABLE data_2 (
+CREATE TABLE nebulaedge_schema.data_2 (
     id_device VARCHAR(45),
     acc_x FLOAT,
     acc_y FLOAT,
@@ -49,6 +55,6 @@ CREATE TABLE data_2 (
     gyr_x FLOAT,
     gyr_y FLOAT,
     gyr_z FLOAT,
-    time_client BIGINT,
-    config_version_applied INT
+    config_version_applied INT,
+    time_client TIMESTAMP
 );
