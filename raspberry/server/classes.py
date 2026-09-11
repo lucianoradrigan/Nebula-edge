@@ -398,7 +398,7 @@ class MasterConnection:
 
             config = None
             try:
-                config = DatabaseRepository(self.db_dsn).get_config(addr)
+                config = await DatabaseRepository(self.db_dsn).get_config_async(addr)
                 if config:
                     print(f"[WiFi] SSID: {config.ssid}, Contraseña: {config.passwd}")
             except Exception as e:
@@ -429,7 +429,7 @@ class MasterConnection:
                     await client.write_gatt_char(UUID_CHAR_A, serialized_config, response=True)
 
                     # Registra envío de configuración inicial al dispositivo.
-                    DatabaseRepository(self.db_dsn).insert_log(
+                    await DatabaseRepository(self.db_dsn).insert_log_async(
                         Log(
                             id_device=config.id_device,
                             status_report=1,
@@ -481,7 +481,7 @@ class MasterConnection:
             # Permite re-descubrimiento si se pierde la conexión
             print(f"Pop device {addr}")
             # Registra la desconexión
-            DatabaseRepository(self.db_dsn).insert_log(
+            await DatabaseRepository(self.db_dsn).insert_log_async(
                 Log(
                     id_device=addr,
                     status_report=0,
@@ -594,7 +594,6 @@ class DeviceSession:
         self.scanner_start = scanner_start              # Función para iniciar el scanner
         self.ble_adapter = ble_adapter or "hci1"         # Adaptador BLE a usar
         self.timeouts = timeouts or Timeouts()          # Timeouts centralizados
-        self.ble_conn_retries = timeouts.ble_conn_retries
         self._last_client_time: int | None = None       # Último time_client recibido desde Data_1/Data_2
 
     def _update_last_client_time(self, data: Any):
@@ -611,7 +610,7 @@ class DeviceSession:
                 continue
             server_time = local_epoch_now()
             try:
-                self.database_repo.insert_log(
+                await self.database_repo.insert_log_async(
                     Log(
                         id_device=self.device_id,
                         status_report=2,
@@ -637,32 +636,88 @@ class DeviceSession:
             return base + grace
         return self.timeouts.no_data_grace_sec
 
+    async def _proactive_config_push(self, push_and_wait: Callable[["ConfigData"], Any]) -> "ConfigData | None":
+        """Consulta la BD sin haber recibido un paquete y empuja la config si cambió.
+
+        Se llama entre reintentos de espera (cada `config_poll_sec`) para no depender
+        de que llegue telemetría para detectar un cambio de config. `push_and_wait(db_config)`
+        debe enviar la config por el canal correspondiente y esperar su ACK, retornando
+        True si se confirmó.
+        """
+        db_config = await self.database_repo.get_config_async(self.device_id)
+        if db_config is None or db_config.config_version <= self.config.config_version:
+            return None
+        applied = await push_and_wait(db_config)
+        return db_config if applied else None
+
 class MQTTDeviceSession(DeviceSession):
     """Sesión MQTT: recibe data, persiste y aplica cambios de config con ACK."""
+
+    async def _wait_ack_mqtt(self, ack_queue, db_config: "ConfigData") -> bool:
+        """Espera ACK válido por MQTT. Retorna True si se confirmó."""
+        for _ in range(self.timeouts.config_ack_retries):
+            try:
+                payload = await asyncio.to_thread(
+                    ack_queue.get,
+                    True,
+                    self.timeouts.config_ack_sec,
+                )
+                ack = DataCodec.deserialize_config_ack(payload)
+                if (
+                    ack
+                    and ack.id_device == self.device_id
+                    and ack.config_version == db_config.config_version
+                    and ack.applied
+                ):
+                    print(f"ACK MQTT de recibido para {self.device_id} v{db_config.config_version}")
+                    return True
+            except queue.Empty:
+                pass
+
+        print(f"ACK MQTT de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
+        return False
+
+    async def _push_and_wait(self, config_topic: str, ack_queue, db_config: "ConfigData") -> bool:
+        """Publica config y espera su ACK. Adapta al formato de _proactive_config_push."""
+        print(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
+        serialized_config = DataCodec.serialize_config(db_config)
+        mqtt_publish(config_topic, serialized_config)
+        return await self._wait_ack_mqtt(ack_queue, db_config)
+
     async def run(self):
         mqtt_start()
 
         device_queue = get_data_queue(self.device_id)
         ack_queue =  get_ack_queue(self.device_id)
-        data_topic = f"/topic/nebulaedge/{self.device_id}/data"
         config_topic = f"/topic/nebulaedge/{self.device_id}/config"
-        timeout_sec = self.timeouts.no_data_grace_sec
 
         while True:
             data = None
-            try:
-                # Espera por un paquete
-                packet = await asyncio.to_thread(
-                    device_queue.get,
-                    True,
-                    timeout_sec,
-                )
 
-                # Flag que indica deep sleep
-                if packet == b"ds":
-                    print("Se detectó deep sleep")
+            # Espera por un paquete, sondeando la BD proactivamente en ventanas cortas
+            # mientras no llega nada (no depende de que llegue telemetría).
+            full_timeout = self._sleep_timeout_sec()
+            deadline = time.monotonic() + full_timeout
+            packet = None
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    print(f"Timeout MQTT ({full_timeout}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
+                    return None
+                wait = min(remaining, self.timeouts.config_poll_sec)
+                try:
+                    packet = await asyncio.to_thread(device_queue.get, True, wait)
+                    break
+                except queue.Empty:
+                    new_cfg = await self._proactive_config_push(
+                        lambda cfg: self._push_and_wait(config_topic, ack_queue, cfg)
+                    )
+                    if new_cfg is not None:
+                        mqtt_shutdown()
+                        return new_cfg
                     continue
 
+            try:
                 # # (este código se repite mucho)
                 # Desempaqueta y obtiene protobuf tipo Data1/Data2
                 data, data_type = DataCodec.deserialize_typed_packet(packet)
@@ -672,24 +727,24 @@ class MQTTDeviceSession(DeviceSession):
                     self._update_last_client_time(data)
                 if data_type == DataCodec.TYPE_DATA_1:
                     print(f"MQTT: Paquete Data_1 recibido de {self.device_id}")
-                    self.database_repo.insert_data_1(data)
+                    await self.database_repo.insert_data_1_async(data)
                 elif data_type == DataCodec.TYPE_DATA_2:
                     print(f"MQTT: Paquete Data_2 recibido de {self.device_id}")
-                    self.database_repo.insert_data_2(data)
+                    await self.database_repo.insert_data_2_async(data)
+                elif data_type == DataCodec.TYPE_DEEP_SLEEP:
+                    print(f"MQTT: Se detectó deep sleep de {self.device_id}")
+                    continue
                 else:
                     continue
-
-            except queue.Empty:
-                print(f"Timeout MQTT ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
-                return None
             except Exception as e:
                 print(f"Error procesando datos: {e}")
+                continue
 
             # Pausa para que otras tareas de asyncio se ejecuten (otras sesiones)
             await asyncio.sleep(self.timeouts.mqtt_poll_sec)
 
             # Obtiene configuración desde DB
-            db_config = self.database_repo.get_config(self.device_id)
+            db_config = await self.database_repo.get_config_async(self.device_id)
             if db_config is None:
                 continue
 
@@ -704,36 +759,10 @@ class MQTTDeviceSession(DeviceSession):
                 if db_config.config_version <= self.config.config_version:
                     # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
                     continue
-                print(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
-
-                # Serializa y envía nueva configuración (espera ACK antes de cambiar)
-                serialized_config = DataCodec.serialize_config(db_config)
-
-                mqtt_publish(config_topic, serialized_config)
-                for _ in range(self.timeouts.config_ack_retries):
-                    try:
-                        payload = await asyncio.to_thread(
-                            ack_queue.get,
-                            True,
-                            self.timeouts.config_ack_sec,
-                        )
-                        ack = DataCodec.deserialize_config_ack(payload)
-                        if (
-                            ack
-                            and ack.id_device == self.device_id
-                            and ack.config_version == db_config.config_version
-                            and ack.applied
-                        ):
-                            print(f"ACK MQTT de recibido para {self.device_id} v{db_config.config_version}")
-                            mqtt_shutdown()
-                            return db_config
-                    except queue.Empty:
-                        pass
-
-                print(f"ACK MQTT de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
+                applied = await self._push_and_wait(config_topic, ack_queue, db_config)
                 mqtt_shutdown()
-                return None
-            
+                return db_config if applied else None
+
 class UDPDeviceSession(DeviceSession):
     """Sesión UDP: recibe data, persiste y aplica cambios de config con ACK."""
     async def _send_config(self, sock: socket.socket, udp_addr, db_config: "ConfigData") -> bool:
@@ -786,15 +815,21 @@ class UDPDeviceSession(DeviceSession):
                     self._update_last_client_time(data)
                 if data_type == DataCodec.TYPE_DATA_1:
                     print(f"UDP: Paquete Data_1 recibido de {self.device_id}.")
-                    self.database_repo.insert_data_1(data)
-                if data_type == DataCodec.TYPE_DATA_2:
+                    await self.database_repo.insert_data_1_async(data)
+                elif data_type == DataCodec.TYPE_DATA_2:
                     print(f"UDP: Paquete Data_2 recibido de {self.device_id}.")
-                    self.database_repo.insert_data_2(data)
+                    await self.database_repo.insert_data_2_async(data)
                 else:
                     continue
 
         print(f"ACK UDP de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
         return None
+
+    async def _push_and_wait(self, sock: socket.socket, udp_addr, db_config: "ConfigData") -> bool:
+        """Envía config y espera su ACK. Adapta _send_config/_wait_ack al formato de _proactive_config_push."""
+        if not await self._send_config(sock, udp_addr, db_config):
+            return False
+        return await self._wait_ack(sock, db_config) is not None
 
     async def run(self):
         ''' Flujo programa: 
@@ -825,21 +860,34 @@ class UDPDeviceSession(DeviceSession):
             s.bind((host, port))
             print(f'Servidor UDP escuchando en {host}:{port}')
 
+            last_udp_addr = None
+
             while True:
-                # Escucha para recibir paquete (no bloqueante)
+                # Escucha para recibir paquete, sondeando la BD proactivamente en ventanas
+                # cortas mientras no llegue nada (no depende de que llegue telemetría).
                 timeout_sec = self._sleep_timeout_sec()
-                try:
-                    packet, udp_addr = await asyncio.wait_for(loop.sock_recvfrom(s, 1024), timeout=timeout_sec)
-                except asyncio.TimeoutError:
-                    print(f"Timeout UDP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
-                    return None
+                deadline = time.monotonic() + timeout_sec
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        print(f"Timeout UDP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
+                        return None
+                    wait = min(remaining, self.timeouts.config_poll_sec)
+                    try:
+                        packet, udp_addr = await asyncio.wait_for(loop.sock_recvfrom(s, 1024), timeout=wait)
+                        break
+                    except asyncio.TimeoutError:
+                        if last_udp_addr is not None:
+                            new_cfg = await self._proactive_config_push(
+                                lambda cfg: self._push_and_wait(s, last_udp_addr, cfg)
+                            )
+                            if new_cfg is not None:
+                                return new_cfg
+                        continue
+
+                last_udp_addr = udp_addr
 
                 ## Común
-
-                # Flag que indica deep sleep
-                if packet == b"ds":
-                    print("Se detectó deep sleep, reinicia socket")
-                    break
 
                 # Desempaqueta y obtiene protobuf tipo Data1/Data2
                 data, data_type = DataCodec.deserialize_typed_packet(packet)
@@ -849,15 +897,18 @@ class UDPDeviceSession(DeviceSession):
                     self._update_last_client_time(data)
                 if data_type == DataCodec.TYPE_DATA_1:
                     print(f"UDP: Paquete Data_1 recibido de {self.device_id} en puerto {port}")
-                    self.database_repo.insert_data_1(data)
-                if data_type == DataCodec.TYPE_DATA_2:
+                    await self.database_repo.insert_data_1_async(data)
+                elif data_type == DataCodec.TYPE_DATA_2:
                     print(f"UDP: Paquete Data_2 recibido de {self.device_id} en puerto {port}")
-                    self.database_repo.insert_data_2(data)
+                    await self.database_repo.insert_data_2_async(data)
+                elif data_type == DataCodec.TYPE_DEEP_SLEEP:
+                    print(f"UDP: Se detectó deep sleep de {self.device_id}, se sigue escuchando en el mismo socket")
+                    continue
                 else:
                     continue
 
                 # Obtiene configuración desde DB
-                db_config = self.database_repo.get_config(self.device_id)
+                db_config = await self.database_repo.get_config_async(self.device_id)
                 if db_config is None:
                     continue
 
@@ -931,15 +982,21 @@ class TCPDeviceSession(DeviceSession):
                     self._update_last_client_time(data)
                 if data_type == DataCodec.TYPE_DATA_1:
                     print(f"TCP: Paquete Data_1 recibido de {self.device_id}")
-                    self.database_repo.insert_data_1(data)
-                if data_type == DataCodec.TYPE_DATA_2:
+                    await self.database_repo.insert_data_1_async(data)
+                elif data_type == DataCodec.TYPE_DATA_2:
                     print(f"TCP: Paquete Data_2 recibido de {self.device_id}")
-                    self.database_repo.insert_data_2(data)
+                    await self.database_repo.insert_data_2_async(data)
                 else:
                     continue
 
         print(f"ACK TCP de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
         return None
+
+    async def _push_and_wait(self, conn: socket.socket, db_config: "ConfigData") -> bool:
+        """Envía config y espera su ACK. Adapta _send_config/_wait_ack al formato de _proactive_config_push."""
+        if not await self._send_config(conn, db_config):
+            return False
+        return await self._wait_ack(conn, db_config) is not None
 
     async def run(self):
         loop = asyncio.get_running_loop()
@@ -975,25 +1032,35 @@ class TCPDeviceSession(DeviceSession):
                     # While de recepción de datos y consulta de config a DB
                     while True:
 
-                        # Recibe dato
+                        # Recibe dato, sondeando la BD proactivamente en ventanas cortas
+                        # mientras no llegue nada (no depende de que llegue telemetría).
                         timeout_sec = self._sleep_timeout_sec()
-                        try:
-                            packet = await asyncio.wait_for(loop.sock_recv(conn, 1024), timeout=timeout_sec)
-                        except asyncio.TimeoutError:
-                            print(f"Timeout TCP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
-                            return None
-                        except Exception as e:
-                            print(f"Recepción TCP falló: {e}")
+                        deadline = time.monotonic() + timeout_sec
+                        packet = None
+                        while True:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                print(f"Timeout TCP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
+                                return None
+                            wait = min(remaining, self.timeouts.config_poll_sec)
+                            try:
+                                packet = await asyncio.wait_for(loop.sock_recv(conn, 1024), timeout=wait)
+                                break
+                            except asyncio.TimeoutError:
+                                new_cfg = await self._proactive_config_push(
+                                    lambda cfg: self._push_and_wait(conn, cfg)
+                                )
+                                if new_cfg is not None:
+                                    return new_cfg
+                                continue
+                            except Exception as e:
+                                print(f"Recepción TCP falló: {e}")
+                                break
                         if not packet:
                             print("Conexión TCP cerrada por el otro extremo.")
                             break
 
                         ## Común
-
-                        # Flag que indica deep sleep
-                        if packet == b"ds":
-                            print("Se detectó deep sleep, reinicia socket")
-                            break
 
                         # (este código se repite mucho)
                         # Desempaqueta y obtiene protobuf tipo Data1/Data2
@@ -1004,15 +1071,18 @@ class TCPDeviceSession(DeviceSession):
                             self._update_last_client_time(data)
                         if data_type == DataCodec.TYPE_DATA_1:
                             print(f"TCP: Paquete Data_1 recibido de {self.device_id} en puerto {port}")
-                            self.database_repo.insert_data_1(data)
-                        if data_type == DataCodec.TYPE_DATA_2:
+                            await self.database_repo.insert_data_1_async(data)
+                        elif data_type == DataCodec.TYPE_DATA_2:
                             print(f"TCP: Paquete Data_2 recibido de {self.device_id} en puerto {port}")
-                            self.database_repo.insert_data_2(data)
+                            await self.database_repo.insert_data_2_async(data)
+                        elif data_type == DataCodec.TYPE_DEEP_SLEEP:
+                            print(f"TCP: Se detectó deep sleep de {self.device_id}, reinicia socket")
+                            break
                         else:
                             continue
 
                         # Obtiene configuración desde DB
-                        db_config = self.database_repo.get_config(self.device_id)
+                        db_config = await self.database_repo.get_config_async(self.device_id)
                         if db_config is None:
                             continue
 
@@ -1185,12 +1255,37 @@ class BLEDeviceSession(DeviceSession):
                     await client.start_notify(UUID_CHAR_B, _on_data)
 
                     # Bucle recepción telemetría
+                    timeout_sec = self._sleep_timeout_sec()
+                    deadline = time.monotonic() + timeout_sec
                     while True:
-                        try:            
+                        try:
                             await asyncio.sleep(0.1)
-                            
+
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                print(f"Timeout BLE ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando conexión para permitir reconexión.")
+                                await client.stop_notify(UUID_CHAR_B)
+                                await client.stop_notify(UUID_CHAR_D)
+                                return None
+
+                            # Sondea la BD proactivamente en ventanas cortas mientras no
+                            # llega nada, sin depender de que llegue telemetría.
+                            wait = min(remaining, self.timeouts.config_poll_sec)
+                            try:
+                                packet = await asyncio.wait_for(data_queue.get(), timeout=wait)
+                            except asyncio.TimeoutError:
+                                new_cfg = await self._proactive_config_push(
+                                    lambda cfg: self._send_config_and_wait_ack(client, ack_queue, cfg)
+                                )
+                                if new_cfg is not None:
+                                    await client.stop_notify(UUID_CHAR_B)
+                                    await client.stop_notify(UUID_CHAR_D)
+                                    return new_cfg
+                                continue
+
+                            # Llegó un paquete real: se renueva la ventana completa
                             timeout_sec = self._sleep_timeout_sec()
-                            packet = await asyncio.wait_for(data_queue.get(), timeout=timeout_sec)
+                            deadline = time.monotonic() + timeout_sec
 
                             # Común
 
@@ -1203,17 +1298,14 @@ class BLEDeviceSession(DeviceSession):
                                 self._update_last_client_time(data)
                             if data_type == DataCodec.TYPE_DATA_1:
                                 print(f"BLE: Paquete Data_1 recibido de {self.device_id}")
-                                self.database_repo.insert_data_1(data)
-                            if data_type == DataCodec.TYPE_DATA_2:
+                                await self.database_repo.insert_data_1_async(data)
+                            elif data_type == DataCodec.TYPE_DATA_2:
                                 print(f"BLE: Paquete Data_2 recibido de {self.device_id}")
-                                self.database_repo.insert_data_2(data)
-                            if data_type == DataCodec.TYPE_DEEP_SLEEP:
+                                await self.database_repo.insert_data_2_async(data)
+                            elif data_type == DataCodec.TYPE_DEEP_SLEEP:
                                 print(f"BLE: Dispositivo {self.device_id} entrando en deep sleep. Cerrando sesión para permitir reconexión.")
                                 await client.stop_notify(UUID_CHAR_B)
                                 await client.stop_notify(UUID_CHAR_D)
-                                # Cierra la task
-                                # return None
-                                # continue_outer = True
 
                                 # Vuelve a intentar conexión BLE persistente (cuando despierte)
                                 await asyncio.sleep(timeout_sec)
@@ -1221,13 +1313,11 @@ class BLEDeviceSession(DeviceSession):
 
                             else:
                                 continue
-  
+
                             # Obtiene configuración de BD
-                            db_config = self.database_repo.get_config(self.device_id)
+                            db_config = await self.database_repo.get_config_async(self.device_id)
                             if db_config is None:
                                 continue
-
-                            print("esto se ejecuta")
 
                             # Compara versiones actuales de config DEVICE vs versión BD
                             # Caso mayor: una configuración nueva ya se aplicó por lo que el server tiene que adecuarse
@@ -1251,12 +1341,6 @@ class BLEDeviceSession(DeviceSession):
                                 await client.stop_notify(UUID_CHAR_B)
                                 await client.stop_notify(UUID_CHAR_D)
                                 return db_config
-
-                        except asyncio.TimeoutError:
-                            print(f"Timeout BLE ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando conexión para permitir reconexión.")
-                            await client.stop_notify(UUID_CHAR_B)
-                            await client.stop_notify(UUID_CHAR_D)
-                            return None
 
                         except Exception as e:
                             print(f"Error: {e}")
@@ -1417,6 +1501,23 @@ class DatabaseRepository:
             return
         except Exception as e:
             print(e)
+
+    # psycopg2 es sincrónico/bloqueante: cada método de arriba abre su propia
+    # conexión y espera la red. Llamado directo desde una corutina, congela
+    # el event loop completo (todas las demás sesiones de devices se detienen).
+    # Estos envoltorios delegan al thread pool de asyncio, igual que ya se hace
+    # con device_queue.get/ack_queue.get en las sesiones MQTT.
+    async def get_config_async(self, device_id: str) -> ConfigData | None:
+        return await asyncio.to_thread(self.get_config, device_id)
+
+    async def insert_data_1_async(self, data_1: "Data_1") -> None:
+        await asyncio.to_thread(self.insert_data_1, data_1)
+
+    async def insert_data_2_async(self, data_2: "Data_2") -> None:
+        await asyncio.to_thread(self.insert_data_2, data_2)
+
+    async def insert_log_async(self, log: "Log") -> None:
+        await asyncio.to_thread(self.insert_log, log)
 
 class DataCodec:
     """Esta clase permite que DatabaseRepository se desligue de protobuf.
@@ -1625,9 +1726,8 @@ class Timeouts:
     config_ack_retries: int = 10           # Reintentos de ACK de config (MQTT/UDP/TCP/BLE)
     no_data_grace_sec: float = 50.0       # Gracia extra al esperar un dato
     mqtt_poll_sec: float = 0.1             # Sleep de polling MQTT
-    mqtt_queue_timeout_sec: float = 1.0    # Timeout de device_queue.get()
     ble_ack_short_sec: float = 3.0         # Timeout corto por intento en _wait_ble_ack
-    ble_conn_retries: int = 10             # Reintentos de conexión BLE persistente
+    config_poll_sec: float = 15.0          # Intervalo de sondeo proactivo de config, sin depender de telemetría
 
 @dataclass
 class Data_1:

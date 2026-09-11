@@ -67,6 +67,13 @@ static char this_device_id[18] = "00:00:00:00:00:00";
 #define NVS_NAMESPACE "nebulaedge"
 #define NVS_KEY_CONFIG "config_blob"
 
+/* Los paquetes de control (ACK de config, aviso de deep sleep) no esperan respuesta:
+ * se mandan varias veces seguidas para bajar la probabilidad de que se pierdan, en
+ * vez de implementar un segundo hop de confirmación (que agregaría otro flanco de
+ * pérdida en vez de reducir el riesgo). */
+#define CONTROL_PKT_REDUNDANCY 3
+#define CONTROL_PKT_REDUNDANCY_DELAY_MS 50
+
 /* Suspende la task de sensores solo cuando el bus I2C está libre.
  * Evita pausar la task en mitad de una transacción I2C. */
 static void suspend_collect_task_when_i2c_idle(void) {
@@ -256,37 +263,58 @@ static void deep_sleep_if_needed(void) {
     
     // En MQTT
     if (current_config->protocol_conf == 0) {
-        // Suspende porque envío de flag cierra socket 
+        // Suspende porque envío de flag cierra socket
         if (xHandleGetResponseMQTT) {
             vTaskSuspend(xHandleGetResponseMQTT);
         }
+        // Avisa al server que se va a dormir, antes de cerrar. No se espera
+        // respuesta, así que se manda varias veces por si se pierde alguna.
+        char topic_data[128];
+        snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
+        for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+            mqtt_publish(topic_data, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN, 0);
+            vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+        }
         mqtt_finish();
     }
-    
+
     // En UDP
     else if (current_config->protocol_conf == 1) {
-        // Suspende porque envío de flag cierra socket 
+        // Suspende porque envío de flag cierra socket
         if (xHandleGetResponseUDP) {
             vTaskSuspend(xHandleGetResponseUDP);
         }
+        // Avisa al server que se va a dormir, antes de cerrar el socket.
+        for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+            nebulaedge_udp_send((uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+            vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+        }
         nebulaedge_udp_close_socket();
     }
-    
+
     // En TCP
     else if (current_config->protocol_conf == 2) {
         // Suspende para luego cerrar socket
         if (xHandleGetResponseTCP) {
             vTaskSuspend(xHandleGetResponseTCP);
         }
+        // Avisa al server que se va a dormir, antes de cerrar el socket.
+        for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+            tcp_send((uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+            vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+        }
         tcp_close_socket();
     }
-    
+
     // En BLE
     else if (current_config->protocol_conf == 3) {
         if (xHandleGetResponseBLE) {
             vTaskSuspend(xHandleGetResponseBLE);
         }
-        set_char_with_notify(IDX_CHAR_VAL_B_BLE, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+        for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+            set_char_with_notify(IDX_CHAR_VAL_B_BLE, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+            vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+        }
         // nvs_clear_config();
     } 
     
@@ -341,7 +369,12 @@ static void send_config_ack_mqtt(const Config *cfg, bool applied) {
 
     char topic_ack[128];
     snprintf(topic_ack, sizeof(topic_ack), "/topic/nebulaedge/%s/config/ack", cfg->id_device);
-    mqtt_publish(topic_ack, buf, size, 0);
+    // Envío redundante: no se espera respuesta, así que se manda varias veces
+    // en vez de esperar una confirmación (que agregaría otro flanco de pérdida).
+    for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+        mqtt_publish(topic_ack, buf, size, 0);
+        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+    }
     free(buf);
     ESP_LOGI(TAG, "MQTT: ACK de config enviado.");
 }
@@ -364,7 +397,10 @@ static void send_config_ack_ble(const Config *cfg, bool applied) {
         return;
     }
     config_ack__pack(&ack, buf);
-    set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
+    for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+        set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
+        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+    }
     free(buf);
     ESP_LOGI(TAG, "BLE: ACK de config enviado.");
 }
@@ -387,7 +423,10 @@ static void send_config_ack_udp(const Config *cfg, bool applied) {
         return;
     }
     config_ack__pack(&ack, buf);
-    nebulaedge_udp_send(buf, size);
+    for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+        nebulaedge_udp_send(buf, size);
+        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+    }
     free(buf);
     ESP_LOGI(TAG, "UDP: ACK de config enviado.");
 }
@@ -410,7 +449,10 @@ static void send_config_ack_tcp(const Config *cfg, bool applied) {
         return;
     }
     config_ack__pack(&ack, buf);
-    tcp_send(buf, size);
+    for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+        tcp_send(buf, size);
+        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+    }
     free(buf);
     ESP_LOGI(TAG, "TCP: ACK de config enviado.");
 }
