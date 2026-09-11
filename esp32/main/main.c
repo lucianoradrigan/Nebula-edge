@@ -104,6 +104,20 @@ static void suspend_collect_task_when_i2c_idle(void) {
     }
 }
 
+/* Vacía xQueueData liberando la memoria de cada packet_t pendiente.
+ *
+ * xQueueReset() por sí solo descarta los elementos en cola SIN liberar
+ * su packet_t.data (reservada con malloc() en vTaskCollectSensorData):
+ * cada cambio de config/protocolo (4 sitios: vTaskGetResponseMQTT/UDP/
+ * TCP/BLE) perdía esa memoria. Se llama en el mismo punto donde antes
+ * se llamaba xQueueReset(xQueueData) directamente. */
+static void drain_and_free_data_queue(void) {
+    packet_t pkt;
+    while (xQueueReceive(xQueueData, &pkt, 0) == pdTRUE) {
+        free(pkt.data);
+    }
+}
+
 /* Ajusta la hora del sistema con epoch UNIX recibido en configuración. */
 static void set_device_time_from_unix_s(int64_t unix_time_s) {
     if (unix_time_s <= 0) {
@@ -611,7 +625,7 @@ void vTaskGetResponseMQTT(void *pvParameters) {
 
             if (xHandleCollectSensorData) { 
                 // Se resetea queue para que quede vacía
-                xQueueReset(xQueueData);
+                drain_and_free_data_queue();
                 suspend_collect_task_when_i2c_idle();
                 ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskCollectSensorData");  
             }
@@ -710,7 +724,7 @@ void vTaskGetResponseBLE(void *pvParameters) {
             }
             if (xHandleCollectSensorData) {
                 // Se resetea queue para que quede vacía
-                xQueueReset(xQueueData);
+                drain_and_free_data_queue();
                 ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskCollectSensorData");
                 suspend_collect_task_when_i2c_idle();
             }
@@ -792,7 +806,7 @@ void vTaskGetResponseUDP(void *pvParameters) {
 
             if (xHandleCollectSensorData) {
                 // Se resetea queue para que quede vacía
-                xQueueReset(xQueueData);
+                drain_and_free_data_queue();
                 ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo vTaskCollectSensorData");
                 suspend_collect_task_when_i2c_idle();
             }
@@ -882,7 +896,7 @@ void vTaskGetResponseTCP(void *pvParameters) {
             }
             if (xHandleCollectSensorData) {
                 // Se resetea queue para que quede vacía
-                xQueueReset(xQueueData);
+                drain_and_free_data_queue();
                 ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskCollectSensorData");
                 suspend_collect_task_when_i2c_idle();
             }
