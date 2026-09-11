@@ -171,12 +171,14 @@ size_t nebulaedge_udp_receive(uint8_t *data_recv, size_t len) {
  * script. */
 void nebulaedge_udp_close_socket(void) {
     if (sock != -1) {
-        shutdown(sock, 0);
+        shutdown(sock, SHUT_RDWR);
         close(sock);
         ESP_LOGI(TAG, "Socket closed");
+        sock = -1;
     }
     else {
         ESP_LOGE(TAG, "Socket is already closed");
     }
     free(dest_addr);
+    dest_addr = NULL;
 }
