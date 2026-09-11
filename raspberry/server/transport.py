@@ -24,44 +24,59 @@ import socket
 from models import ConfigData
 
 
+class TransportClosed(Exception):
+    """El enlace con el device se cortó (el otro extremo cerró, o avisó deep sleep).
+
+    Distinto de un timeout: acá no es que no llegó nada, es que ya no hay por
+    dónde recibir. Si el transporte declara `reopens = True`, la sesión vuelve
+    a abrirlo y sigue esperando al device.
+    """
+
+
 class Transport(ABC):
     """Mueve bytes hacia/desde un device. Sin lógica de protocolo de aplicación."""
 
     # Nombre corto para los logs ("UDP", "TCP", "BLE", ...).
     name: str = "?"
 
-    def __init__(self, config: ConfigData):
+    # Si el enlace se corta (TransportClosed), ¿tiene sentido reabrir y seguir
+    # esperando al device en la misma sesión? TCP/BLE sí: el device se desconecta
+    # al dormirse y vuelve. UDP/MQTT no tienen conexión que se corte.
+    reopens: bool = False
+
+    def __init__(self, config: ConfigData, connect_timeout_sec: float):
         self.config = config
+        # Cuánto esperar en open() a que el device aparezca (accept, connect...).
+        self.connect_timeout_sec = connect_timeout_sec
 
     @property
     def can_send(self) -> bool:
         """Si ahora mismo se le puede mandar algo al device.
 
-        No siempre se puede: en UDP no se sabe a qué dirección responder
-        hasta que el device manda su primer paquete, y en TCP/BLE hace
-        falta una conexión establecida. La sesión lo consulta antes de
+        No siempre se puede: en UDP no se sabe a qué dirección responder hasta
+        que el device manda su primer paquete. La sesión lo consulta antes de
         intentar empujar una config sin que haya llegado telemetría.
         """
         return True
 
-    async def __aenter__(self) -> "Transport":
-        await self.open()
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        await self.close()
-
     @abstractmethod
-    async def open(self) -> None:
-        """Deja el transporte listo para recibir (abrir socket, conectar, etc.)."""
+    async def open(self) -> bool:
+        """Deja el transporte listo para recibir.
+
+        Retorna False si no se llegó a establecer (p.ej. ningún device se
+        conectó dentro de `connect_timeout_sec`): la sesión termina.
+        """
 
     @abstractmethod
     async def close(self) -> None:
-        """Libera lo que haya tomado open()."""
+        """Libera lo que haya tomado open(). Debe tolerar llamarse dos veces."""
 
     @abstractmethod
     async def recv(self, timeout_sec: float) -> bytes | None:
-        """Espera un paquete hasta `timeout_sec`. Retorna None si se venció."""
+        """Espera un paquete hasta `timeout_sec`. Retorna None si se venció.
+
+        Lanza `TransportClosed` si el enlace se cortó.
+        """
 
     @abstractmethod
     async def send(self, data: bytes) -> None:
@@ -72,22 +87,23 @@ class UdpTransport(Transport):
     """UDP: el server escucha en un puerto fijo por device (`config.udp_port`)
     y le responde a la última dirección desde la que ese device escribió.
 
-    Esa dirección es estado interno del transporte: la sesión ya no tiene
-    que arrastrar un `last_udp_addr` como hacía antes UDPDeviceSession.
+    Esa dirección es estado interno del transporte: la sesión ya no tiene que
+    arrastrar un `last_udp_addr` como hacía antes UDPDeviceSession.
     """
     name = "UDP"
+    reopens = False     # sin conexión que se corte: el socket sigue escuchando
 
-    def __init__(self, config: ConfigData):
-        super().__init__(config)
+    def __init__(self, config: ConfigData, connect_timeout_sec: float):
+        super().__init__(config, connect_timeout_sec)
         self._sock: socket.socket | None = None
-        self._peer = None   # última dirección vista, a donde se responde
-        self._pending: asyncio.Task | None = None   # recepción en curso entre llamadas a recv()
+        self._peer = None                            # última dirección vista
+        self._pending: asyncio.Task | None = None    # recepción en curso entre llamadas a recv()
 
     @property
     def can_send(self) -> bool:
         return self._sock is not None and self._peer is not None
 
-    async def open(self) -> None:
+    async def open(self) -> bool:
         host = "0.0.0.0"                # Escucha en todas las interfaces
         port = self.config.udp_port
 
@@ -98,6 +114,7 @@ class UdpTransport(Transport):
 
         self._sock = sock
         print(f"Servidor UDP escuchando en {host}:{port}")
+        return True
 
     async def close(self) -> None:
         if self._pending is not None:
@@ -141,3 +158,91 @@ class UdpTransport(Transport):
     async def send(self, data: bytes) -> None:
         loop = asyncio.get_running_loop()
         await loop.sock_sendto(self._sock, data, self._peer)
+
+
+class TcpTransport(Transport):
+    """TCP: el server escucha en `config.tcp_port` y acepta UNA conexión del device.
+
+    A diferencia de UDP hay una conexión real que se puede cortar: cuando el
+    device se duerme o cierra, `recv()` lanza TransportClosed y la sesión reabre
+    el socket para esperar a que vuelva (`reopens = True`).
+    """
+    name = "TCP"
+    reopens = True
+
+    def __init__(self, config: ConfigData, connect_timeout_sec: float):
+        super().__init__(config, connect_timeout_sec)
+        self._listen: socket.socket | None = None
+        self._conn: socket.socket | None = None
+        self._pending: asyncio.Task | None = None
+
+    @property
+    def can_send(self) -> bool:
+        return self._conn is not None
+
+    async def open(self) -> bool:
+        loop = asyncio.get_running_loop()
+        host = "0.0.0.0"
+        port = self.config.tcp_port
+
+        listen = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listen.setblocking(False)
+        listen.bind((host, port))
+        listen.listen()
+        self._listen = listen
+        print(f"Servidor TCP escuchando en {host}:{port}")
+
+        try:
+            conn, addr = await asyncio.wait_for(
+                loop.sock_accept(listen),
+                timeout=self.connect_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            print(f"Timeout esperando conexion TCP ({self.connect_timeout_sec}s)")
+            await self.close()
+            return False
+
+        conn.setblocking(False)
+        self._conn = conn
+        print(f"Conexión establecida desde {addr}")
+        return True
+
+    async def close(self) -> None:
+        if self._pending is not None:
+            self._pending.cancel()
+            self._pending = None
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+        if self._listen is not None:
+            self._listen.close()
+            self._listen = None
+
+    async def recv(self, timeout_sec: float) -> bytes | None:
+        # Misma precaución que en UdpTransport.recv: no cancelar una recepción
+        # que puede haber consumido datos, para no perder paquetes en el borde
+        # del timeout.
+        loop = asyncio.get_running_loop()
+
+        if self._pending is None:
+            self._pending = asyncio.ensure_future(loop.sock_recv(self._conn, 1024))
+
+        done, _ = await asyncio.wait({self._pending}, timeout=timeout_sec)
+        if not done:
+            return None
+
+        pending, self._pending = self._pending, None
+        try:
+            packet = pending.result()
+        except Exception as e:
+            raise TransportClosed(f"recepción TCP falló: {e}") from e
+
+        if not packet:
+            # recv vacío en TCP = el otro extremo cerró la conexión.
+            raise TransportClosed("el device cerró la conexión")
+        return packet
+
+    async def send(self, data: bytes) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.sock_sendall(self._conn, data)

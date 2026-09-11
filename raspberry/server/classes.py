@@ -22,7 +22,7 @@ from codec import DataCodec
 from system import utc_epoch_now, BLEAdapterResolver, LocalWifiConfig
 from config_resolver import ConfigResolver, ConfigDecision
 from router import PacketRouter, PacketOutcome
-from transport import Transport, UdpTransport
+from transport import Transport, TransportClosed, UdpTransport, TcpTransport
 
 
 class MasterConnection:
@@ -454,57 +454,86 @@ class ProtocolSession(DeviceSession):
         return await self._wait_ack(tx, db_config)
 
     async def run(self) -> "ConfigData | None":
-        async with self.transport_cls(self.config) as tx:
+        """Abre el transporte y corre la sesión; lo reabre si el enlace se corta.
+
+        Los transportes con conexión (TCP, BLE) se cortan cuando el device se
+        duerme o se desconecta: si declaran `reopens`, se vuelve a abrir y se
+        sigue esperando al device dentro de la misma sesión, igual que hacía el
+        while exterior de TCPDeviceSession. Los sin conexión (UDP, MQTT) nunca
+        lanzan TransportClosed.
+        """
+        while True:
+            tx = self.transport_cls(self.config, self._sleep_timeout_sec())
+
+            if not await tx.open():
+                # No se llegó a establecer (p.ej. ningún device se conectó).
+                return None
+
+            try:
+                return await self._session_loop(tx)
+            except TransportClosed as e:
+                if not tx.reopens:
+                    print(f"{tx.name}: enlace cortado con {self.device_id} ({e}). Cerrando sesión.")
+                    return None
+                print(f"{tx.name}: {e}. Reabriendo para esperar al device.")
+            finally:
+                await tx.close()
+
+    async def _session_loop(self, tx: Transport) -> "ConfigData | None":
+        """Recibe telemetría y aplica cambios de config sobre un transporte ya abierto."""
+        while True:
+            # Espera un paquete, sondeando la BD proactivamente en ventanas
+            # cortas mientras no llega nada (no depende de que llegue
+            # telemetría para enterarse de un cambio de config).
+            timeout_sec = self._sleep_timeout_sec()
+            deadline = time.monotonic() + timeout_sec
             while True:
-                # Espera un paquete, sondeando la BD proactivamente en ventanas
-                # cortas mientras no llega nada (no depende de que llegue
-                # telemetría para enterarse de un cambio de config).
-                timeout_sec = self._sleep_timeout_sec()
-                deadline = time.monotonic() + timeout_sec
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        print(f"Timeout {tx.name} ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
-                        return None
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    print(f"Timeout {tx.name} ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
+                    return None
 
-                    packet = await tx.recv(min(remaining, self.timeouts.config_poll_sec))
-                    if packet is not None:
-                        break
+                packet = await tx.recv(min(remaining, self.timeouts.config_poll_sec))
+                if packet is not None:
+                    break
 
-                    # Sin paquete: aprovecha de revisar si cambió la config en BD.
-                    if tx.can_send:
-                        new_cfg = await self._proactive_config_push(
-                            lambda cfg: self._push_and_wait(tx, cfg)
-                        )
-                        if new_cfg is not None:
-                            return new_cfg
+                # Sin paquete: aprovecha de revisar si cambió la config en BD.
+                if tx.can_send:
+                    new_cfg = await self._proactive_config_push(
+                        lambda cfg: self._push_and_wait(tx, cfg)
+                    )
+                    if new_cfg is not None:
+                        return new_cfg
 
-                routed = await self._router.route(packet, self.device_id, source=tx.name)
-                if routed.outcome == PacketOutcome.IGNORED:
-                    continue
-                if routed.outcome == PacketOutcome.DEEP_SLEEP:
-                    print(f"{tx.name}: Se detectó deep sleep de {self.device_id}, se sigue escuchando")
-                    continue
-                data = routed.data
-                self._update_last_client_time(data)
+            routed = await self._router.route(packet, self.device_id, source=tx.name)
+            if routed.outcome == PacketOutcome.IGNORED:
+                continue
+            if routed.outcome == PacketOutcome.DEEP_SLEEP:
+                if tx.reopens:
+                    # El device cierra el enlace al dormirse: hay que reabrirlo.
+                    raise TransportClosed(f"{self.device_id} avisó deep sleep")
+                print(f"{tx.name}: Se detectó deep sleep de {self.device_id}, se sigue escuchando")
+                continue
+            data = routed.data
+            self._update_last_client_time(data)
 
-                # Obtiene configuración desde DB
-                db_config = await self.database_repo.get_config_async(self.device_id)
-                if db_config is None:
-                    continue
+            # Obtiene configuración desde DB
+            db_config = await self.database_repo.get_config_async(self.device_id)
+            if db_config is None:
+                continue
 
-                # Compara versiones actuales de config DEVICE vs versión BD
-                applied_version = data.config_version_applied
-                decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
-                if decision.decision == ConfigDecision.APPLIED_NEWER:
-                    print(f"Config aplicada detectada en {tx.name} ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
-                    return decision.db_config
-                elif decision.decision == ConfigDecision.ALREADY_SENT:
-                    # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
-                    continue
-                elif decision.decision == ConfigDecision.PUSH:
-                    applied = await self._push_and_wait(tx, decision.db_config)
-                    return decision.db_config if applied else None
+            # Compara versiones actuales de config DEVICE vs versión BD
+            applied_version = data.config_version_applied
+            decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
+            if decision.decision == ConfigDecision.APPLIED_NEWER:
+                print(f"Config aplicada detectada en {tx.name} ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
+                return decision.db_config
+            elif decision.decision == ConfigDecision.ALREADY_SENT:
+                # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
+                continue
+            elif decision.decision == ConfigDecision.PUSH:
+                applied = await self._push_and_wait(tx, decision.db_config)
+                return decision.db_config if applied else None
 
 class MQTTDeviceSession(DeviceSession):
     """Sesión MQTT: recibe data, persiste y aplica cambios de config con ACK."""
@@ -613,161 +642,9 @@ class UDPDeviceSession(ProtocolSession):
     """Sesión UDP: toda la lógica está en ProtocolSession, solo cambia el transporte."""
     transport_cls = UdpTransport
 
-class TCPDeviceSession(DeviceSession):
-    """Sesión TCP: recibe data, persiste y aplica cambios de config con ACK."""
-    async def _send_config(self, conn: socket.socket, db_config: "ConfigData") -> bool:
-        """Serializa y envía configuración vía TCP. Retorna booleano en caso de éxito o error."""
-        loop = asyncio.get_running_loop()
-        print(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
-        serialized_config = DataCodec.serialize_config(db_config)
-
-        try:
-            await loop.sock_sendall(conn, serialized_config)
-            return True
-        except Exception as e:
-            print(f"Error enviando config TCP: {e}")
-            return False
-
-    async def _wait_ack(self, conn: socket.socket, db_config: "ConfigData") -> "ConfigData | None":
-        """Espera ACK válido por TCP. Retorna la configuración aplicada, o None si es que hubo error."""
-        loop = asyncio.get_running_loop()
-
-        # Intentos que se harán
-        for _ in range(self.timeouts.config_ack_retries):
-            
-            # Espera ACK dentro de una ventana temporal (timeout total por intento)
-            deadline = time.monotonic() + self.timeouts.config_ack_sec
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    pkt = await asyncio.wait_for(loop.sock_recv(conn, 1024), timeout=remaining)
-                except asyncio.TimeoutError:
-                    break
-                if not pkt:
-                    return None
-
-                # Si el paquete es ACK válido, termina el cambio de protocolo
-                ack = DataCodec.deserialize_config_ack(pkt)
-                if (
-                    ack
-                    and ack.id_device == self.device_id
-                    and ack.config_version == db_config.config_version
-                    and ack.applied
-                ):
-                    print(f"ACK TCP recibido para {self.device_id} v{db_config.config_version}")
-                    return db_config
-
-                # Si llega telemetría durante la espera, se inserta y se sigue esperando
-                routed = await self._router.route(pkt, self.device_id, source="TCP")
-                if routed.outcome != PacketOutcome.TELEMETRY:
-                    continue
-                self._update_last_client_time(routed.data)
-
-        print(f"ACK TCP de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
-        return None
-
-    async def _push_and_wait(self, conn: socket.socket, db_config: "ConfigData") -> bool:
-        """Envía config y espera su ACK. Adapta _send_config/_wait_ack al formato de _proactive_config_push."""
-        if not await self._send_config(conn, db_config):
-            return False
-        return await self._wait_ack(conn, db_config) is not None
-
-    async def run(self):
-        loop = asyncio.get_running_loop()
-        host = '0.0.0.0'
-        port = self.config.tcp_port
-        print("Entrando a TCP")
-
-        # While para soportar cierres y aperturas de socket por deep sleep
-        while True:
-
-            # Apertura de socket
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.setblocking(False)
-                s.bind((host, port))
-                s.listen()
-                print(f'Servidor TCP escuchando en {host}:{port}')
-
-                # Timeout de espera de conexion segun la configuracion actual
-                timeout_sec = self._sleep_timeout_sec()
-                try:
-                    conn, tcp_addr = await asyncio.wait_for(loop.sock_accept(s), timeout=timeout_sec)
-                except asyncio.TimeoutError:
-                    print(f"Timeout esperando conexion TCP ({timeout_sec}s)")
-                    return None
-
-                print('Conexión establecida desde', tcp_addr)
-
-                with conn:
-                    # Para que otras tasks ejecuten en "paralelo"
-                    conn.setblocking(False)
-
-                    # While de recepción de datos y consulta de config a DB
-                    while True:
-
-                        # Recibe dato, sondeando la BD proactivamente en ventanas cortas
-                        # mientras no llegue nada (no depende de que llegue telemetría).
-                        timeout_sec = self._sleep_timeout_sec()
-                        deadline = time.monotonic() + timeout_sec
-                        packet = None
-                        while True:
-                            remaining = deadline - time.monotonic()
-                            if remaining <= 0:
-                                print(f"Timeout TCP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
-                                return None
-                            wait = min(remaining, self.timeouts.config_poll_sec)
-                            try:
-                                packet = await asyncio.wait_for(loop.sock_recv(conn, 1024), timeout=wait)
-                                break
-                            except asyncio.TimeoutError:
-                                new_cfg = await self._proactive_config_push(
-                                    lambda cfg: self._push_and_wait(conn, cfg)
-                                )
-                                if new_cfg is not None:
-                                    return new_cfg
-                                continue
-                            except Exception as e:
-                                print(f"Recepción TCP falló: {e}")
-                                break
-                        if not packet:
-                            print("Conexión TCP cerrada por el otro extremo.")
-                            break
-
-                        ## Común
-
-                        routed = await self._router.route(packet, self.device_id, source="TCP")
-                        if routed.outcome == PacketOutcome.IGNORED:
-                            continue
-                        if routed.outcome == PacketOutcome.DEEP_SLEEP:
-                            print(f"TCP: Se detectó deep sleep de {self.device_id}, reinicia socket")
-                            break
-                        data = routed.data
-                        self._update_last_client_time(data)
-
-                        # Obtiene configuración desde DB
-                        db_config = await self.database_repo.get_config_async(self.device_id)
-                        if db_config is None:
-                            continue
-
-                        ## Común
-
-                        # Compara versiones actuales de config DEVICE vs versión BD
-                        applied_version = data.config_version_applied
-                        decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
-                        if decision.decision == ConfigDecision.APPLIED_NEWER:
-                            print(f"Config aplicada detectada en TCP ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
-                            return decision.db_config
-                        elif decision.decision == ConfigDecision.ALREADY_SENT:
-                            # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
-                            continue
-                        elif decision.decision == ConfigDecision.PUSH:
-                            if not await self._send_config(conn, decision.db_config):
-                                return None
-                            new_cfg = await self._wait_ack(conn, decision.db_config)
-                            return new_cfg
+class TCPDeviceSession(ProtocolSession):
+    """Sesión TCP: toda la lógica está en ProtocolSession, solo cambia el transporte."""
+    transport_cls = TcpTransport
 
 class BLEDeviceSession(DeviceSession):
     """Sesión BLE: recibe notificaciones y aplica cambios de config con ACK."""
