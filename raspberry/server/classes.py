@@ -1,9 +1,11 @@
 from __future__ import annotations
+from contextlib import contextmanager
 from datetime import datetime
-import psycopg2
+from psycopg2.pool import ThreadedConnectionPool
 import asyncio
 import socket
 import queue
+import threading
 import time
 from typing import Dict, Optional, Callable, Any
 
@@ -1047,10 +1049,64 @@ class BLEDeviceSession(DeviceSession):
         return None
 
 class DatabaseRepository:
-    """Repositorio general para interactuar con la BD."""
+    """Repositorio general para interactuar con la BD.
+
+    OJO: antes cada método (get_config/insert_data_1/insert_data_2/insert_log)
+    hacía `with psycopg2.connect(self.db_dsn) as db:` por llamada. Ese "with"
+    de psycopg2 solo hace commit/rollback al salir, NO cierra la conexión: quedaba
+    una conexión abierta sin cerrar por cada paquete de telemetría insertado.
+    Con 2 inserts por send_interval_s por device (Data_1 + Data_2), eso agota
+    max_connections de Postgres en minutos. Ahora se pide/devuelve una conexión
+    de un pool compartido (ver _connection()), del mismo modo para todos los
+    métodos, sin cambiar ninguna de sus firmas ni la forma en que se instancia
+    DatabaseRepository en el resto del archivo.
+    """
+
+    # Un pool por DSN, compartido por todas las instancias de DatabaseRepository
+    # (el código de más abajo instancia esta clase "al pasar" en varios sitios,
+    # p.ej. `DatabaseRepository(self.db_dsn).insert_log_async(...)`; si el pool
+    # fuera de instancia, cada una de esas instancias efímeras abriría el suyo).
+    # ThreadedConnectionPool porque insert_*_async/get_config_async corren en
+    # threads del pool de asyncio.to_thread, no todos en el mismo hilo.
+    _pools: dict[str, ThreadedConnectionPool] = {}
+    _pools_lock = threading.Lock()
+
     def __init__(self, db_dsn: str):
-        """Guarda DSN para crear conexiones a BD por operación."""
+        """Guarda DSN para pedir conexiones al pool compartido."""
         self.db_dsn = db_dsn
+
+    def _get_pool(self) -> ThreadedConnectionPool:
+        db_pool = self._pools.get(self.db_dsn)
+        if db_pool is not None:
+            return db_pool
+        with self._pools_lock:
+            db_pool = self._pools.get(self.db_dsn)
+            if db_pool is None:
+                # minconn=1: no abre conexiones de más si nunca se usa este DSN.
+                # maxconn=20: generoso para la cantidad de devices esperada y
+                # cómodo bajo el max_connections=100 por defecto de Postgres.
+                db_pool = ThreadedConnectionPool(1, 20, self.db_dsn)
+                self._pools[self.db_dsn] = db_pool
+        return db_pool
+
+    @contextmanager
+    def _connection(self):
+        """Pide una conexión del pool y siempre la devuelve al salir.
+
+        Si algo falla dentro del `with`, hace rollback antes de devolverla:
+        sin esto, una conexión reciclada del pool quedaría con una
+        transacción abierta y la siguiente consulta que la reciba fallaría
+        con "current transaction is aborted".
+        """
+        db_pool = self._get_pool()
+        conn = db_pool.getconn()
+        try:
+            yield conn
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            db_pool.putconn(conn)
 
     @staticmethod
     def _int_to_db_datetime(value: int) -> datetime:
@@ -1059,7 +1115,7 @@ class DatabaseRepository:
 
     def get_config(self, device_id: str) -> ConfigData | None:
         """Obtiene la configuración de un dispositivo específico."""
-        with psycopg2.connect(self.db_dsn) as db:
+        with self._connection() as db:
             with db.cursor() as cursor:
                 cursor.execute("""
                     SELECT id_device, config_version, protocol_conf, acc_sampling, gyro_sensibility,
@@ -1102,7 +1158,7 @@ class DatabaseRepository:
     def insert_data_1(self, data_1: Data_1):
         """Inserta datos de sensor en la BD."""
         try:
-            with psycopg2.connect(self.db_dsn) as db:
+            with self._connection() as db:
                 with db.cursor() as cursor:
                     cursor.execute("""
                         INSERT INTO nebulaedge_schema.data_1 (
@@ -1138,7 +1194,7 @@ class DatabaseRepository:
     def insert_data_2(self, data_2: "Data_2"):
         """Inserta datos Data_2 en la BD."""
         try:
-            with psycopg2.connect(self.db_dsn) as db:
+            with self._connection() as db:
                 with db.cursor() as cursor:
                     cursor.execute("""
                         INSERT INTO nebulaedge_schema.data_2 (
@@ -1166,7 +1222,7 @@ class DatabaseRepository:
     def insert_log(self, log: "Log"):
         """Inserta un evento de log en la BD."""
         try:
-            with psycopg2.connect(self.db_dsn) as db:
+            with self._connection() as db:
                 with db.cursor() as cursor:
                     cursor.execute("""
                         INSERT INTO nebulaedge_schema.log (
