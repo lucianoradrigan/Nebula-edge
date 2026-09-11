@@ -1,4 +1,4 @@
-"""Todo lo que habla con el SO/host (reloj local, adaptador BLE, WiFi vía nmcli).
+"""Todo lo que habla con el SO/host (reloj, adaptador BLE, WiFi vía nmcli).
 
 Movido desde classes.py sin cambios de lógica. Se llama "system.py" y no
 "platform.py" a propósito: un módulo local platform.py taparía el módulo
@@ -6,19 +6,31 @@ estándar platform para todo el proceso (incluido bleak, que lo importa
 internamente).
 """
 from __future__ import annotations
-from datetime import datetime
 import os
 import socket
 import subprocess
 import time
 
 
-def local_epoch_now() -> int:
-    """Retorna epoch local ajustado al huso horario del servidor."""
-    utc_epoch = int(time.time())
-    local_offset = datetime.now().astimezone().utcoffset()
-    local_offset_sec = int(local_offset.total_seconds()) if local_offset else 0
-    return utc_epoch + local_offset_sec
+def utc_epoch_now() -> int:
+    """Retorna el epoch Unix actual (segundos UTC reales).
+
+    Antes se llamaba `local_epoch_now()` y devolvía
+    `int(time.time()) + offset_horario_local`: un número que NO es un
+    epoch real de ningún instante (le suma el desfase horario a un
+    valor que ya es UTC por definición). Ese valor viajaba como
+    `Config.time_client` hasta el device -que lo usa tal cual para
+    `settimeofday()`- y como `Log.time_server`/`ConfigData.time_client`
+    en la BD, donde `DatabaseRepository._int_to_db_datetime()` lo
+    vuelve a interpretar como UTC vía `datetime.utcfromtimestamp()`:
+    el desfase quedaba sumado una vez pero nunca restado, así que
+    `time_client` (epoch real, reportado por el device) y `time_server`
+    (epoch falso, calculado acá) terminaban en escalas distintas dentro
+    de la misma fila de `log`. `time.time()` ya es UTC por definición
+    -el epoch Unix no tiene huso horario-, así que no hay nada que
+    ajustar: todo el sistema (BD, firmware, logs) queda en UTC real.
+    """
+    return int(time.time())
 
 class BLEAdapterResolver:
     """Utilidades para resolver qué adaptador BLE usar."""

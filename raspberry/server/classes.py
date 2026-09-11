@@ -19,7 +19,7 @@ from enum import Enum
 
 from models import Timeouts, Data_1, Data_2, ConfigData, ConfigAckData, Log
 from codec import DataCodec
-from system import local_epoch_now, BLEAdapterResolver, LocalWifiConfig
+from system import utc_epoch_now, BLEAdapterResolver, LocalWifiConfig
 from config_resolver import ConfigResolver, ConfigDecision
 from router import PacketRouter, PacketOutcome
 
@@ -216,7 +216,7 @@ class MasterConnection:
         finally:
             addr = device.address
             self.active_tasks.pop(addr, None)
-            server_time = local_epoch_now()
+            server_time = utc_epoch_now()
             # Permite re-descubrimiento si se pierde la conexión
             print(f"Pop device {addr}")
             # Registra la desconexión
@@ -348,7 +348,7 @@ class DeviceSession:
             await asyncio.sleep(interval_sec)
             if self._last_client_time is None:
                 continue
-            server_time = local_epoch_now()
+            server_time = utc_epoch_now()
             try:
                 await self.database_repo.insert_log_async(
                     Log(
@@ -1110,7 +1110,16 @@ class DatabaseRepository:
 
     @staticmethod
     def _int_to_db_datetime(value: int) -> datetime:
-        """Convierte un Unix timestamp en segundos a datetime naive UTC."""
+        """Convierte un epoch Unix (segundos, UTC real) a datetime naive UTC
+        para guardar en columnas TIMESTAMP (sin huso horario) de Postgres.
+
+        Asume que `value` es un epoch UTC de verdad. Antes no lo era
+        siempre: `time_client` (del device) sí, pero `time_server`
+        (calculado acá con la vieja `local_epoch_now()`) traía sumado el
+        offset horario local, así que dos columnas de la misma fila de
+        `log` quedaban en escalas de tiempo distintas. Ver utc_epoch_now()
+        en system.py.
+        """
         return datetime.utcfromtimestamp(int(value))
 
     def get_config(self, device_id: str) -> ConfigData | None:
@@ -1129,9 +1138,9 @@ class DatabaseRepository:
 
                 if row:
                     host_ip_addr, ssid, passwd = LocalWifiConfig.get(cache_ttl_sec=0)
-                    time_cli = local_epoch_now()
+                    time_cli = utc_epoch_now()
                     # print(
-                    #     f"[TIME] send_local_epoch={time_cli} "
+                    #     f"[TIME] send_utc_epoch={time_cli} "
                     #     f"local_now={datetime.fromtimestamp(time_cli)}"
                     # )
                     return ConfigData(
