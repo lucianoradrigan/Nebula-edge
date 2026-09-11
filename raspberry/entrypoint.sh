@@ -3,5 +3,11 @@
 # service dbus start
 # service bluetooth start
 
-python3 -u classes.py
-while true; do sleep 60; done
+# exec reemplaza este shell por el proceso de Python (queda como PID 1 del
+# contenedor) en vez de correr como hijo de un "python3 ...; while true; do
+# sleep 60; done" que seguía vivo para siempre incluso si classes.py se
+# caía. Con eso, un crash real hacía que el contenedor quedara "Up" para
+# siempre sin servir nada, y `restart: unless-stopped` (docker-compose.yml)
+# nunca se disparaba porque el contenedor nunca terminaba. Con exec, si
+# classes.py se cae, el contenedor termina y Docker lo reinicia.
+exec python3 -u classes.py
