@@ -3,14 +3,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from psycopg2.pool import ThreadedConnectionPool
 import asyncio
-import socket
-import queue
 import threading
 import time
-from typing import Dict, Optional, Callable, Any
+from typing import Dict, Callable, Any
 
-from ble import *
-from mqtt import *
+from ble import UUID_CHAR_A
 
 from bleak import BleakScanner, BleakClient
 from bleak.exc import BleakDBusError
@@ -676,10 +673,6 @@ class DatabaseRepository:
                 if row:
                     host_ip_addr, ssid, passwd = LocalWifiConfig.get(cache_ttl_sec=0)
                     time_cli = utc_epoch_now()
-                    # print(
-                    #     f"[TIME] send_utc_epoch={time_cli} "
-                    #     f"local_now={datetime.fromtimestamp(time_cli)}"
-                    # )
                     return ConfigData(
                         id_device=row[0],
                         config_version=row[1],
@@ -792,8 +785,7 @@ class DatabaseRepository:
     # psycopg2 es sincrónico/bloqueante: cada método de arriba abre su propia
     # conexión y espera la red. Llamado directo desde una corutina, congela
     # el event loop completo (todas las demás sesiones de devices se detienen).
-    # Estos envoltorios delegan al thread pool de asyncio, igual que ya se hace
-    # con device_queue.get/ack_queue.get en las sesiones MQTT.
+    # Estos envoltorios delegan al thread pool de asyncio.
     async def get_config_async(self, device_id: str) -> ConfigData | None:
         return await asyncio.to_thread(self.get_config, device_id)
 
@@ -812,7 +804,3 @@ if __name__ == "__main__":
         asyncio.run(master.run())
     except KeyboardInterrupt:
         print("\nCerrando programa...")
-        # # Cancelar todas las tasks activas
-        # for task in master.active_tasks:
-        #     task.cancel()
-        # print("Tasks canceladas")

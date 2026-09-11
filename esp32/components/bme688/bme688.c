@@ -284,26 +284,6 @@ static void set_oversampling_tph(void) {
     device_write(device_bme688, &ctrl_meas_reg, &ctrl_meas_val, 1, TAG);
 }
 
-/* Función utilitaria. */
-// static int check_forced_mode(void) {
-//     uint8_t ctrl_hum_reg = 0x72;
-//     uint8_t ctrl_meas_reg = 0x74;
-//     uint8_t gas_wait_0_reg = 0x64;
-//     uint8_t res_heat_0_reg = 0x5A;
-//     uint8_t ctrl_gas_1_reg = 0x71;
-
-//     uint8_t tmp, tmp2, tmp3, tmp4, tmp5;
-
-//     ret = device_read(device_bme688, &ctrl_hum_reg, &tmp, 1, TAG);
-//     ret = device_read(device_bme688, &gas_wait_0_reg, &tmp2, 1, TAG);
-//     ret = device_read(device_bme688, &res_heat_0_reg, &tmp3, 1, TAG);
-//     ret = device_read(device_bme688, &ctrl_gas_1_reg, &tmp4, 1, TAG);
-//     ret = device_read(device_bme688, &ctrl_meas_reg, &tmp5, 1, TAG);
-
-//     vTaskDelay(1000 / portTICK_PERIOD_MS);
-//     return (tmp == 0b001 && tmp2 == 0x59 && tmp3 == 0x00 && tmp4 == 0b100000 && tmp5 == 0b01010101);
-// }
-
 /* This internal API is used to calculate the temperature value. */
 static int16_t temp_celsius(uint32_t temp_adc) {
     // Datasheet[23]

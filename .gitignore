@@ -23,3 +23,5 @@ raspberry/server/requirements.txt
 .DS_Store
 .AppleDouble
 .LSOverride
+# CMake suelto en la raíz (idf.py lanzado desde el repo, no desde esp32/)
+/build/

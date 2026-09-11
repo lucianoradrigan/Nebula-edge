@@ -476,60 +476,6 @@ void readout_data_bmm350(Data1 *data) {
     }
 }
 
-// /* Funcion para debugging: lee un rango de registros. */
-// static void read_register_range(void) {
-//     /* Inicio del rango de registros */
-//     uint8_t reg = 0x00;
-
-//     /* Cantidad de registros a leer */
-//     uint8_t data[130];   
-//     ret = device_read(device_bmm350, &reg, data, sizeof(data), TAG);
-
-//     if (ret == ESP_OK) {
-//         ESP_LOGI(TAG, "Datos leidos desde el sensor:");
-//         for (int i = 0; i < sizeof(data); i++) {
-//             /* Offset -2 */
-//             ESP_LOGI(TAG, "Registro 0x%02X: 0x%02X", reg + i - 2, data[i]);
-//         }
-//     } else {
-//         ESP_LOGE(TAG, "Error leyendo múltiples registros: %s", esp_err_to_name(ret));
-//     }
-// }
-
-// /* Funcion para debugging: imprime los valores de compensación 
-//  * que ya han sido procesados. */
-// static void print_otp_data(void) {
-//     ESP_LOGI(TAG, "OTP stored data");
-//     for (uint8_t i=0; i<BMM350_OTP_DATA_LENGTH; i++) {
-//         ESP_LOGI(TAG, "%d", data_otp[i]);
-//     }
-
-//     ESP_LOGI(TAG, "Offset stored data");
-//     for (uint8_t i=0; i<4; i++) {
-//         ESP_LOGI(TAG, "%f", offset[i]);
-//     }
-
-//     ESP_LOGI(TAG, "Sens stored data");
-//     for (uint8_t i=0; i<4; i++) {
-//         ESP_LOGI(TAG, "%f", sens[i]);
-//     }
-
-//     ESP_LOGI(TAG, "TCO stored data");
-//     for (uint8_t i=0; i<3; i++) {
-//         ESP_LOGI(TAG, "%f", tco[i]);
-//     }
-
-//     ESP_LOGI(TAG, "TCS stored data");
-//     for (uint8_t i=0; i<3; i++) {
-//         ESP_LOGI(TAG, "%f", tcs[i]);
-//     }
-
-//     ESP_LOGI(TAG, "Cross stored data");
-//     for (uint8_t i=0; i<4; i++) {
-//         ESP_LOGI(TAG, "%f", cross[i]);
-//     }
-// }
-
 /* Función para ser llamada desde el script main. Contiene llamados a todas las
  * funciones que se encargan de inicializar el sensor. */
 void bmm350_init(int odr, int avg) {

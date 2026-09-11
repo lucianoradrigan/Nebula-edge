@@ -128,6 +128,3 @@ def mqtt_shutdown():
         mqttc.loop_stop()
         mqttc.disconnect()
         _mqtt_started = False
-
-if __name__ == "__main__":
-    mqtt_start()
