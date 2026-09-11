@@ -22,6 +22,7 @@ from codec import DataCodec
 from system import utc_epoch_now, BLEAdapterResolver, LocalWifiConfig
 from config_resolver import ConfigResolver, ConfigDecision
 from router import PacketRouter, PacketOutcome
+from transport import Transport, UdpTransport
 
 
 class MasterConnection:
@@ -390,6 +391,121 @@ class DeviceSession:
         applied = await push_and_wait(db_config)
         return db_config if applied else None
 
+class ProtocolSession(DeviceSession):
+    """Sesión genérica: el flujo es idéntico para todos los protocolos.
+
+    Lo único que cambia entre uno y otro es cómo se mueven los bytes, y eso
+    vive en un `Transport` (transport.py). Una sesión concreta solo declara
+    cuál usar:
+
+        class UDPDeviceSession(ProtocolSession):
+            transport_cls = UdpTransport
+
+    Por ahora solo UDP corre por acá; MQTT/TCP/BLE siguen con su propia
+    implementación mientras se portan de a uno.
+    """
+
+    transport_cls: type[Transport]
+
+    async def _wait_ack(self, tx: Transport, db_config: "ConfigData") -> bool:
+        """Espera un ACK de config válido. Retorna True si el device la aplicó.
+
+        Mientras espera sigue procesando la telemetría que llegue (no se
+        descarta data por estar en medio de un cambio de config).
+        """
+        for _ in range(self.timeouts.config_ack_retries):
+            deadline = time.monotonic() + self.timeouts.config_ack_sec
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+
+                pkt = await tx.recv(remaining)
+                if pkt is None:
+                    break
+
+                ack = DataCodec.deserialize_config_ack(pkt)
+                if (
+                    ack
+                    and ack.id_device == self.device_id
+                    and ack.config_version == db_config.config_version
+                    and ack.applied
+                ):
+                    print(f"ACK {tx.name} recibido para {self.device_id} v{db_config.config_version}")
+                    return True
+
+                # No era ACK: si es telemetría se inserta y se sigue esperando.
+                routed = await self._router.route(pkt, self.device_id, source=tx.name)
+                if routed.outcome != PacketOutcome.TELEMETRY:
+                    continue
+                self._update_last_client_time(routed.data)
+
+        print(f"ACK {tx.name} de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
+        return False
+
+    async def _push_and_wait(self, tx: Transport, db_config: "ConfigData") -> bool:
+        """Envía una config nueva al device y espera su ACK."""
+        print(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
+        try:
+            await tx.send(DataCodec.serialize_config(db_config))
+        except Exception as e:
+            print(f"Error enviando config {tx.name}: {e}")
+            return False
+        return await self._wait_ack(tx, db_config)
+
+    async def run(self) -> "ConfigData | None":
+        async with self.transport_cls(self.config) as tx:
+            while True:
+                # Espera un paquete, sondeando la BD proactivamente en ventanas
+                # cortas mientras no llega nada (no depende de que llegue
+                # telemetría para enterarse de un cambio de config).
+                timeout_sec = self._sleep_timeout_sec()
+                deadline = time.monotonic() + timeout_sec
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        print(f"Timeout {tx.name} ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
+                        return None
+
+                    packet = await tx.recv(min(remaining, self.timeouts.config_poll_sec))
+                    if packet is not None:
+                        break
+
+                    # Sin paquete: aprovecha de revisar si cambió la config en BD.
+                    if tx.can_send:
+                        new_cfg = await self._proactive_config_push(
+                            lambda cfg: self._push_and_wait(tx, cfg)
+                        )
+                        if new_cfg is not None:
+                            return new_cfg
+
+                routed = await self._router.route(packet, self.device_id, source=tx.name)
+                if routed.outcome == PacketOutcome.IGNORED:
+                    continue
+                if routed.outcome == PacketOutcome.DEEP_SLEEP:
+                    print(f"{tx.name}: Se detectó deep sleep de {self.device_id}, se sigue escuchando")
+                    continue
+                data = routed.data
+                self._update_last_client_time(data)
+
+                # Obtiene configuración desde DB
+                db_config = await self.database_repo.get_config_async(self.device_id)
+                if db_config is None:
+                    continue
+
+                # Compara versiones actuales de config DEVICE vs versión BD
+                applied_version = data.config_version_applied
+                decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
+                if decision.decision == ConfigDecision.APPLIED_NEWER:
+                    print(f"Config aplicada detectada en {tx.name} ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
+                    return decision.db_config
+                elif decision.decision == ConfigDecision.ALREADY_SENT:
+                    # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
+                    continue
+                elif decision.decision == ConfigDecision.PUSH:
+                    applied = await self._push_and_wait(tx, decision.db_config)
+                    return decision.db_config if applied else None
+
 class MQTTDeviceSession(DeviceSession):
     """Sesión MQTT: recibe data, persiste y aplica cambios de config con ACK."""
 
@@ -493,152 +609,9 @@ class MQTTDeviceSession(DeviceSession):
                 applied = await self._push_and_wait(config_topic, ack_queue, decision.db_config)
                 return decision.db_config if applied else None
 
-class UDPDeviceSession(DeviceSession):
-    """Sesión UDP: recibe data, persiste y aplica cambios de config con ACK."""
-    async def _send_config(self, sock: socket.socket, udp_addr, db_config: "ConfigData") -> bool:
-        """Serializa y envía configuración vía UDP. Retorna booleano en caso de éxito o error."""
-        loop = asyncio.get_running_loop()
-        print(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
-        serialized_config = DataCodec.serialize_config(db_config)
-
-        try:
-            await loop.sock_sendto(sock, serialized_config, udp_addr)
-            return True
-        except Exception as e:
-            print(f"Error enviando config UDP: {e}")
-            return False
-
-    async def _wait_ack(self, sock: socket.socket, db_config: "ConfigData") -> "ConfigData | None":
-        """Espera ACK válido por UDP. Retorna la configuración aplicada, o None si es que hubo error."""
-        loop = asyncio.get_running_loop()
-
-        # Intentos que se harán
-        for _ in range(self.timeouts.config_ack_retries):
-            # Espera ACK dentro de una ventana temporal (timeout total por intento)
-            deadline = time.monotonic() + self.timeouts.config_ack_sec
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    pkt, _ = await asyncio.wait_for(loop.sock_recvfrom(sock, 1024), timeout=remaining)
-                except asyncio.TimeoutError:
-                    break
-
-                # Si el paquete es ACK válido, termina el cambio de protocolo
-                ack = DataCodec.deserialize_config_ack(pkt)
-                if (
-                    ack
-                    and ack.id_device == self.device_id
-                    and ack.config_version == db_config.config_version
-                    and ack.applied
-                ):
-                    print(f"ACK UDP recibido para {self.device_id} v{db_config.config_version}")
-                    return db_config
-
-                # Si llega telemetría durante la espera, se inserta y se sigue esperando
-                routed = await self._router.route(pkt, self.device_id, source="UDP")
-                if routed.outcome != PacketOutcome.TELEMETRY:
-                    continue
-                self._update_last_client_time(routed.data)
-
-        print(f"ACK UDP de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
-        return None
-
-    async def _push_and_wait(self, sock: socket.socket, udp_addr, db_config: "ConfigData") -> bool:
-        """Envía config y espera su ACK. Adapta _send_config/_wait_ack al formato de _proactive_config_push."""
-        if not await self._send_config(sock, udp_addr, db_config):
-            return False
-        return await self._wait_ack(sock, db_config) is not None
-
-    async def run(self):
-        ''' Flujo programa: 
-            1. abre socket UDP
-            2. espera por un paquete de datos con un determinado timeout. si se llega al timeout, cierra sesión
-            3. inserta en la base de datos
-            4. obtiene configuración de la base de datos
-            5. compara la versión de esta última configuración con la versión de config integrada en el paquete
-                5.1. si la versión del paquete es mayor, cierra sesión UDP. si es menor, envía configuración
-                     dicha configuración nueva al dispositivo y cierra sesión UDP
-            6. vuelve al punto 2
-        '''
-        loop = asyncio.get_running_loop()
-        host = '0.0.0.0'                        # Escucha en todas las interfaces
-        port = self.config.udp_port              # Puerto del servidor
-
-        # Se crea un socket IPv4, UDP
-        # En caso de fallar, retornar. handle_protocol hará un nuevo intento
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-
-            # Reutiliza puerto si es que está abierto
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            
-            # Configura socket como no bloqueante
-            s.setblocking(False)
-
-            # Conexión al host
-            s.bind((host, port))
-            print(f'Servidor UDP escuchando en {host}:{port}')
-
-            last_udp_addr = None
-
-            while True:
-                # Escucha para recibir paquete, sondeando la BD proactivamente en ventanas
-                # cortas mientras no llegue nada (no depende de que llegue telemetría).
-                timeout_sec = self._sleep_timeout_sec()
-                deadline = time.monotonic() + timeout_sec
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        print(f"Timeout UDP ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
-                        return None
-                    wait = min(remaining, self.timeouts.config_poll_sec)
-                    try:
-                        packet, udp_addr = await asyncio.wait_for(loop.sock_recvfrom(s, 1024), timeout=wait)
-                        break
-                    except asyncio.TimeoutError:
-                        if last_udp_addr is not None:
-                            new_cfg = await self._proactive_config_push(
-                                lambda cfg: self._push_and_wait(s, last_udp_addr, cfg)
-                            )
-                            if new_cfg is not None:
-                                return new_cfg
-                        continue
-
-                last_udp_addr = udp_addr
-
-                ## Común
-
-                routed = await self._router.route(packet, self.device_id, source="UDP")
-                if routed.outcome == PacketOutcome.IGNORED:
-                    continue
-                if routed.outcome == PacketOutcome.DEEP_SLEEP:
-                    print(f"UDP: Se detectó deep sleep de {self.device_id}, se sigue escuchando en el mismo socket")
-                    continue
-                data = routed.data
-                self._update_last_client_time(data)
-
-                # Obtiene configuración desde DB
-                db_config = await self.database_repo.get_config_async(self.device_id)
-                if db_config is None:
-                    continue
-
-                ## Común
-
-                # Compara versiones actuales de config DEVICE vs versión BD
-                applied_version = data.config_version_applied
-                decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
-                if decision.decision == ConfigDecision.APPLIED_NEWER:
-                    print(f"Config aplicada detectada en UDP ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
-                    return decision.db_config
-                elif decision.decision == ConfigDecision.ALREADY_SENT:
-                    # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
-                    continue
-                elif decision.decision == ConfigDecision.PUSH:
-                    if not await self._send_config(s, udp_addr, decision.db_config):
-                        return None
-                    new_cfg = await self._wait_ack(s, decision.db_config)
-                    return new_cfg
+class UDPDeviceSession(ProtocolSession):
+    """Sesión UDP: toda la lógica está en ProtocolSession, solo cambia el transporte."""
+    transport_cls = UdpTransport
 
 class TCPDeviceSession(DeviceSession):
     """Sesión TCP: recibe data, persiste y aplica cambios de config con ACK."""
