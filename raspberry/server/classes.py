@@ -19,6 +19,7 @@ from models import Timeouts, Data_1, Data_2, ConfigData, ConfigAckData, Log
 from codec import DataCodec
 from system import local_epoch_now, BLEAdapterResolver, LocalWifiConfig
 from config_resolver import ConfigResolver, ConfigDecision
+from router import PacketRouter, PacketOutcome
 
 
 class MasterConnection:
@@ -330,6 +331,7 @@ class DeviceSession:
         self.scanner_start = scanner_start              # Función para iniciar el scanner
         self.ble_adapter = ble_adapter or "hci1"         # Adaptador BLE a usar
         self.timeouts = timeouts or Timeouts()          # Timeouts centralizados
+        self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
         self._last_client_time: int | None = None       # Último time_client recibido desde Data_1/Data_2
 
     def _update_last_client_time(self, data: Any):
@@ -454,24 +456,14 @@ class MQTTDeviceSession(DeviceSession):
                     continue
 
             try:
-                # # (este código se repite mucho)
-                # Desempaqueta y obtiene protobuf tipo Data1/Data2
-                data, data_type = DataCodec.deserialize_typed_packet(packet)
-                if data == None or data_type == -1:
+                routed = await self._router.route(packet, self.device_id, source="MQTT")
+                if routed.outcome == PacketOutcome.IGNORED:
                     continue
-                if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
-                    self._update_last_client_time(data)
-                if data_type == DataCodec.TYPE_DATA_1:
-                    print(f"MQTT: Paquete Data_1 recibido de {self.device_id}")
-                    await self.database_repo.insert_data_1_async(data)
-                elif data_type == DataCodec.TYPE_DATA_2:
-                    print(f"MQTT: Paquete Data_2 recibido de {self.device_id}")
-                    await self.database_repo.insert_data_2_async(data)
-                elif data_type == DataCodec.TYPE_DEEP_SLEEP:
+                if routed.outcome == PacketOutcome.DEEP_SLEEP:
                     print(f"MQTT: Se detectó deep sleep de {self.device_id}")
                     continue
-                else:
-                    continue
+                data = routed.data
+                self._update_last_client_time(data)
             except Exception as e:
                 print(f"Error procesando datos: {e}")
                 continue
@@ -543,20 +535,10 @@ class UDPDeviceSession(DeviceSession):
                     return db_config
 
                 # Si llega telemetría durante la espera, se inserta y se sigue esperando
-                # Desempaqueta y obtiene protobuf tipo Data1/Data2
-                data, data_type = DataCodec.deserialize_typed_packet(pkt)
-                if data == None or data_type == -1:
+                routed = await self._router.route(pkt, self.device_id, source="UDP")
+                if routed.outcome != PacketOutcome.TELEMETRY:
                     continue
-                if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
-                    self._update_last_client_time(data)
-                if data_type == DataCodec.TYPE_DATA_1:
-                    print(f"UDP: Paquete Data_1 recibido de {self.device_id}.")
-                    await self.database_repo.insert_data_1_async(data)
-                elif data_type == DataCodec.TYPE_DATA_2:
-                    print(f"UDP: Paquete Data_2 recibido de {self.device_id}.")
-                    await self.database_repo.insert_data_2_async(data)
-                else:
-                    continue
+                self._update_last_client_time(routed.data)
 
         print(f"ACK UDP de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
         return None
@@ -625,23 +607,14 @@ class UDPDeviceSession(DeviceSession):
 
                 ## Común
 
-                # Desempaqueta y obtiene protobuf tipo Data1/Data2
-                data, data_type = DataCodec.deserialize_typed_packet(packet)
-                if data == None or data_type == -1:
+                routed = await self._router.route(packet, self.device_id, source="UDP")
+                if routed.outcome == PacketOutcome.IGNORED:
                     continue
-                if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
-                    self._update_last_client_time(data)
-                if data_type == DataCodec.TYPE_DATA_1:
-                    print(f"UDP: Paquete Data_1 recibido de {self.device_id} en puerto {port}")
-                    await self.database_repo.insert_data_1_async(data)
-                elif data_type == DataCodec.TYPE_DATA_2:
-                    print(f"UDP: Paquete Data_2 recibido de {self.device_id} en puerto {port}")
-                    await self.database_repo.insert_data_2_async(data)
-                elif data_type == DataCodec.TYPE_DEEP_SLEEP:
+                if routed.outcome == PacketOutcome.DEEP_SLEEP:
                     print(f"UDP: Se detectó deep sleep de {self.device_id}, se sigue escuchando en el mismo socket")
                     continue
-                else:
-                    continue
+                data = routed.data
+                self._update_last_client_time(data)
 
                 # Obtiene configuración desde DB
                 db_config = await self.database_repo.get_config_async(self.device_id)
@@ -711,20 +684,11 @@ class TCPDeviceSession(DeviceSession):
                     print(f"ACK TCP recibido para {self.device_id} v{db_config.config_version}")
                     return db_config
 
-                # Si llega telemetría durante la espera, se inserta y se sigue esperando (este código se repite mucho)
-                data, data_type = DataCodec.deserialize_typed_packet(pkt)
-                if data == None or data_type == -1:
+                # Si llega telemetría durante la espera, se inserta y se sigue esperando
+                routed = await self._router.route(pkt, self.device_id, source="TCP")
+                if routed.outcome != PacketOutcome.TELEMETRY:
                     continue
-                if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
-                    self._update_last_client_time(data)
-                if data_type == DataCodec.TYPE_DATA_1:
-                    print(f"TCP: Paquete Data_1 recibido de {self.device_id}")
-                    await self.database_repo.insert_data_1_async(data)
-                elif data_type == DataCodec.TYPE_DATA_2:
-                    print(f"TCP: Paquete Data_2 recibido de {self.device_id}")
-                    await self.database_repo.insert_data_2_async(data)
-                else:
-                    continue
+                self._update_last_client_time(routed.data)
 
         print(f"ACK TCP de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
         return None
@@ -799,24 +763,14 @@ class TCPDeviceSession(DeviceSession):
 
                         ## Común
 
-                        # (este código se repite mucho)
-                        # Desempaqueta y obtiene protobuf tipo Data1/Data2
-                        data, data_type = DataCodec.deserialize_typed_packet(packet)
-                        if data == None or data_type == -1:
+                        routed = await self._router.route(packet, self.device_id, source="TCP")
+                        if routed.outcome == PacketOutcome.IGNORED:
                             continue
-                        if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
-                            self._update_last_client_time(data)
-                        if data_type == DataCodec.TYPE_DATA_1:
-                            print(f"TCP: Paquete Data_1 recibido de {self.device_id} en puerto {port}")
-                            await self.database_repo.insert_data_1_async(data)
-                        elif data_type == DataCodec.TYPE_DATA_2:
-                            print(f"TCP: Paquete Data_2 recibido de {self.device_id} en puerto {port}")
-                            await self.database_repo.insert_data_2_async(data)
-                        elif data_type == DataCodec.TYPE_DEEP_SLEEP:
+                        if routed.outcome == PacketOutcome.DEEP_SLEEP:
                             print(f"TCP: Se detectó deep sleep de {self.device_id}, reinicia socket")
                             break
-                        else:
-                            continue
+                        data = routed.data
+                        self._update_last_client_time(data)
 
                         # Obtiene configuración desde DB
                         db_config = await self.database_repo.get_config_async(self.device_id)
@@ -1027,20 +981,10 @@ class BLEDeviceSession(DeviceSession):
 
                             # Común
 
-                            # (este código se repite mucho)
-                            # Desempaqueta y obtiene protobuf tipo Data1/Data2
-                            data, data_type = DataCodec.deserialize_typed_packet(packet)
-                            if data == None or data_type == -1:
+                            routed = await self._router.route(packet, self.device_id, source="BLE")
+                            if routed.outcome == PacketOutcome.IGNORED:
                                 continue
-                            if data_type in (DataCodec.TYPE_DATA_1, DataCodec.TYPE_DATA_2):
-                                self._update_last_client_time(data)
-                            if data_type == DataCodec.TYPE_DATA_1:
-                                print(f"BLE: Paquete Data_1 recibido de {self.device_id}")
-                                await self.database_repo.insert_data_1_async(data)
-                            elif data_type == DataCodec.TYPE_DATA_2:
-                                print(f"BLE: Paquete Data_2 recibido de {self.device_id}")
-                                await self.database_repo.insert_data_2_async(data)
-                            elif data_type == DataCodec.TYPE_DEEP_SLEEP:
+                            if routed.outcome == PacketOutcome.DEEP_SLEEP:
                                 print(f"BLE: Dispositivo {self.device_id} entrando en deep sleep. Cerrando sesión para permitir reconexión.")
                                 await client.stop_notify(UUID_CHAR_B)
                                 await client.stop_notify(UUID_CHAR_D)
@@ -1049,8 +993,8 @@ class BLEDeviceSession(DeviceSession):
                                 await asyncio.sleep(timeout_sec)
                                 break
 
-                            else:
-                                continue
+                            data = routed.data
+                            self._update_last_client_time(data)
 
                             # Obtiene configuración de BD
                             db_config = await self.database_repo.get_config_async(self.device_id)
