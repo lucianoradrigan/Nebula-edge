@@ -1,0 +1,175 @@
+"""Tests de integración de la sesión UDP (ProtocolSession + UdpTransport).
+
+Corren la sesión real contra un "device" simulado que habla UDP por loopback.
+No tocan Postgres (FakeRepo) ni BLE (FakeBLEDevice).
+
+Correr desde raspberry/server/ con las dependencias instaladas:
+
+    python -m unittest discover -s tests
+"""
+from __future__ import annotations
+import asyncio
+import socket
+import unittest
+
+import classes
+from codec import DataCodec
+from models import Timeouts
+from tests.fakes import (
+    DEEP_SLEEP_PACKET, DEVICE_ID, FakeBLEDevice, FakeRepo,
+    config_ack_packet, data_1_packet, free_port, make_config,
+)
+
+
+def quick_timeouts(**overrides) -> Timeouts:
+    """Timeouts chicos para que los tests corran en segundos, no en minutos."""
+    base = dict(
+        config_poll_sec=0.2,
+        no_data_grace_sec=8.0,
+        config_ack_sec=1.0,
+        config_ack_retries=3,
+    )
+    base.update(overrides)
+    return Timeouts(**base)
+
+
+class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
+
+    def _build_session(self, repo, port, timeouts):
+        return classes.UDPDeviceSession(
+            FakeBLEDevice(),
+            make_config(1, udp_port=port),
+            repo,
+            None, None, None, None,
+            timeouts,
+        )
+
+    async def _device_socket(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setblocking(False)
+        self.addCleanup(sock.close)
+        return sock
+
+    async def _send(self, sock, payload, port):
+        loop = asyncio.get_running_loop()
+        await loop.sock_sendto(sock, payload, ("127.0.0.1", port))
+
+    async def _wait_until(self, predicate, timeout=5.0):
+        """Espera activa corta: evita sleeps fijos que vuelven frágiles los tests."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if predicate():
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    def test_udp_session_usa_la_sesion_generica(self):
+        """UDPDeviceSession debe ser solo ProtocolSession + UdpTransport."""
+        self.assertTrue(issubclass(classes.UDPDeviceSession, classes.ProtocolSession))
+        self.assertEqual(classes.UDPDeviceSession.transport_cls.__name__, "UdpTransport")
+
+    async def test_telemetria_se_inserta_y_la_sesion_sigue_viva(self):
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
+        self.addCleanup(task.cancel)
+
+        dev = await self._device_socket()
+        # Se manda repetido: UDP descarta en silencio lo que llegue antes del bind.
+        for _ in range(5):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
+                break
+
+        self.assertGreaterEqual(len(repo.data_1), 1, "no se insertó la telemetría")
+        self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
+        self.assertFalse(task.done(), "la sesión no debía cerrar con la config al día")
+
+    async def test_config_nueva_en_bd_se_empuja_y_se_confirma_con_ack(self):
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
+        self.addCleanup(task.cancel)
+
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+
+        for _ in range(5):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
+                break
+        self.assertGreaterEqual(len(repo.data_1), 1)
+
+        # Alguien cambia la config en la BD
+        repo.db_version = 2
+        await self._send(dev, data_1_packet(applied_version=1), port)
+
+        raw = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=5.0)
+        pushed = DataCodec.deserialize_config(raw)
+        self.assertIsNotNone(pushed)
+        self.assertEqual(pushed.config_version, 2, "se esperaba la config v2 empujada al device")
+
+        # El device confirma
+        await self._send(dev, config_ack_packet(version=2), port)
+
+        result = await asyncio.wait_for(task, timeout=5.0)
+        self.assertIsNotNone(result, "run() debía devolver la config aplicada")
+        self.assertEqual(result.config_version, 2)
+
+    async def test_push_proactivo_sin_telemetria_entrante(self):
+        """La sesión detecta el cambio de config sondeando la BD, sin depender
+        de que llegue telemetría nueva."""
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
+        self.addCleanup(task.cancel)
+
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+
+        # Aviso de deep sleep: NO gatilla revisión de config, pero revela la
+        # dirección del device (habilita can_send).
+        for _ in range(5):
+            await self._send(dev, DEEP_SLEEP_PACKET, port)
+            await asyncio.sleep(0.15)
+        self.assertFalse(task.done(), "un deep sleep no debía cerrar la sesión UDP")
+
+        repo.db_version = 2   # cambia la config sin que el device mande nada más
+
+        raw = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=6.0)
+        pushed = DataCodec.deserialize_config(raw)
+        self.assertIsNotNone(pushed)
+        self.assertEqual(pushed.config_version, 2)
+
+        await self._send(dev, config_ack_packet(version=2), port)
+        result = await asyncio.wait_for(task, timeout=5.0)
+        self.assertEqual(result.config_version, 2)
+
+    async def test_sin_device_no_intenta_empujar_y_cierra_por_timeout(self):
+        """can_send=False mientras el device no haya escrito: no se puede
+        responder a nadie, así que la sesión solo espera y cierra."""
+        port = free_port()
+        repo = FakeRepo(db_version=2, udp_port=port)   # BD ya adelantada
+        timeouts = quick_timeouts(no_data_grace_sec=1.5, config_ack_sec=0.5,
+                                  config_ack_retries=2)
+        session = self._build_session(repo, port, timeouts)
+
+        result = await asyncio.wait_for(session.run(), timeout=15.0)
+        self.assertIsNone(result, "sin device al otro lado la sesión debía cerrar con None")
+
+    async def test_el_socket_se_libera_al_terminar_la_sesion(self):
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        timeouts = quick_timeouts(no_data_grace_sec=1.0)
+        await asyncio.wait_for(self._build_session(repo, port, timeouts).run(), timeout=15.0)
+
+        # Si el transporte no hubiera cerrado el socket, este bind fallaría.
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.bind(("0.0.0.0", port))
+        finally:
+            probe.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
