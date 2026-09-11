@@ -23,6 +23,10 @@ import queue
 import socket
 import time
 
+from bleak import BleakClient
+
+from ble import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
+from codec import DataCodec
 from models import ConfigData
 from mqtt import mqtt_start, mqtt_publish, get_data_queue, get_ack_queue
 
@@ -46,6 +50,12 @@ class Transport(ABC):
     # esperando al device en la misma sesión? TCP/BLE sí: el device se desconecta
     # al dormirse y vuelve. UDP/MQTT no tienen conexión que se corte.
     reopens: bool = False
+
+    # Ventana de espera de un ACK por intento. None = usar `Timeouts.config_ack_sec`.
+    # Un transporte puede necesitar otra escala: BLE espera más que un socket, y
+    # el día que entre LoRa habrá que darle minutos (el downlink solo sale en la
+    # ventana RX posterior a un uplink, con duty cycle de por medio).
+    ack_window_sec: float | None = None
 
     def __init__(self, config: ConfigData, connect_timeout_sec: float):
         self.config = config
@@ -84,6 +94,16 @@ class Transport(ABC):
     @abstractmethod
     async def send(self, data: bytes) -> None:
         """Envía un paquete al device. Puede lanzar excepción si falla."""
+
+    async def confirm_config_applied(self, device_id: str, version: int) -> bool:
+        """Segunda vía para confirmar que el device aplicó una config, si el ACK
+        no llegó por el canal normal.
+
+        Por defecto no hay ninguna: en un socket, si el ACK no llegó, no llegó.
+        BLE sí puede preguntar, porque el device deja la última config y el
+        último ACK legibles en sus características.
+        """
+        return False
 
 
 class UdpTransport(Transport):
@@ -309,3 +329,172 @@ class MqttTransport(Transport):
 
     async def send(self, data: bytes) -> None:
         mqtt_publish(self._config_topic, data)
+
+
+class BleTransport(Transport):
+    """BLE: conexión GATT persistente con el device.
+
+    Es el más distinto de los cuatro:
+
+    - Necesita más contexto que los demás (el BLEDevice de bleak, el adaptador,
+      y los callbacks para pausar/reanudar el scanner), así que BLEDeviceSession
+      lo construye con `_make_transport()` en vez del constructor por defecto.
+    - Hay que pausar el escaneo para conectar (recomendación de bleak) y
+      reanudarlo una vez conectado.
+    - Los datos no se "reciben": llegan por notificaciones (char B telemetría,
+      char D ACKs). Los callbacks los dejan en una cola que recv() consume, así
+      la sesión los ve como un stream igual que en un socket. Ambas van a la
+      MISMA cola a propósito: la sesión distingue ACK de telemetría por
+      contenido, igual que en UDP/TCP.
+    - El device deja la última config aplicada (char A) y el último ACK (char D)
+      legibles, así que si se pierde la notificación del ACK se puede preguntar:
+      eso es `confirm_config_applied()`.
+    """
+    name = "BLE"
+    reopens = True      # el device corta el enlace al dormirse y vuelve al despertar
+
+    def __init__(
+        self,
+        config: ConfigData,
+        connect_timeout_sec: float,
+        *,
+        device,
+        adapter: str | None = None,
+        scanner_lock=None,
+        scanner_stop=None,
+        scanner_start=None,
+        ack_window_sec: float | None = None,
+    ):
+        super().__init__(config, connect_timeout_sec)
+        self.device = device
+        self.adapter = adapter
+        self.scanner_lock = scanner_lock
+        self.scanner_stop = scanner_stop
+        self.scanner_start = scanner_start
+        self.ack_window_sec = ack_window_sec
+
+        self._client: BleakClient | None = None
+        self._queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self._pending: asyncio.Task | None = None
+        self._notifying = False
+
+    @property
+    def can_send(self) -> bool:
+        return self._client is not None
+
+    async def _scanner(self, action) -> None:
+        """Pausa/reanuda el escaneo BLE, si la sesión pasó esos callbacks."""
+        if self.scanner_lock is None or action is None:
+            return
+        async with self.scanner_lock:
+            await action()
+
+    async def open(self) -> bool:
+        print(f"BLE: Modo persistente. Intentando conectar al dispositivo {self.config.id_device}")
+
+        # Conectar con el scanner corriendo da problemas (ver docs de bleak).
+        await self._scanner(self.scanner_stop)
+        try:
+            client = BleakClient(self.device, adapter=self.adapter)
+            await client.connect()
+            if not client.is_connected:
+                print(f"No se pudo conectar a {self.config.id_device} para RECIBIR DATOS.")
+                return False
+        except Exception as e:
+            print(f"BLE: fallo conectando a {self.config.id_device}: {type(e).__name__}: {e}")
+            return False
+        finally:
+            # El scanner vuelve pase lo que pase: si queda apagado, no se
+            # descubre ningún otro device.
+            await self._scanner(self.scanner_start)
+
+        self._client = client
+
+        loop = asyncio.get_running_loop()
+
+        def _on_notify(_, data: bytearray):
+            # Corre en el hilo/callback de bleak: hay que volver al event loop.
+            loop.call_soon_threadsafe(self._queue.put_nowait, bytes(data))
+
+        # Char A: configuración | Char B: telemetría | Char C: semáforo | Char D: ACKs
+        await client.start_notify(UUID_CHAR_D, _on_notify)
+        await client.start_notify(UUID_CHAR_B, _on_notify)
+        self._notifying = True
+
+        # Señal de inicio por característica C (libera el semáforo en la ESP32)
+        await client.write_gatt_char(UUID_CHAR_C, b"start", response=True)
+
+        print(f"BLE persistente iniciado correctamente para {self.config.id_device}")
+        return True
+
+    async def close(self) -> None:
+        if self._pending is not None:
+            self._pending.cancel()
+            self._pending = None
+
+        client, self._client = self._client, None
+        if client is None:
+            return
+
+        if self._notifying:
+            self._notifying = False
+            for uuid in (UUID_CHAR_B, UUID_CHAR_D):
+                try:
+                    await client.stop_notify(uuid)
+                except Exception:
+                    pass    # se está cerrando igual; no vale la pena fallar acá
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+
+        # Asegura que el scanner quede activo aunque algo haya fallado.
+        await self._scanner(self.scanner_start)
+
+    async def recv(self, timeout_sec: float) -> bytes | None:
+        # Misma precaución que en los otros transportes: no cancelar un get()
+        # que puede haber sacado un elemento de la cola.
+        if self._pending is None:
+            self._pending = asyncio.ensure_future(self._queue.get())
+
+        done, _ = await asyncio.wait({self._pending}, timeout=timeout_sec)
+        if not done:
+            return None
+
+        packet = self._pending.result()
+        self._pending = None
+        return packet
+
+    async def send(self, data: bytes) -> None:
+        await self._client.write_gatt_char(UUID_CHAR_A, data, response=True)
+
+    async def confirm_config_applied(self, device_id: str, version: int) -> bool:
+        """Pregunta al device si ya aplicó `version`, por si se perdió el notify.
+
+        Lee el ACK que dejó en char D y, si eso no alcanza, la config que tiene
+        aplicada en char A.
+        """
+        if self._client is None:
+            return False
+
+        window = self.ack_window_sec or self.connect_timeout_sec
+
+        # Reconciliación: ACK persistente en D
+        try:
+            payload = await asyncio.wait_for(self._client.read_gatt_char(UUID_CHAR_D), timeout=window)
+            ack = DataCodec.deserialize_config_ack(payload)
+            if ack and ack.id_device == device_id and ack.config_version == version and ack.applied:
+                return True
+        except Exception:
+            pass
+
+        # Reconciliación: config persistente en A
+        try:
+            payload = await asyncio.wait_for(self._client.read_gatt_char(UUID_CHAR_A), timeout=window)
+            cfg = DataCodec.deserialize_config(payload)
+            if cfg and cfg.id_device == device_id and cfg.config_version == version:
+                return True
+        except Exception:
+            pass
+
+        return False
