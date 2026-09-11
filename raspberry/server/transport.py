@@ -19,9 +19,12 @@ pero no en MQTT, porque las cuatro sesiones derivaron por separado.
 from __future__ import annotations
 from abc import ABC, abstractmethod
 import asyncio
+import queue
 import socket
+import time
 
 from models import ConfigData
+from mqtt import mqtt_start, mqtt_publish, get_data_queue, get_ack_queue
 
 
 class TransportClosed(Exception):
@@ -246,3 +249,63 @@ class TcpTransport(Transport):
     async def send(self, data: bytes) -> None:
         loop = asyncio.get_running_loop()
         await loop.sock_sendall(self._conn, data)
+
+
+class MqttTransport(Transport):
+    """MQTT: el cliente es del proceso (ver mqtt.py), no de esta sesión.
+
+    Dos diferencias con UDP/TCP:
+
+    - No hay socket propio: mqtt.py mantiene UN cliente compartido y enruta
+      por device a colas separadas (tópicos wildcard). `open()` solo se
+      asegura de que el cliente esté arriba -mqtt_start() es idempotente- y
+      toma las colas de este device. `close()` NO apaga el cliente: otros
+      devices pueden estar usándolo.
+
+    - Los ACK de config llegan por un tópico distinto (.../config/ack) que la
+      telemetría (.../data), o sea por otra cola. Acá se fusionan en un solo
+      stream de bytes, para que la sesión los vea igual que en un socket, sin
+      lógica especial.
+    """
+    name = "MQTT"
+    reopens = False     # no hay conexión por sesión que se pueda cortar
+
+    # Cada cuánto se miran las colas mientras se espera. Son queue.Queue
+    # (las llena el hilo de paho), así que no se pueden esperar con await.
+    # Se sondean en vez de bloquear un hilo del pool de asyncio.to_thread por
+    # cola y por device: ese pool es el mismo que usan las consultas a la BD,
+    # y dejarlo sin hilos libres frenaría todas las sesiones.
+    _QUEUE_POLL_SEC = 0.02
+
+    def __init__(self, config: ConfigData, connect_timeout_sec: float):
+        super().__init__(config, connect_timeout_sec)
+        self._data_queue: queue.Queue | None = None
+        self._ack_queue: queue.Queue | None = None
+        self._config_topic = f"/topic/nebulaedge/{config.id_device}/config"
+
+    async def open(self) -> bool:
+        mqtt_start()    # idempotente: conecta el cliente compartido si hace falta
+        self._data_queue = get_data_queue(self.config.id_device)
+        self._ack_queue = get_ack_queue(self.config.id_device)
+        return True
+
+    async def close(self) -> None:
+        # A propósito no se llama mqtt_shutdown(): el cliente es compartido
+        # por todos los devices en MQTT y sobrevive a esta sesión.
+        self._data_queue = None
+        self._ack_queue = None
+
+    async def recv(self, timeout_sec: float) -> bytes | None:
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            for q in (self._data_queue, self._ack_queue):
+                try:
+                    return q.get_nowait()
+                except queue.Empty:
+                    pass
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(self._QUEUE_POLL_SEC)
+
+    async def send(self, data: bytes) -> None:
+        mqtt_publish(self._config_topic, data)

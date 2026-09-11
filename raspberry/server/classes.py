@@ -22,7 +22,7 @@ from codec import DataCodec
 from system import utc_epoch_now, BLEAdapterResolver, LocalWifiConfig
 from config_resolver import ConfigResolver, ConfigDecision
 from router import PacketRouter, PacketOutcome
-from transport import Transport, TransportClosed, UdpTransport, TcpTransport
+from transport import Transport, TransportClosed, UdpTransport, TcpTransport, MqttTransport
 
 
 class MasterConnection:
@@ -535,108 +535,9 @@ class ProtocolSession(DeviceSession):
                 applied = await self._push_and_wait(tx, decision.db_config)
                 return decision.db_config if applied else None
 
-class MQTTDeviceSession(DeviceSession):
-    """Sesión MQTT: recibe data, persiste y aplica cambios de config con ACK."""
-
-    async def _wait_ack_mqtt(self, ack_queue, db_config: "ConfigData") -> bool:
-        """Espera ACK válido por MQTT. Retorna True si se confirmó."""
-        for _ in range(self.timeouts.config_ack_retries):
-            try:
-                payload = await asyncio.to_thread(
-                    ack_queue.get,
-                    True,
-                    self.timeouts.config_ack_sec,
-                )
-                ack = DataCodec.deserialize_config_ack(payload)
-                if (
-                    ack
-                    and ack.id_device == self.device_id
-                    and ack.config_version == db_config.config_version
-                    and ack.applied
-                ):
-                    print(f"ACK MQTT de recibido para {self.device_id} v{db_config.config_version}")
-                    return True
-            except queue.Empty:
-                pass
-
-        print(f"ACK MQTT de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
-        return False
-
-    async def _push_and_wait(self, config_topic: str, ack_queue, db_config: "ConfigData") -> bool:
-        """Publica config y espera su ACK. Adapta al formato de _proactive_config_push."""
-        print(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
-        serialized_config = DataCodec.serialize_config(db_config)
-        mqtt_publish(config_topic, serialized_config)
-        return await self._wait_ack_mqtt(ack_queue, db_config)
-
-    async def run(self):
-        # mqtt_start() es idempotente: conecta el cliente MQTT compartido del
-        # proceso solo si aún no está corriendo. Esta sesión NO lo apaga al
-        # terminar (ver mqtt.py): otros devices en MQTT pueden seguir usándolo.
-        mqtt_start()
-
-        device_queue = get_data_queue(self.device_id)
-        ack_queue =  get_ack_queue(self.device_id)
-        config_topic = f"/topic/nebulaedge/{self.device_id}/config"
-
-        while True:
-            data = None
-
-            # Espera por un paquete, sondeando la BD proactivamente en ventanas cortas
-            # mientras no llega nada (no depende de que llegue telemetría).
-            full_timeout = self._sleep_timeout_sec()
-            deadline = time.monotonic() + full_timeout
-            packet = None
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    print(f"Timeout MQTT ({full_timeout}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
-                    return None
-                wait = min(remaining, self.timeouts.config_poll_sec)
-                try:
-                    packet = await asyncio.to_thread(device_queue.get, True, wait)
-                    break
-                except queue.Empty:
-                    new_cfg = await self._proactive_config_push(
-                        lambda cfg: self._push_and_wait(config_topic, ack_queue, cfg)
-                    )
-                    if new_cfg is not None:
-                        return new_cfg
-                    continue
-
-            try:
-                routed = await self._router.route(packet, self.device_id, source="MQTT")
-                if routed.outcome == PacketOutcome.IGNORED:
-                    continue
-                if routed.outcome == PacketOutcome.DEEP_SLEEP:
-                    print(f"MQTT: Se detectó deep sleep de {self.device_id}")
-                    continue
-                data = routed.data
-                self._update_last_client_time(data)
-            except Exception as e:
-                print(f"Error procesando datos: {e}")
-                continue
-
-            # Pausa para que otras tareas de asyncio se ejecuten (otras sesiones)
-            await asyncio.sleep(self.timeouts.mqtt_poll_sec)
-
-            # Obtiene configuración desde DB
-            db_config = await self.database_repo.get_config_async(self.device_id)
-            if db_config is None:
-                continue
-
-            # Compara versiones actuales de config DEVICE vs versión BD
-            applied_version = data.config_version_applied
-            decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
-            if decision.decision == ConfigDecision.APPLIED_NEWER:
-                print(f"Config aplicada detectada en MQTT ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
-                return decision.db_config
-            elif decision.decision == ConfigDecision.ALREADY_SENT:
-                # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
-                continue
-            elif decision.decision == ConfigDecision.PUSH:
-                applied = await self._push_and_wait(config_topic, ack_queue, decision.db_config)
-                return decision.db_config if applied else None
+class MQTTDeviceSession(ProtocolSession):
+    """Sesión MQTT: toda la lógica está en ProtocolSession, solo cambia el transporte."""
+    transport_cls = MqttTransport
 
 class UDPDeviceSession(ProtocolSession):
     """Sesión UDP: toda la lógica está en ProtocolSession, solo cambia el transporte."""
