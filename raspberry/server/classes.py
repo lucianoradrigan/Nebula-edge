@@ -425,6 +425,9 @@ class MQTTDeviceSession(DeviceSession):
         return await self._wait_ack_mqtt(ack_queue, db_config)
 
     async def run(self):
+        # mqtt_start() es idempotente: conecta el cliente MQTT compartido del
+        # proceso solo si aún no está corriendo. Esta sesión NO lo apaga al
+        # terminar (ver mqtt.py): otros devices en MQTT pueden seguir usándolo.
         mqtt_start()
 
         device_queue = get_data_queue(self.device_id)
@@ -453,7 +456,6 @@ class MQTTDeviceSession(DeviceSession):
                         lambda cfg: self._push_and_wait(config_topic, ack_queue, cfg)
                     )
                     if new_cfg is not None:
-                        mqtt_shutdown()
                         return new_cfg
                     continue
 
@@ -483,14 +485,12 @@ class MQTTDeviceSession(DeviceSession):
             decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
             if decision.decision == ConfigDecision.APPLIED_NEWER:
                 print(f"Config aplicada detectada en MQTT ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
-                mqtt_shutdown()
                 return decision.db_config
             elif decision.decision == ConfigDecision.ALREADY_SENT:
                 # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
                 continue
             elif decision.decision == ConfigDecision.PUSH:
                 applied = await self._push_and_wait(config_topic, ack_queue, decision.db_config)
-                mqtt_shutdown()
                 return decision.db_config if applied else None
 
 class UDPDeviceSession(DeviceSession):

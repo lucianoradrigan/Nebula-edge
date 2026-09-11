@@ -1,11 +1,17 @@
 import paho.mqtt.client as mqtt
 import queue
+import threading
 from typing import Dict
 
 mqttc = None
 packet_queue = queue.Queue()
 device_queues: Dict[str, queue.Queue] = {}
 ack_queues: Dict[str, queue.Queue] = {}
+
+# Guarda del estado del cliente compartido (ver mqtt_start/mqtt_shutdown más
+# abajo): el cliente MQTT es un único recurso por proceso, no por device.
+_mqtt_lock = threading.Lock()
+_mqtt_started = False
 
 
 def _get_device_queue(device_id: str) -> queue.Queue:
@@ -78,26 +84,50 @@ def get_ack_queue(device_id: str) -> queue.Queue:
     return _get_ack_queue(device_id)
 
 def mqtt_start():
-    """Inicia el cliente MQTT y registra callbacks."""
-    global mqttc
+    """Inicia el cliente MQTT compartido si todavía no está corriendo.
 
-    # Inicia cliente
-    mqttc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    mqttc.on_connect = on_connect
+    Idempotente a propósito. Antes, MQTTDeviceSession.run() llamaba esto al
+    entrar cada vez que CUALQUIER device pasaba a protocolo MQTT: cada
+    llamada reinstanciaba `mqttc`, pisando el cliente que ya estuviera
+    usando otro device. El cliente viejo quedaba conectado con su hilo de
+    loop_start() corriendo para siempre (nadie más tenía la referencia para
+    detenerlo), y si esa otra sesión llamaba después a mqtt_shutdown(),
+    apagaba la conexión de TODOS los devices, no solo la suya.
 
-    # Asocia función callback por tópico
-    mqttc.message_callback_add("/topic/nebulaedge/+/data", on_message_data)
-    mqttc.message_callback_add("/topic/nebulaedge/+/config/ack", on_message_ack)
-    
-    # Conecta al broker
-    mqttc.connect("broker.hivemq.com", 1883, 60)
-    mqttc.loop_start()
+    El cliente MQTT es un recurso compartido por proceso, no por sesión: ya
+    enruta por device vía tópicos wildcard (/topic/nebulaedge/+/...) y las
+    colas por device_id de este módulo. Por eso ahora arranca una sola vez
+    y las sesiones individuales no lo apagan al terminar (ver
+    mqtt_shutdown).
+    """
+    global mqttc, _mqtt_started
+    if _mqtt_started:
+        return
+    with _mqtt_lock:
+        if _mqtt_started:
+            return
+
+        mqttc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        mqttc.on_connect = on_connect
+        mqttc.message_callback_add("/topic/nebulaedge/+/data", on_message_data)
+        mqttc.message_callback_add("/topic/nebulaedge/+/config/ack", on_message_ack)
+        mqttc.connect("broker.hivemq.com", 1883, 60)
+        mqttc.loop_start()
+        _mqtt_started = True
 
 def mqtt_shutdown():
-    """Detiene el loop MQTT y desconecta."""
-    global mqttc
-    mqttc.loop_stop()
-    mqttc.disconnect()
+    """Detiene el cliente MQTT compartido y su hilo de loop_start().
+
+    Pensada para el apagado del proceso completo, no para el fin de la
+    sesión de un device individual (que ya no la llama): ver mqtt_start.
+    """
+    global mqttc, _mqtt_started
+    with _mqtt_lock:
+        if not _mqtt_started:
+            return
+        mqttc.loop_stop()
+        mqttc.disconnect()
+        _mqtt_started = False
 
 if __name__ == "__main__":
     mqtt_start()
