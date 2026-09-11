@@ -1,0 +1,208 @@
+"""Frontera con protobuf/schema_pb2: convierte entre los modelos neutros
+(models.py) y los bytes que viajan por BLE/MQTT/UDP/TCP.
+
+Movido desde classes.py sin cambios de lógica.
+"""
+from __future__ import annotations
+import schema_pb2
+
+from models import Data_1, Data_2, ConfigData, ConfigAckData
+
+
+class DataCodec:
+    """Esta clase permite que DatabaseRepository se desligue de protobuf.
+    En caso de querer cambiar la forma de enviar los datos (JSON por ejemplo)
+    solo se tendrá que modificar esto."""
+    TYPE_DATA_1 = 0x01
+    TYPE_DATA_2 = 0x02
+    # TYPE_ACK = 0x03 sería bueno implementarlo
+    TYPE_DEEP_SLEEP = 0x04
+
+    @staticmethod
+    def split_typed_packet(packet: bytes) -> tuple[int | None, bytes]:
+        """Extrae el tipo (1 byte) y el payload del paquete."""
+        if not packet or len(packet) < 2:
+            return None, b""
+        return packet[0], packet[1:]
+
+    @staticmethod
+    def deserialize_typed_packet(packet: bytes) -> tuple["Data_1 | Data_2 | None", int]:
+        """Parsea un paquete con prefijo de tipo y devuelve una tupla cuya primera posición es Data_1 o Data_2
+           y en la segunda posición el indicador de tipo de paquete. En caso de no ser ninguno retorna [None, -1]"""
+        pkt_type, payload = DataCodec.split_typed_packet(packet)
+        if pkt_type == DataCodec.TYPE_DATA_1:
+            return DataCodec.deserialize_data_1(payload), DataCodec.TYPE_DATA_1
+        if pkt_type == DataCodec.TYPE_DATA_2:
+            return DataCodec.deserialize_data_2(payload), DataCodec.TYPE_DATA_2
+        if pkt_type == DataCodec.TYPE_DEEP_SLEEP:
+            return payload, DataCodec.TYPE_DEEP_SLEEP
+        return None, -1
+
+    @staticmethod
+    def serialize_data_1(data: Data_1) -> bytes:
+        """Convierte Data_1 -> protobuf Data_1 -> bytes."""
+        pb = schema_pb2.Data_1()
+        pb.id_device = data.id_device
+        pb.temperature = data.temperature
+        pb.press = data.press
+        pb.hum = data.hum
+        pb.co = data.co
+        pb.rms = data.rms
+        pb.amp_x = data.amp_x
+        pb.freq_x = data.freq_x
+        pb.amp_y = data.amp_y
+        pb.freq_y = data.freq_y
+        pb.amp_z = data.amp_z
+        pb.freq_z = data.freq_z
+        pb.mag_x = data.mag_x
+        pb.mag_y = data.mag_y
+        pb.mag_z = data.mag_z
+        pb.config_version_applied = data.config_version_applied
+        pb.time_client = data.time_client
+        return pb.SerializeToString()
+
+    @staticmethod
+    def deserialize_data_1(packet: bytes) -> Data_1 | None:
+        """Convierte bytes -> protobuf Data_1 -> Data_1."""
+        try:
+            pb = schema_pb2.Data_1()
+            pb.ParseFromString(packet)
+        except Exception as e:
+            print(f"Error al desempaquetar el paquete: {e}")
+            return None
+
+        # Convertir a objeto neutro (Data_1)
+        return Data_1(
+            id_device=pb.id_device,
+            temperature=pb.temperature,
+            press=pb.press,
+            hum=pb.hum,
+            co=pb.co,
+            rms=pb.rms,
+            amp_x=pb.amp_x,
+            freq_x=pb.freq_x,
+            amp_y=pb.amp_y,
+            freq_y=pb.freq_y,
+            amp_z=pb.amp_z,
+            freq_z=pb.freq_z,
+            mag_x=pb.mag_x,
+            mag_y=pb.mag_y,
+            mag_z=pb.mag_z,
+            config_version_applied=pb.config_version_applied,
+            time_client=pb.time_client
+        )
+
+    @staticmethod
+    def serialize_data_2(data: "Data_2") -> bytes:
+        """Convierte Data_2 -> protobuf Data_2 -> bytes."""
+        pb = schema_pb2.Data_2()
+        pb.id_device = data.id_device
+        pb.acc_x = data.acc_x
+        pb.acc_y = data.acc_y
+        pb.acc_z = data.acc_z
+        pb.gyr_x = data.gyr_x
+        pb.gyr_y = data.gyr_y
+        pb.gyr_z = data.gyr_z
+        pb.config_version_applied = data.config_version_applied
+        pb.time_client = data.time_client
+        return pb.SerializeToString()
+
+    @staticmethod
+    def deserialize_data_2(packet: bytes) -> "Data_2 | None":
+        """Convierte bytes -> protobuf Data_2 -> Data_2."""
+        try:
+            pb = schema_pb2.Data_2()
+            pb.ParseFromString(packet)
+        except Exception as e:
+            print(f"Error al desempaquetar el paquete Data_2: {e}")
+            return None
+
+        return Data_2(
+            id_device=pb.id_device,
+            acc_x=pb.acc_x,
+            acc_y=pb.acc_y,
+            acc_z=pb.acc_z,
+            gyr_x=pb.gyr_x,
+            gyr_y=pb.gyr_y,
+            gyr_z=pb.gyr_z,
+            config_version_applied=pb.config_version_applied,
+            time_client=pb.time_client,
+        )
+
+    @staticmethod
+    def serialize_config(config: ConfigData) -> bytes:
+        """Convierte ConfigData -> protobuf Config -> bytes."""
+        pb = schema_pb2.Config()
+        pb.id_device = config.id_device
+        pb.config_version = config.config_version
+        pb.protocol_conf = config.protocol_conf
+        pb.acc_sampling = config.acc_sampling
+        pb.gyro_sensibility = config.gyro_sensibility
+        pb.bme688_sampling = config.bme688_sampling
+        pb.send_interval_s = config.send_interval_s
+        pb.sleep_time_s = config.sleep_time_s
+        pb.sleep_window_size = config.sleep_window_size
+        pb.tcp_port = config.tcp_port
+        pb.udp_port = config.udp_port
+        pb.host_ip_addr = config.host_ip_addr
+        pb.ssid = config.ssid
+        pb.passwd = config.passwd
+        pb.mqtt_broker = config.mqtt_broker
+        pb.time_client = config.time_client
+        return pb.SerializeToString()
+
+    @staticmethod
+    def deserialize_config(packet: bytes) -> ConfigData | None:
+        """Convierte bytes -> protobuf Config -> ConfigData."""
+        try:
+            pb = schema_pb2.Config()
+            pb.ParseFromString(packet)
+        except Exception as e:
+            print(f"Error al desempaquetar el paquete: {e}")
+            return None
+
+        return ConfigData(
+            id_device=pb.id_device,
+            config_version=pb.config_version,
+            protocol_conf=pb.protocol_conf,
+            acc_sampling=pb.acc_sampling,
+            gyro_sensibility=pb.gyro_sensibility,
+            bme688_sampling=pb.bme688_sampling,
+            send_interval_s=pb.send_interval_s,
+            sleep_time_s=pb.sleep_time_s,
+            sleep_window_size=pb.sleep_window_size,
+            tcp_port=pb.tcp_port,
+            udp_port=pb.udp_port,
+            host_ip_addr=pb.host_ip_addr,
+            ssid=pb.ssid,
+            passwd=pb.passwd,
+            mqtt_broker=pb.mqtt_broker,
+            time_client=pb.time_client
+        )
+
+    @staticmethod
+    def serialize_config_ack(ack: "ConfigAckData") -> bytes:
+        """Convierte ConfigAckData -> protobuf ConfigAck -> bytes."""
+        pb = schema_pb2.ConfigAck()
+        pb.id_device = ack.id_device
+        pb.config_version = ack.config_version
+        pb.applied = ack.applied
+        pb.time_client = ack.time_client
+        return pb.SerializeToString()
+
+    @staticmethod
+    def deserialize_config_ack(packet: bytes) -> "ConfigAckData" | None:
+        """Convierte bytes -> protobuf ConfigAck -> ConfigAckData."""
+        try:
+            pb = schema_pb2.ConfigAck()
+            pb.ParseFromString(packet)
+        except Exception as e:
+            print(f"Error al desempaquetar el ACK: {e}")
+            return None
+
+        return ConfigAckData(
+            id_device=pb.id_device,
+            config_version=pb.config_version,
+            applied=pb.applied,
+            time_client=pb.time_client,
+        )
