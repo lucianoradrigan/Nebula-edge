@@ -15,7 +15,7 @@ import asyncio
 import unittest
 from unittest import mock
 
-import classes
+import sessions
 import transport
 from ble import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
 from codec import DataCodec
@@ -99,7 +99,7 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(p.stop)
 
     def _build_session(self, repo, timeouts):
-        return classes.BLEDeviceSession(
+        return sessions.BLEDeviceSession(
             FakeBLEDevice(), make_config(1), repo, None, None, None, None, timeouts,
         )
 
@@ -121,8 +121,8 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         return task, FakeBleakClient.ultima
 
     def test_ble_session_usa_la_sesion_generica(self):
-        self.assertTrue(issubclass(classes.BLEDeviceSession, classes.ProtocolSession))
-        self.assertEqual(classes.BLEDeviceSession.transport_cls.__name__, "BleTransport")
+        self.assertTrue(issubclass(sessions.BLEDeviceSession, sessions.ProtocolSession))
+        self.assertEqual(sessions.BLEDeviceSession.transport_cls.__name__, "BleTransport")
 
     async def test_al_conectar_avisa_por_la_caracteristica_C(self):
         """El 'start' en char C libera el semáforo del firmware."""

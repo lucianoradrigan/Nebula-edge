@@ -1,7 +1,7 @@
 """Comparación de versiones de configuración (device vs BD vs sesión).
 
-Extrae la lógica que está copiada 4 veces (MQTT/UDP/TCP/BLE) en classes.py,
-por ejemplo en UDPDeviceSession.run():
+Extrae la lógica que estaba copiada 4 veces (MQTT/UDP/TCP/BLE), por
+ejemplo en lo que hoy es ProtocolSession._session_loop() (sessions.py):
 
     applied_version = data.config_version_applied
     if applied_version > db_config.config_version:

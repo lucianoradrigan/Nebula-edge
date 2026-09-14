@@ -10,7 +10,7 @@ import asyncio
 import socket
 import unittest
 
-import classes
+import sessions
 from codec import DataCodec
 from models import Timeouts
 from tests.fakes import (
@@ -33,7 +33,7 @@ def quick_timeouts(**overrides) -> Timeouts:
 class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
 
     def _build_session(self, repo, port, timeouts):
-        return classes.TCPDeviceSession(
+        return sessions.TCPDeviceSession(
             FakeBLEDevice(),
             make_config(1, tcp_port=port),
             repo,
@@ -94,8 +94,8 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
         return None
 
     def test_tcp_session_usa_la_sesion_generica(self):
-        self.assertTrue(issubclass(classes.TCPDeviceSession, classes.ProtocolSession))
-        self.assertEqual(classes.TCPDeviceSession.transport_cls.__name__, "TcpTransport")
+        self.assertTrue(issubclass(sessions.TCPDeviceSession, sessions.ProtocolSession))
+        self.assertEqual(sessions.TCPDeviceSession.transport_cls.__name__, "TcpTransport")
 
     async def test_telemetria_se_inserta_y_la_sesion_sigue_viva(self):
         port = free_port(socket.SOCK_STREAM)

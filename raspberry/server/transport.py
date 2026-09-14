@@ -3,7 +3,7 @@
 Un `Transport` solo mueve bytes: abrir, recibir, enviar, cerrar. Todo lo
 demás -timeouts, sondeo proactivo de la BD, comparación de versiones de
 config, handshake de ACK, deep sleep- vive una sola vez en
-`ProtocolSession` (classes.py), compartido por todos los protocolos.
+`ProtocolSession` (sessions.py), compartido por todos los protocolos.
 
 La idea es que agregar un protocolo nuevo (CoAP, LoRa, el que sea) sea:
 

@@ -12,7 +12,7 @@ import queue
 import unittest
 from unittest import mock
 
-import classes
+import sessions
 import transport
 from codec import DataCodec
 from models import Timeouts
@@ -53,7 +53,7 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(p.stop)
 
     def _build_session(self, repo, timeouts):
-        return classes.MQTTDeviceSession(
+        return sessions.MQTTDeviceSession(
             FakeBLEDevice(), make_config(1), repo, None, None, None, None, timeouts,
         )
 
@@ -67,8 +67,8 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
         return False
 
     def test_mqtt_session_usa_la_sesion_generica(self):
-        self.assertTrue(issubclass(classes.MQTTDeviceSession, classes.ProtocolSession))
-        self.assertEqual(classes.MQTTDeviceSession.transport_cls.__name__, "MqttTransport")
+        self.assertTrue(issubclass(sessions.MQTTDeviceSession, sessions.ProtocolSession))
+        self.assertEqual(sessions.MQTTDeviceSession.transport_cls.__name__, "MqttTransport")
 
     async def test_telemetria_de_la_cola_de_datos_se_inserta(self):
         repo = FakeRepo(db_version=1)

@@ -2,7 +2,7 @@
 
 Tienen que coincidir con los del firmware
 (esp32/components/nebulaedge_ble/nebulaedge_ble.c). Los consumen
-BleTransport (transport.py) y MasterConnection (classes.py).
+BleTransport (transport.py) y MasterConnection (discovery.py).
 """
 
 # UUIDs en formato de 128 bits (base BLE)

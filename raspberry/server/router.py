@@ -1,7 +1,7 @@
 """Decodifica paquetes tipados de telemetría y los persiste.
 
-Extrae el bloque que está copiado 6 veces (MQTT/UDP/TCP/BLE) en classes.py,
-por ejemplo en UDPDeviceSession.run():
+Extrae el bloque que estaba copiado 6 veces (MQTT/UDP/TCP/BLE), por
+ejemplo en lo que hoy es ProtocolSession._session_loop() (sessions.py):
 
     data, data_type = DataCodec.deserialize_typed_packet(packet)
     if data == None or data_type == -1:
@@ -44,7 +44,7 @@ from models import Data_1, Data_2
 class TelemetryRepository(Protocol):
     """Contrato mínimo que PacketRouter necesita de un repositorio.
 
-    DatabaseRepository (classes.py) lo cumple por duck typing, sin heredar
+    DatabaseRepository (repository.py) lo cumple por duck typing, sin heredar
     de esto. Sirve para poder testear PacketRouter con un stub en memoria,
     sin tocar Postgres.
     """

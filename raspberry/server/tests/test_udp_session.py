@@ -12,7 +12,7 @@ import asyncio
 import socket
 import unittest
 
-import classes
+import sessions
 from codec import DataCodec
 from models import Timeouts
 from tests.fakes import (
@@ -36,7 +36,7 @@ def quick_timeouts(**overrides) -> Timeouts:
 class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
 
     def _build_session(self, repo, port, timeouts):
-        return classes.UDPDeviceSession(
+        return sessions.UDPDeviceSession(
             FakeBLEDevice(),
             make_config(1, udp_port=port),
             repo,
@@ -65,8 +65,8 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_udp_session_usa_la_sesion_generica(self):
         """UDPDeviceSession debe ser solo ProtocolSession + UdpTransport."""
-        self.assertTrue(issubclass(classes.UDPDeviceSession, classes.ProtocolSession))
-        self.assertEqual(classes.UDPDeviceSession.transport_cls.__name__, "UdpTransport")
+        self.assertTrue(issubclass(sessions.UDPDeviceSession, sessions.ProtocolSession))
+        self.assertEqual(sessions.UDPDeviceSession.transport_cls.__name__, "UdpTransport")
 
     async def test_telemetria_se_inserta_y_la_sesion_sigue_viva(self):
         port = free_port()
