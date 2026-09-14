@@ -1,8 +1,26 @@
-"""Despacha la sesión activa según `protocol_conf` y sobrevive a los cambios de protocolo.
+"""Elección de la sesión de protocolo, y reelección cuando el protocolo cambia.
 
-Movido desde classes.py sin cambios de lógica. `session_classes` es, junto
-con escribir el Transport mismo, el único lugar que hay que tocar para
-dar de alta un protocolo nuevo.
+UTILIDAD PRINCIPAL
+    Traducir el número `protocol_conf` de la configuración a la clase de sesión
+    que le corresponde, correrla, y -cuando esa sesión termina devolviendo una
+    configuración nueva- repetir con la que ahora toque. Ese bucle es lo que
+    permite cambiar de protocolo en caliente sin reiniciar el servidor ni el
+    device.
+
+        protocol_conf:   0 MQTT    1 UDP    2 TCP    3 BLE
+
+DAR DE ALTA UN PROTOCOLO NUEVO
+    `session_classes` es, junto con escribir el `Transport` (transport.py) y su
+    subclase de sesión (sessions.py), lo único que hay que tocar.
+
+CUÁNDO TERMINA DE VERDAD
+    El bucle corta cuando `session.run()` devuelve None: el device dejó de
+    responder, se agotaron los reintentos de ACK, o el enlace se cortó sin
+    posibilidad de reabrirlo. También corta si llega un protocol_conf que no
+    está en el dict.
+
+    Además de la sesión, se corre en paralelo un heartbeat que escribe en la
+    tabla `log` mientras el protocolo esté activo; se cancela al terminar.
 """
 from __future__ import annotations
 import asyncio

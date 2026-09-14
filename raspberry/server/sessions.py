@@ -1,10 +1,35 @@
-"""El motor de sesión genérico y sus cuatro variantes por protocolo.
+"""El bucle de sesión de un dispositivo, compartido por los cuatro protocolos.
 
-Movido desde classes.py sin cambios de lógica. `ProtocolSession` corre el
-mismo bucle (recibir, decidir, empujar config, esperar ACK) para los
-cuatro protocolos; lo único que cambia entre uno y otro es el `Transport`
-(transport.py) que usan. Agregar un protocolo nuevo es una subclase de
-2-3 líneas acá, no una copia de todo este archivo.
+UTILIDAD PRINCIPAL
+    Una vez que el device ya tiene su configuración y está hablando por algún
+    protocolo, acá vive todo lo que pasa después:
+
+        recibir paquete -> clasificarlo -> persistir telemetría
+                        -> comparar la versión de config contra la BD
+                        -> si cambió: empujarla y esperar el ACK
+
+    Ese flujo está escrito UNA sola vez, en `ProtocolSession`. Lo único que
+    distingue a MQTT de UDP, TCP o BLE es cómo se mueven los bytes, y eso vive
+    detrás de `Transport` (transport.py). Por eso las cuatro sesiones concretas
+    son de dos líneas:
+
+        class UDPDeviceSession(ProtocolSession):
+            transport_cls = UdpTransport
+
+    BLE es la única que sobreescribe `_make_transport()`, porque su transporte
+    necesita contexto extra: el BLEDevice, el adaptador y el control del scanner.
+
+REPARTO INTERNO
+    DeviceSession     estado del device (config, repositorio, timeouts) y el
+                      heartbeat periódico que escribe en la tabla `log`.
+    ProtocolSession   el bucle de arriba, el handshake de ACK con reintentos,
+                      y la reapertura del enlace cuando el transporte declara
+                      `reopens` (TCP y BLE se caen cuando el device se duerme).
+
+QUÉ DEVUELVE run()
+    Una ConfigData cuando la sesión termina porque hay que reconfigurar -el
+    caller (dispatch.py) decide con ella qué sesión abrir ahora- o None cuando
+    la sesión se acabó del todo y el device tiene que volver a descubrirse.
 """
 from __future__ import annotations
 import asyncio

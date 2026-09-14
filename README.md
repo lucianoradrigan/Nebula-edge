@@ -210,7 +210,61 @@ Si quieres modificar los dispositivos que arrancan con datos precargados, edita 
 
 ## 7) Estructura del repositorio
 
-- `esp32/`: firmware ESP-IDF de los nodos.
+- `esp32/`: firmware ESP-IDF de los nodos (ver [esp32/README.md](esp32/README.md)).
 - `raspberry/`: servidor Python, Docker Compose y PostgreSQL.
 - `raspberry/db_init/`: scripts SQL de inicializacion.
-- `raspberry/server/`: logica BLE, sesiones MQTT/UDP/TCP/BLE y persistencia.
+- `raspberry/server/`: el servidor propiamente tal (detalle abajo).
+
+### 7.1) Modulos del servidor
+
+Cada archivo tiene una sola responsabilidad y arranca con un docstring que
+explica para que sirve. En el orden en que se encadenan durante una sesion:
+
+| Archivo | Para que sirve |
+|---|---|
+| `server.py` | Punto de entrada. Es lo que ejecuta el contenedor. |
+| `discovery.py` | Escanea BLE, entrega la config inicial y abre una sesion por dispositivo. |
+| `dispatch.py` | Elige que sesion corre segun `protocol_conf`, y la vuelve a elegir si el protocolo cambia. |
+| `sessions.py` | El bucle de sesion: recibir, persistir, comparar version de config, empujar y esperar ACK. Identico para los 4 protocolos. |
+| `transport.py` | Lo unico que cambia entre protocolos: como se mueven los bytes (`UdpTransport`, `TcpTransport`, `MqttTransport`, `BleTransport`). |
+| `router.py` | Clasifica cada paquete entrante (telemetria / deep sleep / descartar) y persiste la telemetria. |
+| `config_resolver.py` | Decide si hay que empujar una config nueva. Funcion pura, sin I/O. |
+| `repository.py` | Unico modulo que habla con Postgres. |
+
+De apoyo: `codec.py` (protobuf), `models.py` (dataclasses del dominio),
+`system.py` (reloj UTC, adaptador BLE, WiFi del host), `mqtt.py` (cliente MQTT
+compartido del proceso), `ble.py` (UUIDs del servicio GATT).
+
+### 7.2) Agregar un protocolo nuevo
+
+El diseno esta pensado para que no haya que desarmar nada. Para dar de alta
+CoAP, LoRa o el que sea:
+
+1. Escribir una clase nueva en `transport.py` que herede de `Transport`
+   (abrir, recibir, enviar, cerrar).
+2. Agregar la subclase de sesion en `sessions.py`:
+   `class CoAPDeviceSession(ProtocolSession): transport_cls = CoapTransport`
+3. Agregar una linea al dict `session_classes` de `dispatch.py`.
+
+El bucle de sesion, el manejo de ACK, los timeouts y la persistencia se heredan
+sin tocar nada.
+
+## 8) Tests del servidor
+
+La suite levanta sesiones reales contra sockets y colas locales; no necesita
+Postgres, ni broker MQTT, ni hardware. Postgres se reemplaza por un repositorio
+en memoria y BLE por un doble de `bleak`.
+
+```bash
+cd raspberry/server
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r ../requirements.txt
+python -m unittest discover -s tests
+```
+
+Esperado: `Ran 26 tests ... OK`.
+
+Cobertura actual: las cuatro sesiones de protocolo (telemetria, cambio de
+config con ACK, deep sleep y cierre por timeout). Lo que **no** cubre: el SQL
+real contra Postgres, y que `bleak`/BlueZ se comporten como el doble. BLE es el
+unico de los cuatro que no se puede validar de verdad sin un ESP32 enfrente.

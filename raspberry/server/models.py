@@ -1,8 +1,26 @@
-"""Modelos neutros (dataclasses) del dominio NebulaEdge.
+"""Los tipos del dominio: dataclasses que no dependen de protobuf ni de la BD.
 
-Movido desde classes.py sin cambios de lógica. Estas clases son el tipo
-"de línea" que usan DataCodec, DatabaseRepository y las sesiones de
-protocolo; no dependen de protobuf ni de ningún transporte.
+UTILIDAD PRINCIPAL
+    Definir el vocabulario común que se pasan entre sí el codec, el
+    repositorio, el router y las sesiones, para que nadie tenga que manipular
+    mensajes protobuf ni filas de Postgres directamente.
+
+        Timeouts        todos los tiempos del servidor, en un solo lugar
+        ConfigData      configuración de un device (protocolo, sensores, red)
+        Data_1          telemetría ambiental + vibración procesada
+        Data_2          acelerómetro y giroscopio crudos
+        ConfigAckData   confirmación del device de que aplicó una versión
+        Log             evento de operación (conexión, heartbeat, desconexión)
+
+    Son el punto donde convergen las tres representaciones del mismo dato: el
+    mensaje protobuf que viaja por el cable, la fila de la tabla, y el objeto
+    que usa la lógica de sesión. Por eso este módulo no importa nada del
+    proyecto: todos lo importan a él, y así no hay ciclos.
+
+AJUSTAR LOS TIEMPOS
+    `Timeouts` se construye una vez en `MasterConnection` y baja por toda la
+    cadena hasta los transportes. Cambiar un valor acá afecta a los cuatro
+    protocolos; para tocar solo uno, el lugar es su Transport (transport.py).
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -10,15 +28,26 @@ from dataclasses import dataclass
 
 @dataclass
 class Timeouts:
-    ble_connect_sec: float = 30.0          # Timeout de intentos de conexión BLE (BleakClient)
-    scan_restart_sec: float = 60.0         # Reinicio periódico de scanner BLE
-    connect_cooldown_sec: float = 20.0     # Cooldown entre reconexiones por device
-    config_ack_sec: float = 2.0            # Ventana para ACK de config (MQTT/UDP/TCP/BLE)
-    config_ack_retries: int = 10           # Reintentos de ACK de config (MQTT/UDP/TCP/BLE)
-    no_data_grace_sec: float = 50.0       # Gracia extra al esperar un dato
-    mqtt_poll_sec: float = 0.1             # Sleep de polling MQTT
-    ble_ack_short_sec: float = 3.0         # Timeout corto por intento en _wait_ble_ack
-    config_poll_sec: float = 15.0          # Intervalo de sondeo proactivo de config, sin depender de telemetría
+    """Todos los tiempos del servidor, centralizados.
+
+    Se arma una vez en MasterConnection y baja por descubrimiento -> dispatch
+    -> sesión -> transporte. Los tests construyen uno con valores chicos para
+    que la suite corra en segundos en vez de minutos.
+    """
+    # --- descubrimiento BLE (discovery.py) ---
+    ble_connect_sec: float = 30.0       # Espera máxima al conectar con BleakClient
+    scan_restart_sec: float = 60.0      # Cada cuánto se reinicia el scanner, para que no se cuelgue
+    connect_cooldown_sec: float = 20.0  # Mínimo entre dos intentos de conexión al mismo device
+
+    # --- espera de datos (sessions.py) ---
+    no_data_grace_sec: float = 50.0     # Gracia sobre el intervalo de envío antes de dar por muerta la sesión
+    config_poll_sec: float = 15.0       # Cada cuánto se consulta la BD aunque no llegue telemetría
+
+    # --- handshake de configuración (sessions.py) ---
+    config_ack_sec: float = 2.0         # Ventana de espera del ACK, por intento
+    config_ack_retries: int = 10        # Intentos antes de dar la config por no aplicada
+    ble_ack_short_sec: float = 3.0      # Ventana de ACK propia de BLE; reemplaza a config_ack_sec
+                                        # cuando el transporte la declara (Transport.ack_window_sec)
 
 @dataclass
 class Data_1:

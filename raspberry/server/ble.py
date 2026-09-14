@@ -1,8 +1,25 @@
 """UUIDs del servicio GATT que expone el ESP32.
 
-Tienen que coincidir con los del firmware
-(esp32/components/nebulaedge_ble/nebulaedge_ble.c). Los consumen
-BleTransport (transport.py) y MasterConnection (discovery.py).
+UTILIDAD PRINCIPAL
+    Tener en un solo lugar las cuatro características del servicio BLE, para
+    que el servidor y el firmware no se desincronicen.
+
+        char A   config       el servidor escribe acá la configuración
+        char B   telemetría   el device notifica sus paquetes de datos
+        char C   start        semáforo: el servidor avisa que ya puede empezar
+        char D   ack          el device confirma qué versión de config aplicó
+
+    Las características A y D también son legibles, y de eso depende la
+    reconciliación de BLE: si se pierde la notificación del ACK, el servidor
+    puede preguntar leyéndolas (`BleTransport.confirm_config_applied`).
+
+DEBE CALZAR CON EL FIRMWARE
+    Los mismos UUIDs están declarados en
+    esp32/components/nebulaedge_ble/nebulaedge_ble.c. Si cambian de un lado,
+    hay que cambiarlos del otro.
+
+QUIÉN LOS USA
+    BleTransport (transport.py) y MasterConnection (discovery.py).
 """
 
 # UUIDs en formato de 128 bits (base BLE)

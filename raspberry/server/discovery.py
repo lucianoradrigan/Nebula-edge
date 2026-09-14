@@ -1,6 +1,28 @@
-"""Descubrimiento BLE: encuentra devices, les manda su config inicial y les abre una sesión.
+"""Descubrimiento BLE de los nodos y arranque de su sesión.
 
-Movido desde classes.py sin cambios de lógica.
+UTILIDAD PRINCIPAL
+    Es la puerta de entrada de todo dispositivo al sistema. Escanea anuncios
+    BLE sin parar y, por cada ESP32 que reconoce como propio, hace el
+    handshake inicial y le abre una sesión.
+
+FLUJO POR DISPOSITIVO DESCUBIERTO
+    1. Filtra el anuncio por nombre y manufacturer data (`_is_target_advertisement`).
+    2. Busca su configuración en Postgres usando la MAC como id_device.
+    3. Se conecta por BLE y escribe la config en la característica A.
+    4. Registra la conexión en la tabla `log`.
+    5. Lanza una task de sesión (`dispatch.handle_protocol`) y vuelve a escanear.
+
+CONCURRENCIA
+    Cada dispositivo corre en su propia task de asyncio, así que varios nodos
+    avanzan en paralelo. `active_tasks` evita abrir dos sesiones para el mismo
+    device y `last_connect_attempt` impone un cooldown entre reintentos.
+
+CUIDADO CON EL SCANNER
+    bleak recomienda no escanear mientras se establece una conexión, así que
+    el escaneo se detiene antes de conectar y se reactiva después. Como las
+    sesiones BLE también necesitan pausarlo, el acceso va protegido por
+    `scanner_lock` y los callbacks `_scanner_stop`/`_scanner_start` se le
+    pasan a la sesión.
 """
 from __future__ import annotations
 import asyncio

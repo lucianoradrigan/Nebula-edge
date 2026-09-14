@@ -1,23 +1,24 @@
-"""Comparación de versiones de configuración (device vs BD vs sesión).
+"""Decisión sobre la configuración de un device: qué hacer con las versiones que no calzan.
 
-Extrae la lógica que estaba copiada 4 veces (MQTT/UDP/TCP/BLE), por
-ejemplo en lo que hoy es ProtocolSession._session_loop() (sessions.py):
+UTILIDAD PRINCIPAL
+    `ConfigResolver.evaluate()` compara tres versiones de configuración -la que
+    el device dice tener aplicada, la que hay en la BD, y la que esta sesión ya
+    le envió- y devuelve una de tres decisiones:
 
-    applied_version = data.config_version_applied
-    if applied_version > db_config.config_version:
-        ...cerrar sesión para reconfigurar...
-    elif applied_version < db_config.config_version:
-        if db_config.config_version <= self.config.config_version:
-            ...ya se envió, esperar...
-        else:
-            ...enviar nueva config + esperar ACK...
-    else:
-        ...al día, seguir recibiendo telemetría...
+        APPLIED_NEWER   el device ya aplicó algo más nuevo de lo que la sesión
+                        creía: hay que cerrar y volver a decidir el protocolo
+        ALREADY_SENT    la config nueva ya se le mandó; falta que la aplique,
+                        así que solo hay que esperar
+        PUSH            hay una versión nueva en la BD que todavía no se envía
 
-`ConfigResolver.evaluate()` es una función pura (sin I/O, sin acceso a BD):
-toma la versión que el device dice tener aplicada y las dos versiones de
-referencia, y devuelve una decisión. Así se puede testear con paquetes/
-objetos en memoria, sin Postgres ni hardware de por medio.
+    Las tres versiones se comparan porque ninguna sola alcanza: la del device
+    dice qué está corriendo, la de la BD qué debería correr, y la de la sesión
+    evita reenviar en loop una config que ya se empujó y aún no se confirma.
+
+ES UNA FUNCIÓN PURA
+    No toca la base de datos ni la red: recibe los objetos ya cargados y
+    devuelve una decisión. Por eso se puede testear con dataclasses en memoria,
+    sin Postgres ni hardware de por medio.
 """
 from __future__ import annotations
 from dataclasses import dataclass

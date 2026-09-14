@@ -1,20 +1,36 @@
 """Contrato de transporte: lo único que cambia de verdad entre protocolos.
 
-Un `Transport` solo mueve bytes: abrir, recibir, enviar, cerrar. Todo lo
-demás -timeouts, sondeo proactivo de la BD, comparación de versiones de
-config, handshake de ACK, deep sleep- vive una sola vez en
-`ProtocolSession` (sessions.py), compartido por todos los protocolos.
+UTILIDAD PRINCIPAL
+    Definir `Transport` -la interfaz mínima que un protocolo debe cumplir para
+    mover bytes: abrir, recibir, enviar, cerrar- e implementar las cuatro
+    variantes que usa el sistema:
 
-La idea es que agregar un protocolo nuevo (CoAP, LoRa, el que sea) sea:
+        UdpTransport    socket sin conexión; escucha en udp_port
+        TcpTransport    socket de escucha que acepta una conexión y la reabre
+        MqttTransport   cliente compartido del proceso (mqtt.py), colas por device
+        BleTransport    GATT sobre bleak; notificaciones en vez de sockets
 
-    1. escribir un Transport nuevo acá,
+    Todo lo demás -timeouts, sondeo de la BD, comparación de versiones de
+    config, handshake del ACK, deep sleep- NO vive acá: vive una sola vez en
+    `ProtocolSession` (sessions.py).
+
+AGREGAR UN PROTOCOLO NUEVO (CoAP, LoRa, el que sea)
+    1. escribir un Transport nuevo en este archivo,
     2. `class CoAPDeviceSession(ProtocolSession): transport_cls = CoapTransport`,
-    3. una línea en el dict `session_classes` de handle_protocol.
+    3. una línea en el dict `session_classes` de dispatch.py.
 
-...en vez de copiar ~140 líneas de una sesión existente y ajustarlas. Ese
-copy-paste ya costó caro en este repo: el `if/if/else` que dejaba la
-revisión de config inalcanzable existía en BLE y parcialmente en UDP/TCP,
-pero no en MQTT, porque las cuatro sesiones derivaron por separado.
+PUNTOS DEL CONTRATO, Y QUÉ PROTOCOLO LOS PIDIÓ
+    reopens                     el enlace se corta y hay que reabrirlo (TCP, BLE)
+    can_send                    no siempre se puede responder (UDP sin peer aún)
+    ack_window_sec              ventana de ACK propia del protocolo (BLE)
+    confirm_config_applied()    confirmar por una segunda vía (BLE lee char D/A)
+
+DETALLE IMPORTANTE DE recv()
+    La tarea de lectura se guarda entre llamadas (`self._pending`) en vez de
+    cancelarse cuando vence el timeout. Cancelarla descarta el paquete que
+    llegó justo en el borde: `asyncio.wait_for` tira el resultado ya recibido
+    si el timeout salta en la misma iteración del event loop. Es pérdida real
+    de telemetría, medida en ~1 de cada 3 paquetes en ese caso límite.
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod

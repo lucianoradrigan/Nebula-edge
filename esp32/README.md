@@ -102,6 +102,43 @@ Comportamiento:
 3. No conecta por WiFi en TCP/UDP/MQTT:
 - Verificar `ssid`, `passwd` y `host_ip_addr` entregados por la Raspberry.
 
-## 9) Relación con la documentación general
+## 9) Estructura del firmware
+
+El proyecto sigue la organización estándar de ESP-IDF: `main/` orquesta y cada
+pieza reutilizable vive en `components/`.
+
+`main/main.c` es el orquestador: crea las colas de FreeRTOS, decide si la
+configuración viene de NVS (al despertar de deep sleep) o de BLE (en arranque
+en frío), levanta las tasks de sensores y la del protocolo activo, y maneja el
+ciclo de deep sleep.
+
+Componentes, por rol:
+
+| Rol | Componentes |
+|---|---|
+| Drivers de sensor | `bme688` (ambiental), `bmi270` (IMU), `bmm350` (magnetómetro) |
+| Buses y expansión | `nebulaedge_i2c`, `nebulaedge_spi`, `fxl6408` (expansor de I/O) |
+| Protocolos de salida | `nebulaedge_mqtt`, `nebulaedge_udp`, `nebulaedge_tcp`, `nebulaedge_ble` |
+| Red | `nebulaedge_wifi` |
+| Datos | `nebulaedge_proto_schema` (schema.proto + generado), `nebulaedge_datacodec` |
+| Almacenamiento local | `nebulaedge_microsd` (montar/desmontar), `nebulaedge_sdstorage` (escritura de paquetes) |
+| Definiciones compartidas | `nebulaedge_defs` |
+
+Notas:
+
+- `nebulaedge_ble` cumple doble rol: es el canal por el que llega la
+  configuración inicial (siempre), y además uno de los cuatro protocolos de
+  telemetría (cuando `protocol_conf = 3`).
+- Los UUIDs del servicio GATT deben coincidir con los declarados en
+  [raspberry/server/ble.py](../raspberry/server/ble.py).
+- `schema.proto` está duplicado a propósito entre firmware y servidor: son dos
+  copias del mismo contrato y se editan juntas. Para regenerar el código C, ver
+  [components/nebulaedge_proto_schema/README.md](components/nebulaedge_proto_schema/README.md).
+- El almacenamiento en microSD está en desarrollo (ver limitaciones en el
+  README de la raíz).
+
+## 10) Relación con la documentación general
 
 - Guía completa del sistema: `README.md` (raíz).
+- Módulos del servidor y cómo agregar un protocolo nuevo: sección 7 del README
+  de la raíz.

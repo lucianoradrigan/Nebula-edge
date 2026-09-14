@@ -1,15 +1,41 @@
+"""Cliente MQTT compartido por todo el proceso, con una cola por dispositivo.
+
+UTILIDAD PRINCIPAL
+    Mantener UNA sola conexión al broker para todo el servidor -no una por
+    device- y repartir lo que llega en colas separadas según el tópico:
+
+        /topic/nebulaedge/{id}/data         -> cola de datos de ese device
+        /topic/nebulaedge/{id}/config/ack   -> cola de ACK de ese device
+
+    `MqttTransport` (transport.py) es el único consumidor: llama a
+    `mqtt_start()` y después lee de las dos colas de su device.
+
+CICLO DE VIDA: UN RECURSO DEL PROCESO, NO DE LA SESIÓN
+    `mqtt_start()` es idempotente: conecta la primera vez y no hace nada las
+    siguientes, así que cada sesión que arranca puede llamarlo sin coordinarse
+    con las demás.
+
+    `mqtt_shutdown()` es para el apagado del servidor completo. El cierre de la
+    sesión de un device NO debe llamarlo: dejaría sin broker a todos los demás
+    devices que estén usando MQTT en ese momento.
+
+POR QUÉ COLAS SINCRÓNICAS Y NO asyncio.Queue
+    Las llena el hilo interno de paho (`loop_start()`), que no es el event loop
+    de asyncio y no puede tocar sus estructuras de forma segura. El transporte
+    las consume sin bloquear, haciendo `get_nowait()` cada pocos milisegundos.
+"""
 import paho.mqtt.client as mqtt
 import queue
 import threading
 from typing import Dict
 
 mqttc = None
-packet_queue = queue.Queue()
-device_queues: Dict[str, queue.Queue] = {}
-ack_queues: Dict[str, queue.Queue] = {}
+packet_queue = queue.Queue()        # Fallback: mensajes cuyo tópico no trae id_device
+device_queues: Dict[str, queue.Queue] = {}   # Telemetría, por device
+ack_queues: Dict[str, queue.Queue] = {}      # ACK de config, por device
 
-# Guarda del estado del cliente compartido (ver mqtt_start/mqtt_shutdown más
-# abajo): el cliente MQTT es un único recurso por proceso, no por device.
+# El cliente es un único recurso por proceso: el lock protege el arranque
+# contra dos sesiones que lo pidan al mismo tiempo (ver mqtt_start).
 _mqtt_lock = threading.Lock()
 _mqtt_started = False
 
@@ -86,19 +112,15 @@ def get_ack_queue(device_id: str) -> queue.Queue:
 def mqtt_start():
     """Inicia el cliente MQTT compartido si todavía no está corriendo.
 
-    Idempotente a propósito. Antes, MQTTDeviceSession.run() llamaba esto al
-    entrar cada vez que CUALQUIER device pasaba a protocolo MQTT: cada
-    llamada reinstanciaba `mqttc`, pisando el cliente que ya estuviera
-    usando otro device. El cliente viejo quedaba conectado con su hilo de
-    loop_start() corriendo para siempre (nadie más tenía la referencia para
-    detenerlo), y si esa otra sesión llamaba después a mqtt_shutdown(),
-    apagaba la conexión de TODOS los devices, no solo la suya.
+    Idempotente a propósito: cualquier sesión que pase a protocolo MQTT lo
+    llama al entrar, sin coordinarse con las demás. Si reinstanciara el
+    cliente en cada llamada, pisaría el que ya estuvieran usando otros
+    devices, y ese cliente huérfano quedaría conectado con su hilo de
+    loop_start() corriendo para siempre, sin nadie que lo pueda detener.
 
-    El cliente MQTT es un recurso compartido por proceso, no por sesión: ya
-    enruta por device vía tópicos wildcard (/topic/nebulaedge/+/...) y las
-    colas por device_id de este módulo. Por eso ahora arranca una sola vez
-    y las sesiones individuales no lo apagan al terminar (ver
-    mqtt_shutdown).
+    Un solo cliente alcanza porque la separación por device ya está resuelta
+    más arriba: se suscribe con wildcards (/topic/nebulaedge/+/...) y reparte
+    en las colas por device_id de este módulo.
     """
     global mqttc, _mqtt_started
     if _mqtt_started:
@@ -118,8 +140,8 @@ def mqtt_start():
 def mqtt_shutdown():
     """Detiene el cliente MQTT compartido y su hilo de loop_start().
 
-    Pensada para el apagado del proceso completo, no para el fin de la
-    sesión de un device individual (que ya no la llama): ver mqtt_start.
+    Solo para el apagado del proceso completo. Llamarla al terminar la sesión
+    de un device dejaría sin broker a todos los demás que estén usando MQTT.
     """
     global mqttc, _mqtt_started
     with _mqtt_lock:

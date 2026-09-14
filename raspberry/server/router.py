@@ -1,36 +1,32 @@
-"""Decodifica paquetes tipados de telemetría y los persiste.
+"""Clasificación de los paquetes que llegan del device, y persistencia de la telemetría.
 
-Extrae el bloque que estaba copiado 6 veces (MQTT/UDP/TCP/BLE), por
-ejemplo en lo que hoy es ProtocolSession._session_loop() (sessions.py):
+UTILIDAD PRINCIPAL
+    `PacketRouter.route()` recibe los bytes crudos de un paquete y responde qué
+    eran, en forma de `PacketOutcome`:
 
-    data, data_type = DataCodec.deserialize_typed_packet(packet)
-    if data == None or data_type == -1:
-        continue
-    if data_type == DataCodec.TYPE_DATA_1:
-        print(f"UDP: Paquete Data_1 recibido de {self.device_id}")
-        await self.database_repo.insert_data_1_async(data)
-    elif data_type == DataCodec.TYPE_DATA_2:
-        print(f"UDP: Paquete Data_2 recibido de {self.device_id}")
-        await self.database_repo.insert_data_2_async(data)
-    elif data_type == DataCodec.TYPE_DEEP_SLEEP:
-        continue
-    else:
-        continue
+        TELEMETRY    era Data_1 o Data_2; ya quedó insertado en la BD
+        DEEP_SLEEP   el device avisa que se va a dormir
+        IGNORED      no se pudo decodificar, o no es un tipo conocido
 
-`PacketRouter.route()` hace la parte que es igual en las 6 sesiones:
-decodificar + loggear + insertar (o reconocer deep sleep / descartar
-basura). Lo que cada sesión hace DESPUÉS (seguir esperando, comparar
-versión de config, cerrar la sesión) se queda fuera: eso es control de
-flujo propio de cada transporte y vive en DeviceSession/ConfigResolver.
+DÓNDE TERMINA SU RESPONSABILIDAD
+    Decodificar, loggear e insertar. Lo que la sesión haga DESPUÉS con esa
+    respuesta -seguir escuchando, reabrir el enlace, comparar versiones de
+    config, cerrar la sesión- queda deliberadamente afuera: eso es control de
+    flujo y vive en `ProtocolSession` (sessions.py).
 
-`_update_last_client_time` tampoco vive acá: es estado de la sesión (cuál
-fue el último time_client visto), no algo de "enrutar un paquete". El
-caller lee `RoutedPacket.data.time_client` si lo necesita.
+    Tampoco lleva la cuenta del último `time_client` visto: eso es estado de la
+    sesión, no del enrutado. El caller lo lee de `RoutedPacket.data` si lo
+    necesita.
 
-A diferencia de un primer borrador de esta idea, `route()` es async: las
-inserciones pasan por `insert_data_1_async`/`insert_data_2_async`
-(asyncio.to_thread por debajo), para no bloquear el event loop en cada
-paquete. `TelemetryRepository` refleja eso en su firma.
+POR QUÉ ES ASYNC
+    Las inserciones pasan por los envoltorios `*_async` del repositorio
+    (asyncio.to_thread por debajo) para no bloquear el event loop en cada
+    paquete recibido. `TelemetryRepository` refleja eso en su firma.
+
+DESACOPLADO DE POSTGRES
+    `TelemetryRepository` es el contrato mínimo que necesita: cualquier objeto
+    con esos dos métodos sirve. `DatabaseRepository` lo cumple sin heredar de
+    él, y los tests le pasan un doble en memoria.
 """
 from __future__ import annotations
 from dataclasses import dataclass

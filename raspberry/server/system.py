@@ -1,9 +1,38 @@
-"""Todo lo que habla con el SO/host (reloj, adaptador BLE, WiFi vía nmcli).
+"""Todo lo que el servidor le pregunta al sistema operativo del host.
 
-Movido desde classes.py sin cambios de lógica. Se llama "system.py" y no
-"platform.py" a propósito: un módulo local platform.py taparía el módulo
-estándar platform para todo el proceso (incluido bleak, que lo importa
-internamente).
+UTILIDAD PRINCIPAL
+    Aislar en un solo módulo las tres cosas que dependen de la máquina donde
+    corre el servidor, para que el resto del código no tenga que saber de
+    subprocess ni de comandos de Linux:
+
+        utc_epoch_now()      la hora actual, en epoch Unix UTC
+        BLEAdapterResolver   qué adaptador BLE usar (hciconfig / BLE_ADAPTER)
+        LocalWifiConfig      SSID, password e IP local del host, vía nmcli
+
+LOS DATOS DE WIFI NO SON PARA EL SERVIDOR
+    Viajan dentro de la configuración hacia el ESP32, que los necesita para
+    unirse a la misma red y poder hablar por UDP, TCP o MQTT. Por eso se leen
+    de la red a la que la Raspberry está conectada en ese momento, y por eso se
+    consultan con un cache corto: cambian poco, pero pueden cambiar.
+
+POR QUÉ UTC Y NO HORA LOCAL
+    `utc_epoch_now()` devuelve UTC real, sin sumarle el offset local. Es lo que
+    el device usa tal cual para su `settimeofday()`, y lo que la BD asume al
+    guardar los timestamps. Sumarle el offset produciría un número que no
+    corresponde a ningún instante real, y dejaría `time_client` y `time_server`
+    en escalas distintas dentro de una misma fila de `log`.
+
+POR QUÉ SE LLAMA system.py Y NO platform.py
+    Un módulo local llamado platform.py taparía el módulo estándar del mismo
+    nombre para todo el proceso, incluido bleak, que lo importa internamente.
+
+PORTABILIDAD
+    `hciconfig` (BlueZ) y `nmcli` (NetworkManager) solo existen en Linux. Fuera
+    de la Raspberry -por ejemplo corriendo el servidor en un Mac- esas llamadas
+    fallan en silencio: BLEAdapterResolver cae a su valor por defecto y
+    LocalWifiConfig devuelve SSID y password vacíos, con la IP resuelta por el
+    fallback de socket. El servidor arranca igual, pero los devices que usen
+    WiFi no van a recibir credenciales válidas.
 """
 from __future__ import annotations
 import os
@@ -15,20 +44,12 @@ import time
 def utc_epoch_now() -> int:
     """Retorna el epoch Unix actual (segundos UTC reales).
 
-    Antes se llamaba `local_epoch_now()` y devolvía
-    `int(time.time()) + offset_horario_local`: un número que NO es un
-    epoch real de ningún instante (le suma el desfase horario a un
-    valor que ya es UTC por definición). Ese valor viajaba como
-    `Config.time_client` hasta el device -que lo usa tal cual para
-    `settimeofday()`- y como `Log.time_server`/`ConfigData.time_client`
-    en la BD, donde `DatabaseRepository._int_to_db_datetime()` lo
-    vuelve a interpretar como UTC vía `datetime.utcfromtimestamp()`:
-    el desfase quedaba sumado una vez pero nunca restado, así que
-    `time_client` (epoch real, reportado por el device) y `time_server`
-    (epoch falso, calculado acá) terminaban en escalas distintas dentro
-    de la misma fila de `log`. `time.time()` ya es UTC por definición
-    -el epoch Unix no tiene huso horario-, así que no hay nada que
-    ajustar: todo el sistema (BD, firmware, logs) queda en UTC real.
+    El epoch Unix no tiene huso horario: `time.time()` ya es UTC por
+    definición, así que no hay ningún offset que sumar acá. Este valor viaja
+    como `ConfigData.time_client` hasta el device -que lo usa tal cual en su
+    `settimeofday()`- y como `Log.time_server` a la BD, donde se guarda con
+    `datetime.utcfromtimestamp()`. Todo el sistema (firmware, BD y logs) queda
+    en la misma escala.
     """
     return int(time.time())
 

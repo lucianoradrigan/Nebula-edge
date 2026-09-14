@@ -1,7 +1,31 @@
-"""Frontera con protobuf/schema_pb2: convierte entre los modelos neutros
-(models.py) y los bytes que viajan por BLE/MQTT/UDP/TCP.
+"""Frontera con protobuf: traduce entre los modelos del dominio y los bytes del cable.
 
-Movido desde classes.py sin cambios de lógica.
+UTILIDAD PRINCIPAL
+    `DataCodec` serializa y deserializa todo lo que viaja entre el servidor y
+    el ESP32, sea por BLE, MQTT, UDP o TCP. Es el único módulo que importa
+    `schema_pb2` (el código generado desde schema.proto), así que es también el
+    único lugar a tocar si cambia el formato de los mensajes.
+
+        hacia el device:   ConfigData -> bytes
+        desde el device:   bytes -> Data_1 | Data_2 | ConfigAckData | deep sleep
+
+PAQUETES TIPADOS
+    La telemetría viaja con un byte de tipo al principio, para poder saber qué
+    mensaje protobuf viene detrás sin intentar decodificarlos todos:
+
+        0x01  Data_1        ambiental + vibración procesada
+        0x02  Data_2        acelerómetro y giroscopio crudos
+        0x04  deep sleep    aviso de que el device se va a dormir
+
+    `deserialize_typed_packet()` es el punto de entrada de la telemetría: lee
+    ese byte y delega en el deserializador que corresponda. El ACK de config no
+    usa este esquema; va por `deserialize_config_ack()`.
+
+SINCRONIZACIÓN CON EL FIRMWARE
+    El schema tiene que calzar con el del firmware, en
+    esp32/components/nebulaedge_proto_schema/schema.proto. Son dos copias del
+    mismo contrato y se editan juntas; si se desincronizan, los paquetes
+    quedan ilegibles de un lado.
 """
 from __future__ import annotations
 import schema_pb2

@@ -1,5 +1,24 @@
-"""Dobles de prueba compartidos: repositorio en memoria, device BLE falso y
-constructores de paquetes/config. Nada de Postgres ni de hardware.
+"""Dobles de prueba compartidos por los cuatro tests de sesión.
+
+UTILIDAD PRINCIPAL
+    Dar a los tests todo lo que una sesión necesita de su entorno, sin levantar
+    nada externo:
+
+        FakeRepo        repositorio en memoria; cumple el mismo contrato que
+                        DatabaseRepository y guarda lo insertado en listas,
+                        para poder hacerle assert
+        FakeBLEDevice   lo mínimo que la sesión le pide a un BLEDevice de bleak
+                        (la dirección MAC)
+        free_port()     puerto libre del SO, para que dos tests en paralelo no
+                        choquen
+        make_config()   ConfigData armada, con la versión que pida el test
+        data_1_packet() / config_ack_packet()
+                        paquetes ya serializados, idénticos a los que mandaría
+                        el firmware
+
+    Los paquetes se construyen con el `DataCodec` real, no a mano: si cambia el
+    formato del protocolo, estos tests fallan, que es justamente lo que se
+    quiere.
 """
 from __future__ import annotations
 import socket

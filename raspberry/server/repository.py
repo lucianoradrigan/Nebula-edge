@@ -1,9 +1,32 @@
-"""Acceso a Postgres: pool de conexiones + las cuatro tablas de nebulaedge_schema.
+"""Acceso a Postgres: el único módulo del servidor que sabe que la BD existe.
 
-Movido desde classes.py sin cambios de lógica. DatabaseRepository es el
-único punto del server que sabe que existe Postgres; PacketRouter
-(router.py) lo consume por duck typing vía el Protocol
-`TelemetryRepository`, sin importar esta clase.
+UTILIDAD PRINCIPAL
+    Leer la configuración de cada dispositivo y escribir su telemetría y sus
+    logs, contra las cuatro tablas de `nebulaedge_schema`:
+
+        config    una fila por device; es la fuente de verdad de qué protocolo
+                  y qué parámetros de sensor le tocan
+        data_1    telemetría ambiental + vibración ya procesada
+        data_2    acelerómetro y giroscopio crudos
+        log       eventos de operación: conexión, heartbeat, desconexión
+
+USAR SIEMPRE LOS MÉTODOS *_async DESDE CORUTINAS
+    psycopg2 es bloqueante. Llamar `get_config()` directo desde una corutina
+    congela el event loop entero -y con él, las sesiones de todos los demás
+    devices- mientras dura la consulta. Los envoltorios `*_async` delegan en
+    `asyncio.to_thread` justamente para evitar eso.
+
+POOL DE CONEXIONES
+    Las conexiones salen de un pool compartido por DSN (`_connection()`), no de
+    un `psycopg2.connect()` por llamada. Con dos inserts por intervalo de envío
+    por device, abrir una conexión por insert agota el `max_connections` de
+    Postgres en minutos. El pool es de clase, no de instancia, porque esta
+    clase se instancia "al pasar" en varios puntos del código.
+
+ACOPLAMIENTO
+    `PacketRouter` (router.py) usa esta clase por duck typing, vía el Protocol
+    `TelemetryRepository`: nunca la importa. Por eso los tests le pueden pasar
+    un repositorio en memoria sin levantar Postgres.
 """
 from __future__ import annotations
 from contextlib import contextmanager
@@ -17,25 +40,21 @@ from system import utc_epoch_now, LocalWifiConfig
 
 
 class DatabaseRepository:
-    """Repositorio general para interactuar con la BD.
+    """Repositorio único de acceso a la base de datos.
 
-    OJO: antes cada método (get_config/insert_data_1/insert_data_2/insert_log)
-    hacía `with psycopg2.connect(self.db_dsn) as db:` por llamada. Ese "with"
-    de psycopg2 solo hace commit/rollback al salir, NO cierra la conexión: quedaba
-    una conexión abierta sin cerrar por cada paquete de telemetría insertado.
-    Con 2 inserts por send_interval_s por device (Data_1 + Data_2), eso agota
-    max_connections de Postgres en minutos. Ahora se pide/devuelve una conexión
-    de un pool compartido (ver _connection()), del mismo modo para todos los
-    métodos, sin cambiar ninguna de sus firmas ni la forma en que se instancia
-    DatabaseRepository en el resto del archivo.
+    Se instancia libremente donde se necesite -incluso "al pasar", como
+    `DatabaseRepository(dsn).insert_log_async(...)`- porque no guarda estado
+    propio: solo el DSN. Las conexiones salen del pool compartido de clase.
+
+    Cada operación existe en dos versiones con la misma firma: la sincrónica
+    (`get_config`) y la que hay que usar desde una corutina (`get_config_async`).
     """
 
-    # Un pool por DSN, compartido por todas las instancias de DatabaseRepository
-    # (el código de más abajo instancia esta clase "al pasar" en varios sitios,
-    # p.ej. `DatabaseRepository(self.db_dsn).insert_log_async(...)`; si el pool
-    # fuera de instancia, cada una de esas instancias efímeras abriría el suyo).
-    # ThreadedConnectionPool porque insert_*_async/get_config_async corren en
-    # threads del pool de asyncio.to_thread, no todos en el mismo hilo.
+    # Un pool por DSN, compartido por TODAS las instancias de esta clase: como
+    # se construyen instancias efímeras en varios puntos, un pool por instancia
+    # significaría abrir un pool nuevo cada vez.
+    # Es ThreadedConnectionPool y no SimpleConnectionPool porque los métodos
+    # *_async corren en hilos distintos del pool de asyncio.to_thread.
     _pools: dict[str, ThreadedConnectionPool] = {}
     _pools_lock = threading.Lock()
 
@@ -78,15 +97,14 @@ class DatabaseRepository:
 
     @staticmethod
     def _int_to_db_datetime(value: int) -> datetime:
-        """Convierte un epoch Unix (segundos, UTC real) a datetime naive UTC
-        para guardar en columnas TIMESTAMP (sin huso horario) de Postgres.
+        """Convierte un epoch Unix (segundos, UTC) al datetime naive que
+        esperan las columnas TIMESTAMP (sin huso horario) de Postgres.
 
-        Asume que `value` es un epoch UTC de verdad. Antes no lo era
-        siempre: `time_client` (del device) sí, pero `time_server`
-        (calculado acá con la vieja `local_epoch_now()`) traía sumado el
-        offset horario local, así que dos columnas de la misma fila de
-        `log` quedaban en escalas de tiempo distintas. Ver utc_epoch_now()
-        en system.py.
+        Asume que `value` es un epoch UTC real, no uno con el offset horario
+        local ya sumado. Todo el sistema trabaja en UTC justamente para que
+        columnas como `time_client` (que viene del device) y `time_server`
+        (calculado en el servidor con `utc_epoch_now()`, system.py) queden en
+        la misma escala dentro de una misma fila.
         """
         return datetime.utcfromtimestamp(int(value))
 
