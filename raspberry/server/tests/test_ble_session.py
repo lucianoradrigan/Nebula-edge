@@ -1,7 +1,7 @@
 """Tests de integración de la sesión BLE (ProtocolSession + BleTransport).
 
 No hay hardware ni bleak real: se reemplaza BleakClient por un doble que deja
-disparar notificaciones a mano y responde las lecturas de características.
+disparar notificaciones a mano y responde las reads de características.
 
 OJO con el alcance: esto verifica el cableado (notificación -> cola -> ruteo ->
 insert; escritura de config -> ACK; reconciliación leyendo char D/A; deep sleep
@@ -39,23 +39,23 @@ def quick_timeouts(**overrides) -> Timeouts:
 
 
 class FakeBleakClient:
-    """Doble de BleakClient. La instancia viva queda en `ultima` para que el
+    """Doble de BleakClient. La instancia viva queda en `last_instance` para que el
     test pueda disparar notificaciones como si fuera el ESP32."""
 
-    ultima: "FakeBleakClient | None" = None
-    fallar_al_conectar = False
+    last_instance: "FakeBleakClient | None" = None
+    fail_to_connect = False
 
     def __init__(self, device, adapter=None):
         self.device = device
         self.adapter = adapter
         self.is_connected = False
-        self.escrituras: list[tuple[str, bytes]] = []
-        self.lecturas: dict[str, bytes] = {}
+        self.writes: list[tuple[str, bytes]] = []
+        self.reads: dict[str, bytes] = {}
         self._callbacks: dict[str, callable] = {}
-        FakeBleakClient.ultima = self
+        FakeBleakClient.last_instance = self
 
     async def connect(self):
-        if FakeBleakClient.fallar_al_conectar:
+        if FakeBleakClient.fail_to_connect:
             raise OSError("no se pudo conectar (simulado)")
         self.is_connected = True
 
@@ -69,21 +69,21 @@ class FakeBleakClient:
         self._callbacks.pop(uuid, None)
 
     async def write_gatt_char(self, uuid, data, response=False):
-        self.escrituras.append((uuid, bytes(data)))
+        self.writes.append((uuid, bytes(data)))
 
     async def read_gatt_char(self, uuid):
-        if uuid not in self.lecturas:
+        if uuid not in self.reads:
             raise OSError(f"característica {uuid} no legible (simulado)")
-        return self.lecturas[uuid]
+        return self.reads[uuid]
 
-    def notificar(self, uuid, payload: bytes):
+    def emit_notification(self, uuid, payload: bytes):
         """Simula que el ESP32 manda una notificación por esa característica."""
         cb = self._callbacks.get(uuid)
         if cb is not None:
             cb(None, bytearray(payload))
 
-    def config_escrita(self):
-        for uuid, data in self.escrituras:
+    def written_config(self):
+        for uuid, data in self.writes:
             if uuid == UUID_CHAR_A:
                 return DataCodec.deserialize_config(data)
         return None
@@ -92,8 +92,8 @@ class FakeBleakClient:
 class BleSessionTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
-        FakeBleakClient.ultima = None
-        FakeBleakClient.fallar_al_conectar = False
+        FakeBleakClient.last_instance = None
+        FakeBleakClient.fail_to_connect = False
         p = mock.patch.object(transport, "BleakClient", FakeBleakClient)
         p.start()
         self.addCleanup(p.stop)
@@ -113,110 +113,110 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
         return False
 
-    async def _sesion_conectada(self, repo, timeouts=None):
+    async def _connected_session(self, repo, timeouts=None):
         task = asyncio.create_task(self._build_session(repo, timeouts or quick_timeouts()).run())
         self.addCleanup(task.cancel)
-        self.assertTrue(await self._wait_until(lambda: FakeBleakClient.ultima is not None
-                                               and FakeBleakClient.ultima.is_connected),
+        self.assertTrue(await self._wait_until(lambda: FakeBleakClient.last_instance is not None
+                                               and FakeBleakClient.last_instance.is_connected),
                         "la sesión nunca se conectó")
-        return task, FakeBleakClient.ultima
+        return task, FakeBleakClient.last_instance
 
-    def test_ble_session_usa_la_sesion_generica(self):
+    def test_ble_session_uses_generic_session(self):
         self.assertTrue(issubclass(sessions.BLEDeviceSession, sessions.ProtocolSession))
         self.assertEqual(sessions.BLEDeviceSession.transport_cls.__name__, "BleTransport")
 
-    async def test_al_conectar_avisa_por_la_caracteristica_C(self):
+    async def test_writes_start_on_char_c_when_connecting(self):
         """El 'start' en char C libera el semáforo del firmware."""
         repo = FakeRepo(db_version=1)
-        _, client = await self._sesion_conectada(repo)
+        _, client = await self._connected_session(repo)
         self.assertTrue(await self._wait_until(
-            lambda: any(u == UUID_CHAR_C and d == b"start" for u, d in client.escrituras)))
+            lambda: any(u == UUID_CHAR_C and d == b"start" for u, d in client.writes)))
 
-    async def test_telemetria_por_notificacion_se_inserta(self):
+    async def test_telemetry_from_notification_is_inserted(self):
         repo = FakeRepo(db_version=1)
-        task, client = await self._sesion_conectada(repo)
+        task, client = await self._connected_session(repo)
 
-        client.notificar(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
 
         self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
         self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
         self.assertFalse(task.done())
 
-    async def test_config_nueva_se_escribe_en_A_y_el_ack_llega_por_D(self):
+    async def test_new_config_written_to_char_a_and_ack_arrives_on_char_d(self):
         repo = FakeRepo(db_version=1)
-        task, client = await self._sesion_conectada(repo)
+        task, client = await self._connected_session(repo)
 
-        client.notificar(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
         self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
 
         repo.db_version = 2
-        client.notificar(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
 
-        self.assertTrue(await self._wait_until(lambda: client.config_escrita() is not None),
+        self.assertTrue(await self._wait_until(lambda: client.written_config() is not None),
                         "no se escribió la config nueva en la característica A")
-        self.assertEqual(client.config_escrita().config_version, 2)
+        self.assertEqual(client.written_config().config_version, 2)
 
         # El device responde el ACK por notificación en D
-        client.notificar(UUID_CHAR_D, config_ack_packet(version=2))
+        client.emit_notification(UUID_CHAR_D, config_ack_packet(version=2))
 
         result = await asyncio.wait_for(task, timeout=5.0)
         self.assertIsNotNone(result)
         self.assertEqual(result.config_version, 2)
 
-    async def test_si_se_pierde_el_notify_del_ack_se_reconcilia_leyendo_D(self):
+    async def test_reconciles_by_reading_char_d_when_ack_notify_is_lost(self):
         """Lo propio de BLE: el device deja el ACK legible en char D, así que
         aunque se pierda la notificación se puede confirmar preguntando."""
         repo = FakeRepo(db_version=1)
-        task, client = await self._sesion_conectada(repo)
+        task, client = await self._connected_session(repo)
 
         # El device ya aplicó la v2 y dejó el ACK legible, pero NO notifica
-        client.lecturas[UUID_CHAR_D] = config_ack_packet(version=2)
+        client.reads[UUID_CHAR_D] = config_ack_packet(version=2)
 
         repo.db_version = 2
-        client.notificar(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
 
         result = await asyncio.wait_for(task, timeout=10.0)
         self.assertIsNotNone(result, "la reconciliación por char D debía confirmar la config")
         self.assertEqual(result.config_version, 2)
 
-    async def test_reconciliacion_por_char_A_si_D_no_sirve(self):
+    async def test_reconciles_by_reading_char_a_when_char_d_unavailable(self):
         """Segunda vía: la config aplicada que el device deja legible en char A."""
         repo = FakeRepo(db_version=1)
-        task, client = await self._sesion_conectada(repo)
+        task, client = await self._connected_session(repo)
 
         # D no responde; A sí, con la config v2 ya aplicada
-        client.lecturas[UUID_CHAR_A] = DataCodec.serialize_config(make_config(2))
+        client.reads[UUID_CHAR_A] = DataCodec.serialize_config(make_config(2))
 
         repo.db_version = 2
-        client.notificar(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
 
         result = await asyncio.wait_for(task, timeout=10.0)
         self.assertIsNotNone(result, "la reconciliación por char A debía confirmar la config")
         self.assertEqual(result.config_version, 2)
 
-    async def test_deep_sleep_reconecta(self):
+    async def test_deep_sleep_reconnects(self):
         """El aviso de deep sleep corta el enlace; la sesión reabre y se reconecta."""
         repo = FakeRepo(db_version=1)
-        task, client = await self._sesion_conectada(repo)
-        primero = client
+        task, client = await self._connected_session(repo)
+        first = client
 
-        client.notificar(UUID_CHAR_B, DEEP_SLEEP_PACKET)
+        client.emit_notification(UUID_CHAR_B, DEEP_SLEEP_PACKET)
 
         # Se crea un cliente nuevo al reconectar
         self.assertTrue(await self._wait_until(
-            lambda: FakeBleakClient.ultima is not None and FakeBleakClient.ultima is not primero),
+            lambda: FakeBleakClient.last_instance is not None and FakeBleakClient.last_instance is not first),
             "tras el deep sleep no se reconectó")
         self.assertFalse(task.done(), "la sesión debía seguir viva tras reconectar")
 
-    async def test_si_no_conecta_la_sesion_termina(self):
-        FakeBleakClient.fallar_al_conectar = True
+    async def test_session_ends_when_connection_fails(self):
+        FakeBleakClient.fail_to_connect = True
         repo = FakeRepo(db_version=1)
         result = await asyncio.wait_for(
             self._build_session(repo, quick_timeouts()).run(), timeout=10.0,
         )
         self.assertIsNone(result)
 
-    async def test_reutiliza_la_conexion_del_descubrimiento(self):
+    async def test_reuses_discovery_connection(self):
         """Si el descubrimiento entrega una conexión viva, la sesión la adopta
         en vez de abrir otra: reconectar cuesta otro descubrimiento de
         servicios en BlueZ, que es la parte cara."""
@@ -233,18 +233,18 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
 
         # El "start" tiene que salir por la conexión adoptada
         self.assertTrue(await self._wait_until(
-            lambda: any(u == UUID_CHAR_C and d == b"start" for u, d in adopted.escrituras)),
+            lambda: any(u == UUID_CHAR_C and d == b"start" for u, d in adopted.writes)),
             "no se usó la conexión entregada por el descubrimiento")
 
         # Y no debe haberse construido ningún cliente nuevo
-        self.assertIs(FakeBleakClient.ultima, adopted,
+        self.assertIs(FakeBleakClient.last_instance, adopted,
                       "se abrió una conexión nueva teniendo una viva")
 
         # La telemetría fluye por esa misma conexión
-        adopted.notificar(UUID_CHAR_B, data_1_packet(applied_version=1))
+        adopted.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
         self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
 
-    async def test_tras_deep_sleep_no_reusa_la_conexion_vieja(self):
+    async def test_does_not_reuse_stale_connection_after_deep_sleep(self):
         """La conexión adoptada sirve una sola vez: si el device se duerme y el
         enlace se corta, reabrir tiene que conectar de nuevo."""
         repo = FakeRepo(db_version=1)
@@ -257,12 +257,12 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.addCleanup(task.cancel)
         self.assertTrue(await self._wait_until(
-            lambda: any(u == UUID_CHAR_C for u, _ in adopted.escrituras)))
+            lambda: any(u == UUID_CHAR_C for u, _ in adopted.writes)))
 
-        adopted.notificar(UUID_CHAR_B, DEEP_SLEEP_PACKET)
+        adopted.emit_notification(UUID_CHAR_B, DEEP_SLEEP_PACKET)
 
         self.assertTrue(await self._wait_until(
-            lambda: FakeBleakClient.ultima is not None and FakeBleakClient.ultima is not adopted),
+            lambda: FakeBleakClient.last_instance is not None and FakeBleakClient.last_instance is not adopted),
             "tras el deep sleep se reusó la conexión vieja en vez de reconectar")
         self.assertFalse(task.done(), "la sesión debía seguir viva tras reconectar")
 

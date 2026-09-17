@@ -93,11 +93,11 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.2)
         return None
 
-    def test_tcp_session_usa_la_sesion_generica(self):
+    def test_tcp_session_uses_generic_session(self):
         self.assertTrue(issubclass(sessions.TCPDeviceSession, sessions.ProtocolSession))
         self.assertEqual(sessions.TCPDeviceSession.transport_cls.__name__, "TcpTransport")
 
-    async def test_telemetria_se_inserta_y_la_sesion_sigue_viva(self):
+    async def test_telemetry_is_inserted_and_session_stays_alive(self):
         port = free_port(socket.SOCK_STREAM)
         repo = FakeRepo(db_version=1, tcp_port=port)
         task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
@@ -112,7 +112,7 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
         self.assertFalse(task.done(), "la sesión no debía cerrar con la config al día")
 
-    async def test_config_nueva_en_bd_se_empuja_y_se_confirma_con_ack(self):
+    async def test_new_config_in_db_is_pushed_and_confirmed_with_ack(self):
         port = free_port(socket.SOCK_STREAM)
         repo = FakeRepo(db_version=1, tcp_port=port)
         task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
@@ -137,7 +137,7 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.config_version, 2)
 
-    async def test_deep_sleep_reabre_el_socket_y_acepta_al_device_de_vuelta(self):
+    async def test_deep_sleep_reopens_socket_and_accepts_device_back(self):
         """Lo propio de TCP: el aviso de deep sleep corta la conexión, la sesión
         reabre el socket y el device vuelve a conectarse al despertar."""
         port = free_port(socket.SOCK_STREAM)
@@ -161,7 +161,7 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(dev2, "tras el deep sleep la sesión no volvió a aceptar al device")
         self.assertFalse(task.done(), "la sesión debía seguir viva tras reabrir")
 
-    async def test_device_que_cierra_la_conexion_hace_reabrir_no_terminar(self):
+    async def test_device_closing_connection_reopens_instead_of_ending(self):
         """Un corte sin aviso (el device se cae) también reabre, no mata la sesión."""
         port = free_port(socket.SOCK_STREAM)
         repo = FakeRepo(db_version=1, tcp_port=port)
@@ -180,7 +180,7 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(dev2, "tras el corte la sesión no volvió a aceptar al device")
 
-    async def test_sin_device_que_se_conecte_la_sesion_cierra(self):
+    async def test_session_closes_when_no_device_connects(self):
         port = free_port(socket.SOCK_STREAM)
         repo = FakeRepo(db_version=1, tcp_port=port)
         timeouts = quick_timeouts(no_data_grace_sec=1.0)

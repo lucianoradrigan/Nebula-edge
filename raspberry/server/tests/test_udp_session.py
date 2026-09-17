@@ -63,12 +63,12 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
         return False
 
-    def test_udp_session_usa_la_sesion_generica(self):
+    def test_udp_session_uses_generic_session(self):
         """UDPDeviceSession debe ser solo ProtocolSession + UdpTransport."""
         self.assertTrue(issubclass(sessions.UDPDeviceSession, sessions.ProtocolSession))
         self.assertEqual(sessions.UDPDeviceSession.transport_cls.__name__, "UdpTransport")
 
-    async def test_telemetria_se_inserta_y_la_sesion_sigue_viva(self):
+    async def test_telemetry_is_inserted_and_session_stays_alive(self):
         port = free_port()
         repo = FakeRepo(db_version=1, udp_port=port)
         task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
@@ -85,7 +85,7 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
         self.assertFalse(task.done(), "la sesión no debía cerrar con la config al día")
 
-    async def test_config_nueva_en_bd_se_empuja_y_se_confirma_con_ack(self):
+    async def test_new_config_in_db_is_pushed_and_confirmed_with_ack(self):
         port = free_port()
         repo = FakeRepo(db_version=1, udp_port=port)
         task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
@@ -116,7 +116,7 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result, "run() debía devolver la config aplicada")
         self.assertEqual(result.config_version, 2)
 
-    async def test_push_proactivo_sin_telemetria_entrante(self):
+    async def test_proactive_push_without_incoming_telemetry(self):
         """La sesión detecta el cambio de config sondeando la BD, sin depender
         de que llegue telemetría nueva."""
         port = free_port()
@@ -145,7 +145,7 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(task, timeout=5.0)
         self.assertEqual(result.config_version, 2)
 
-    async def test_sin_device_no_intenta_empujar_y_cierra_por_timeout(self):
+    async def test_without_device_does_not_push_and_closes_on_timeout(self):
         """can_send=False mientras el device no haya escrito: no se puede
         responder a nadie, así que la sesión solo espera y cierra."""
         port = free_port()
@@ -157,7 +157,7 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(session.run(), timeout=15.0)
         self.assertIsNone(result, "sin device al otro lado la sesión debía cerrar con None")
 
-    async def test_el_socket_se_libera_al_terminar_la_sesion(self):
+    async def test_socket_is_released_when_session_ends(self):
         port = free_port()
         repo = FakeRepo(db_version=1, udp_port=port)
         timeouts = quick_timeouts(no_data_grace_sec=1.0)
