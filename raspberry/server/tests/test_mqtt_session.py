@@ -18,7 +18,7 @@ from codec import DataCodec
 from models import Timeouts
 from tests.fakes import (
     DEEP_SLEEP_PACKET, DEVICE_ID, FakeBLEDevice, FakeRepo,
-    config_ack_packet, data_1_packet, make_config,
+    config_ack_packet, environmental_packet, make_config,
 )
 
 
@@ -75,10 +75,10 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(self._build_session(repo, quick_timeouts()).run())
         self.addCleanup(task.cancel)
 
-        self.data_queue.put(data_1_packet(applied_version=1))
+        self.data_queue.put(environmental_packet(applied_version=1))
 
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
-        self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
+        self.assertEqual(repo.environmental[0].id_device, DEVICE_ID)
         self.assertFalse(task.done())
 
     async def test_new_config_is_published_and_ack_arrives_on_its_own_queue(self):
@@ -89,12 +89,12 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(self._build_session(repo, quick_timeouts()).run())
         self.addCleanup(task.cancel)
 
-        self.data_queue.put(data_1_packet(applied_version=1))
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
+        self.data_queue.put(environmental_packet(applied_version=1))
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
 
         # Cambia la config en la BD y llega telemetría con la versión vieja
         repo.db_version = 2
-        self.data_queue.put(data_1_packet(applied_version=1))
+        self.data_queue.put(environmental_packet(applied_version=1))
 
         self.assertTrue(await self._wait_until(lambda: len(self.published) >= 1),
                         "no se publicó la config nueva")
@@ -138,8 +138,8 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(task.done(), "un deep sleep no debía cerrar la sesión MQTT")
 
         # Sigue procesando telemetría después
-        self.data_queue.put(data_1_packet(applied_version=1))
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
+        self.data_queue.put(environmental_packet(applied_version=1))
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
 
     async def test_closes_on_timeout_without_messages(self):
         repo = FakeRepo(db_version=1)

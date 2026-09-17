@@ -813,7 +813,7 @@ void power_config(void) {
 
 /* Extrae datos de aceleración y giroscopio del sensor BMI270, los procesa 
  * e imprime en la salida estándar. Se puede implementar lectura de temperatura. */
-void readout_data_bmi270(Data2 *data) {
+void readout_data_bmi270(Inertial *data) {
     // No lee nada si el sensor está inactivo
     if (!is_bmi270_active) {
         ESP_LOGW(TAG, "Sensor BMI270 inactivo. Omitiendo lectura.");

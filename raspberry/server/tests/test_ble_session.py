@@ -22,7 +22,7 @@ from codec import DataCodec
 from models import Timeouts
 from tests.fakes import (
     DEEP_SLEEP_PACKET, DEVICE_ID, FakeBLEDevice, FakeRepo,
-    config_ack_packet, data_1_packet, make_config,
+    config_ack_packet, environmental_packet, make_config,
 )
 
 
@@ -136,21 +136,21 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         repo = FakeRepo(db_version=1)
         task, client = await self._connected_session(repo)
 
-        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, environmental_packet(applied_version=1))
 
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
-        self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
+        self.assertEqual(repo.environmental[0].id_device, DEVICE_ID)
         self.assertFalse(task.done())
 
     async def test_new_config_written_to_char_a_and_ack_arrives_on_char_d(self):
         repo = FakeRepo(db_version=1)
         task, client = await self._connected_session(repo)
 
-        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
+        client.emit_notification(UUID_CHAR_B, environmental_packet(applied_version=1))
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
 
         repo.db_version = 2
-        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, environmental_packet(applied_version=1))
 
         self.assertTrue(await self._wait_until(lambda: client.written_config() is not None),
                         "no se escribió la config nueva en la característica A")
@@ -173,7 +173,7 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         client.reads[UUID_CHAR_D] = config_ack_packet(version=2)
 
         repo.db_version = 2
-        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, environmental_packet(applied_version=1))
 
         result = await asyncio.wait_for(task, timeout=10.0)
         self.assertIsNotNone(result, "la reconciliación por char D debía confirmar la config")
@@ -188,7 +188,7 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         client.reads[UUID_CHAR_A] = DataCodec.serialize_config(make_config(2))
 
         repo.db_version = 2
-        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.emit_notification(UUID_CHAR_B, environmental_packet(applied_version=1))
 
         result = await asyncio.wait_for(task, timeout=10.0)
         self.assertIsNotNone(result, "la reconciliación por char A debía confirmar la config")
@@ -241,8 +241,8 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
                       "se abrió una conexión nueva teniendo una viva")
 
         # La telemetría fluye por esa misma conexión
-        adopted.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
+        adopted.emit_notification(UUID_CHAR_B, environmental_packet(applied_version=1))
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
 
     async def test_does_not_reuse_stale_connection_after_deep_sleep(self):
         """La conexión adoptada sirve una sola vez: si el device se duerme y el

@@ -7,10 +7,18 @@ UTILIDAD PRINCIPAL
 
         Timeouts        todos los tiempos del servidor, en un solo lugar
         ConfigData      configuración de un device (protocolo, sensores, red)
-        Data_1          telemetría ambiental + vibración procesada
-        Data_2          acelerómetro y giroscopio crudos
+        Environmental   telemetría ambiental del BME688 (ritmo lento)
+        Inertial        acelerómetro, giroscopio y magnetómetro (ritmo rápido)
         ConfigAckData   confirmación del device de que aplicó una versión
         Log             evento de operación (conexión, heartbeat, desconexión)
+
+POR QUÉ DOS MENSAJES DE TELEMETRÍA Y NO UNO
+    Porque los dos grupos de sensores tienen ritmos naturales distintos. La
+    temperatura, la presión y la humedad cambian en segundos o minutos; el
+    acelerómetro, en milisegundos. Mandarlos juntos obliga a elegir un solo
+    intervalo, y cualquiera que se elija sobremuestrea uno o submuestrea el
+    otro. Separados, cada uno viaja a su propio intervalo (`send_interval_s`
+    para Inertial, `env_interval_s` para Environmental).
 
     Son el punto donde convergen las tres representaciones del mismo dato: el
     mensaje protobuf que viaja por el cable, la fila de la tabla, y el objeto
@@ -50,29 +58,25 @@ class Timeouts:
                                         # cuando el transporte la declara (Transport.ack_window_sec)
 
 @dataclass
-class Data_1:
-    """Modelo neutro de telemetría (equivalente a protobuf Data_1)."""
+class Environmental:
+    """Telemetría ambiental del BME688 (equivalente a protobuf Environmental).
+
+    Viaja cada `env_interval_s` segundos, más lento que Inertial.
+    """
     id_device: str          # Cambiar por device_id
     temperature: float
     press: int
     hum: int
-    co: float
-    rms: float
-    amp_x: float
-    freq_x: float
-    amp_y: float
-    freq_y: float
-    amp_z: float
-    freq_z: float
-    mag_x: float
-    mag_y: float
-    mag_z: float
+    co: float               # OJO: hoy trae la resistencia de gas cruda, no CO
     config_version_applied: int
     time_client: int
 
 @dataclass
-class Data_2:
-    """Modelo neutro de telemetría (equivalente a protobuf Data_2)."""
+class Inertial:
+    """Acelerómetro y giroscopio (BMI270) más magnetómetro (BMM350).
+
+    Equivalente a protobuf Inertial. Viaja cada `send_interval_s` segundos.
+    """
     id_device: str
     acc_x: float
     acc_y: float
@@ -80,6 +84,9 @@ class Data_2:
     gyr_x: float
     gyr_y: float
     gyr_z: float
+    mag_x: float
+    mag_y: float
+    mag_z: float
     config_version_applied: int
     time_client: int
 
@@ -92,7 +99,8 @@ class ConfigData:
     acc_sampling: int
     gyro_sensibility: int
     bme688_sampling: int
-    send_interval_s: int
+    send_interval_s: int    # Intervalo del flujo rápido (Inertial)
+    env_interval_s: int     # Intervalo del flujo lento (Environmental); 0 = usar send_interval_s
     sleep_time_s: int
     sleep_window_size: int
     tcp_port: int

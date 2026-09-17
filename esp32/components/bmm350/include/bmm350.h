@@ -13,7 +13,7 @@
 #define ODR_200                             200
 #define ODR_400                             400
 
-void readout_data_bmm350(Data1 *data);
+void readout_data_bmm350(Inertial *data);
 void bmm350_init(int odr, int avg);
 
 #endif

@@ -10,8 +10,8 @@ Flujo en runtime:
 2. Busca la configuracion del ESP32 por MAC (`id_device`) en `nebulaedge_schema.config`.
 3. Envia configuracion inicial por BLE.
 4. El ESP32 entra al protocolo indicado (`0 MQTT`, `1 UDP`, `2 TCP`, `3 BLE`).
-5. El ESP32 envia telemetria protobuf (`Data_1`, `Data_2`).
-6. La Raspberry persiste en PostgreSQL (`nebulaedge_schema.data_1`, `nebulaedge_schema.data_2`).
+5. El ESP32 envia telemetria protobuf: `Inertial` (rapido) y `Environmental` (lento).
+6. La Raspberry persiste en PostgreSQL (`nebulaedge_schema.inertial`, `nebulaedge_schema.environmental`).
 7. Si sube `config_version`, ambos cambian de config/protocolo en caliente (con `ConfigAck`).
 
 ## 2) Requisitos minimos
@@ -123,7 +123,7 @@ En `psql`:
 
 ```sql
 SELECT id_device, config_version_applied, temperature, press, time_client
-FROM nebulaedge_schema.data_1
+FROM nebulaedge_schema.environmental
 ORDER BY time_client DESC
 LIMIT 20;
 ```
@@ -137,7 +137,8 @@ UPDATE nebulaedge_schema.config
 SET protocol_conf = 1,
     config_version = config_version + 1,
     udp_port = 1240,
-    send_interval_s = 1
+    send_interval_s = 1,
+    env_interval_s = 10
 WHERE id_device = '58:BF:25:99:B4:92';
 ```
 
@@ -155,29 +156,29 @@ La base vive en PostgreSQL y usa el schema `nebulaedge_schema`. Ahí se guardan 
 Tablas principales:
 
 - `nebulaedge_schema.config`: una fila por dispositivo (`id_device`) con la configuracion activa que la Raspberry lee por BLE.
-- `nebulaedge_schema.data_1`: telemetria de sensores del paquete `Data_1`.
-- `nebulaedge_schema.data_2`: telemetria de sensores del paquete `Data_2`.
+- `nebulaedge_schema.environmental`: telemetria del BME688 (paquete `Environmental`), al ritmo de `env_interval_s`.
+- `nebulaedge_schema.inertial`: BMI270 + BMM350 (paquete `Inertial`), al ritmo de `send_interval_s`.
 - `nebulaedge_schema.log`: eventos de operacion del servidor, como conexion inicial, heartbeat y desconexion.
 
 Qué guarda cada una:
 
-- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `host_ip_addr`, `ssid`, `passwd`, `mqtt_broker`.
-- `data_1`: `temperature`, `press`, `hum`, `co`, `rms`, ejes y frecuencias del acelerometro y magnetometro, mas `config_version_applied` y `time_client`.
-- `data_2`: `acc_x`, `acc_y`, `acc_z`, `gyr_x`, `gyr_y`, `gyr_z`, `config_version_applied` y `time_client`.
+- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `env_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `host_ip_addr`, `ssid`, `passwd`, `mqtt_broker`.
+- `environmental`: `temperature`, `press`, `hum`, `co`, mas `config_version_applied` y `time_client`.
+- `inertial`: `acc_x/y/z`, `gyr_x/y/z`, `mag_x/y/z`, `config_version_applied` y `time_client`.
 - `log`: `status_report`, `protocol_report`, `batt_level`, `time_client`, `time_server`.
 
 Consultas utiles:
 
 ```sql
 SELECT *
-FROM nebulaedge_schema.data_1
+FROM nebulaedge_schema.environmental
 ORDER BY time_client DESC
 LIMIT 20;
 ```
 
 ```sql
 SELECT *
-FROM nebulaedge_schema.data_2
+FROM nebulaedge_schema.inertial
 ORDER BY time_client DESC
 LIMIT 20;
 ```
@@ -196,7 +197,8 @@ Si quieres modificar los dispositivos que arrancan con datos precargados, edita 
 - `id_device`: MAC Bluetooth del ESP32.
 - `config_version`: incrementa en cada cambio.
 - `protocol_conf`: `0 MQTT`, `1 UDP`, `2 TCP`, `3 BLE`.
-- `send_interval_s`: intervalo de envio en segundos.
+- `send_interval_s`: segundos entre paquetes `Inertial` (flujo rapido).
+- `env_interval_s`: segundos entre paquetes `Environmental` (flujo lento). `0` = usar `send_interval_s`.
 - `sleep_time_s`: deep sleep en segundos (`0` = continuo).
 - `sleep_window_size`: cantidad de paquetes antes de dormir.
 - `tcp_port`, `udp_port`, `mqtt_broker`.
@@ -262,7 +264,7 @@ pip install -r ../requirements.txt
 python -m unittest discover -s tests
 ```
 
-Esperado: `Ran 26 tests ... OK`.
+Esperado: `Ran 30 tests ... OK`.
 
 Cobertura actual: las cuatro sesiones de protocolo (telemetria, cambio de
 config con ACK, deep sleep y cierre por timeout). Lo que **no** cubre: el SQL

@@ -76,7 +76,7 @@ class DeviceSession:
         self.timeouts = timeouts or Timeouts()          # Timeouts centralizados
         self.ble_client = ble_client                    # Solo BLE la usa; los demás la ignoran
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
-        self._last_client_time: int | None = None       # Último time_client recibido desde Data_1/Data_2
+        self._last_client_time: int | None = None       # Último time_client recibido (Environmental/Inertial)
 
     def _update_last_client_time(self, data: Any):
         """Actualiza el último timestamp de cliente observado en paquetes de datos."""

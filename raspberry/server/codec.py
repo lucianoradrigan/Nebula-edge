@@ -7,15 +7,19 @@ UTILIDAD PRINCIPAL
     único lugar a tocar si cambia el formato de los mensajes.
 
         hacia el device:   ConfigData -> bytes
-        desde el device:   bytes -> Data_1 | Data_2 | ConfigAckData | deep sleep
+        desde el device:   bytes -> Environmental | Inertial | ConfigAckData | deep sleep
 
 PAQUETES TIPADOS
     La telemetría viaja con un byte de tipo al principio, para poder saber qué
     mensaje protobuf viene detrás sin intentar decodificarlos todos:
 
-        0x01  Data_1        ambiental + vibración procesada
-        0x02  Data_2        acelerómetro y giroscopio crudos
-        0x04  deep sleep    aviso de que el device se va a dormir
+        0x01  Environmental  BME688: temperatura, presión, humedad, gas
+        0x02  Inertial       BMI270 + BMM350: acelerómetro, giroscopio, magnetómetro
+        0x04  deep sleep     aviso de que el device se va a dormir
+
+    Este byte es lo ÚNICO del framing que es igual en los cuatro protocolos:
+    dónde empieza y termina cada mensaje lo resuelve cada Transport a su manera
+    (ver transport.py).
 
     `deserialize_typed_packet()` es el punto de entrada de la telemetría: lee
     ese byte y delega en el deserializador que corresponda. El ACK de config no
@@ -30,15 +34,15 @@ SINCRONIZACIÓN CON EL FIRMWARE
 from __future__ import annotations
 import schema_pb2
 
-from models import Data_1, Data_2, ConfigData, ConfigAckData
+from models import Environmental, Inertial, ConfigData, ConfigAckData
 
 
 class DataCodec:
     """Esta clase permite que DatabaseRepository se desligue de protobuf.
     En caso de querer cambiar la forma de enviar los datos (JSON por ejemplo)
     solo se tendrá que modificar esto."""
-    TYPE_DATA_1 = 0x01
-    TYPE_DATA_2 = 0x02
+    TYPE_ENVIRONMENTAL = 0x01
+    TYPE_INERTIAL = 0x02
     # TYPE_ACK = 0x03 sería bueno implementarlo
     TYPE_DEEP_SLEEP = 0x04
 
@@ -50,34 +54,64 @@ class DataCodec:
         return packet[0], packet[1:]
 
     @staticmethod
-    def deserialize_typed_packet(packet: bytes) -> tuple["Data_1 | Data_2 | None", int]:
-        """Parsea un paquete con prefijo de tipo y devuelve una tupla cuya primera posición es Data_1 o Data_2
-           y en la segunda posición el indicador de tipo de paquete. En caso de no ser ninguno retorna [None, -1]"""
+    def deserialize_typed_packet(packet: bytes) -> tuple["Environmental | Inertial | None", int]:
+        """Parsea un paquete con prefijo de tipo y devuelve una tupla cuya primera posición es
+           Environmental o Inertial, y en la segunda posición el indicador de tipo de paquete.
+           En caso de no ser ninguno retorna [None, -1]"""
         pkt_type, payload = DataCodec.split_typed_packet(packet)
-        if pkt_type == DataCodec.TYPE_DATA_1:
-            return DataCodec.deserialize_data_1(payload), DataCodec.TYPE_DATA_1
-        if pkt_type == DataCodec.TYPE_DATA_2:
-            return DataCodec.deserialize_data_2(payload), DataCodec.TYPE_DATA_2
+        if pkt_type == DataCodec.TYPE_ENVIRONMENTAL:
+            return DataCodec.deserialize_environmental(payload), DataCodec.TYPE_ENVIRONMENTAL
+        if pkt_type == DataCodec.TYPE_INERTIAL:
+            return DataCodec.deserialize_inertial(payload), DataCodec.TYPE_INERTIAL
         if pkt_type == DataCodec.TYPE_DEEP_SLEEP:
             return payload, DataCodec.TYPE_DEEP_SLEEP
         return None, -1
 
     @staticmethod
-    def serialize_data_1(data: Data_1) -> bytes:
-        """Convierte Data_1 -> protobuf Data_1 -> bytes."""
-        pb = schema_pb2.Data_1()
+    def serialize_environmental(data: Environmental) -> bytes:
+        """Convierte Environmental -> protobuf Environmental -> bytes."""
+        pb = schema_pb2.Environmental()
         pb.id_device = data.id_device
         pb.temperature = data.temperature
         pb.press = data.press
         pb.hum = data.hum
         pb.co = data.co
-        pb.rms = data.rms
-        pb.amp_x = data.amp_x
-        pb.freq_x = data.freq_x
-        pb.amp_y = data.amp_y
-        pb.freq_y = data.freq_y
-        pb.amp_z = data.amp_z
-        pb.freq_z = data.freq_z
+        pb.config_version_applied = data.config_version_applied
+        pb.time_client = data.time_client
+        return pb.SerializeToString()
+
+    @staticmethod
+    def deserialize_environmental(packet: bytes) -> Environmental | None:
+        """Convierte bytes -> protobuf Environmental -> Environmental."""
+        try:
+            pb = schema_pb2.Environmental()
+            pb.ParseFromString(packet)
+        except Exception as e:
+            print(f"Error al desempaquetar el paquete Environmental: {e}")
+            return None
+
+        # Convertir a objeto neutro (Environmental)
+        return Environmental(
+            id_device=pb.id_device,
+            temperature=pb.temperature,
+            press=pb.press,
+            hum=pb.hum,
+            co=pb.co,
+            config_version_applied=pb.config_version_applied,
+            time_client=pb.time_client
+        )
+
+    @staticmethod
+    def serialize_inertial(data: "Inertial") -> bytes:
+        """Convierte Inertial -> protobuf Inertial -> bytes."""
+        pb = schema_pb2.Inertial()
+        pb.id_device = data.id_device
+        pb.acc_x = data.acc_x
+        pb.acc_y = data.acc_y
+        pb.acc_z = data.acc_z
+        pb.gyr_x = data.gyr_x
+        pb.gyr_y = data.gyr_y
+        pb.gyr_z = data.gyr_z
         pb.mag_x = data.mag_x
         pb.mag_y = data.mag_y
         pb.mag_z = data.mag_z
@@ -86,62 +120,16 @@ class DataCodec:
         return pb.SerializeToString()
 
     @staticmethod
-    def deserialize_data_1(packet: bytes) -> Data_1 | None:
-        """Convierte bytes -> protobuf Data_1 -> Data_1."""
+    def deserialize_inertial(packet: bytes) -> "Inertial | None":
+        """Convierte bytes -> protobuf Inertial -> Inertial."""
         try:
-            pb = schema_pb2.Data_1()
+            pb = schema_pb2.Inertial()
             pb.ParseFromString(packet)
         except Exception as e:
-            print(f"Error al desempaquetar el paquete: {e}")
+            print(f"Error al desempaquetar el paquete Inertial: {e}")
             return None
 
-        # Convertir a objeto neutro (Data_1)
-        return Data_1(
-            id_device=pb.id_device,
-            temperature=pb.temperature,
-            press=pb.press,
-            hum=pb.hum,
-            co=pb.co,
-            rms=pb.rms,
-            amp_x=pb.amp_x,
-            freq_x=pb.freq_x,
-            amp_y=pb.amp_y,
-            freq_y=pb.freq_y,
-            amp_z=pb.amp_z,
-            freq_z=pb.freq_z,
-            mag_x=pb.mag_x,
-            mag_y=pb.mag_y,
-            mag_z=pb.mag_z,
-            config_version_applied=pb.config_version_applied,
-            time_client=pb.time_client
-        )
-
-    @staticmethod
-    def serialize_data_2(data: "Data_2") -> bytes:
-        """Convierte Data_2 -> protobuf Data_2 -> bytes."""
-        pb = schema_pb2.Data_2()
-        pb.id_device = data.id_device
-        pb.acc_x = data.acc_x
-        pb.acc_y = data.acc_y
-        pb.acc_z = data.acc_z
-        pb.gyr_x = data.gyr_x
-        pb.gyr_y = data.gyr_y
-        pb.gyr_z = data.gyr_z
-        pb.config_version_applied = data.config_version_applied
-        pb.time_client = data.time_client
-        return pb.SerializeToString()
-
-    @staticmethod
-    def deserialize_data_2(packet: bytes) -> "Data_2 | None":
-        """Convierte bytes -> protobuf Data_2 -> Data_2."""
-        try:
-            pb = schema_pb2.Data_2()
-            pb.ParseFromString(packet)
-        except Exception as e:
-            print(f"Error al desempaquetar el paquete Data_2: {e}")
-            return None
-
-        return Data_2(
+        return Inertial(
             id_device=pb.id_device,
             acc_x=pb.acc_x,
             acc_y=pb.acc_y,
@@ -149,6 +137,9 @@ class DataCodec:
             gyr_x=pb.gyr_x,
             gyr_y=pb.gyr_y,
             gyr_z=pb.gyr_z,
+            mag_x=pb.mag_x,
+            mag_y=pb.mag_y,
+            mag_z=pb.mag_z,
             config_version_applied=pb.config_version_applied,
             time_client=pb.time_client,
         )
@@ -164,6 +155,7 @@ class DataCodec:
         pb.gyro_sensibility = config.gyro_sensibility
         pb.bme688_sampling = config.bme688_sampling
         pb.send_interval_s = config.send_interval_s
+        pb.env_interval_s = config.env_interval_s
         pb.sleep_time_s = config.sleep_time_s
         pb.sleep_window_size = config.sleep_window_size
         pb.tcp_port = config.tcp_port
@@ -193,6 +185,7 @@ class DataCodec:
             gyro_sensibility=pb.gyro_sensibility,
             bme688_sampling=pb.bme688_sampling,
             send_interval_s=pb.send_interval_s,
+            env_interval_s=pb.env_interval_s,
             sleep_time_s=pb.sleep_time_s,
             sleep_window_size=pb.sleep_window_size,
             tcp_port=pb.tcp_port,

@@ -15,7 +15,7 @@ from codec import DataCodec
 from models import Timeouts
 from tests.fakes import (
     DEEP_SLEEP_PACKET, DEVICE_ID, FakeBLEDevice, FakeRepo,
-    config_ack_packet, data_1_packet, free_port, make_config, tcp_framed,
+    config_ack_packet, environmental_packet, free_port, make_config, tcp_framed,
 )
 
 
@@ -124,18 +124,18 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
 
         dev = await self._connect_device(port)
         loop = asyncio.get_running_loop()
-        await loop.sock_sendall(dev, tcp_framed(data_1_packet(applied_version=1)))
+        await loop.sock_sendall(dev, tcp_framed(environmental_packet(applied_version=1)))
 
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1),
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1),
                         "no se insertó la telemetría recibida por TCP")
-        self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
+        self.assertEqual(repo.environmental[0].id_device, DEVICE_ID)
         self.assertFalse(task.done(), "la sesión no debía cerrar con la config al día")
 
     async def test_two_packets_in_one_segment_are_both_inserted(self):
-        """El caso que TCP sin framing perdía: el firmware encola Data_1 y Data_2
-        separados por un vTaskDelay(1), y los dos pueden viajar en el mismo
-        segmento. Sin prefijo de largo el server leía el tipo del primero y le
-        pasaba los dos protobuf pegados al parser, perdiendo ambos."""
+        """El caso que TCP sin framing perdía: las dos tasks de sensores encolan
+        sus paquetes de forma independiente, así que dos pueden viajar en el
+        mismo segmento. Sin prefijo de largo el server leía el tipo del primero
+        y le pasaba los dos protobuf pegados al parser, perdiendo ambos."""
         port = free_port(socket.SOCK_STREAM)
         repo = FakeRepo(db_version=1, tcp_port=port)
         task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
@@ -145,11 +145,11 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
 
         # Un solo sendall con los dos mensajes: llegan juntos sí o sí
-        await loop.sock_sendall(dev, tcp_framed(data_1_packet(applied_version=1))
-                                     + tcp_framed(data_1_packet(applied_version=1)))
+        await loop.sock_sendall(dev, tcp_framed(environmental_packet(applied_version=1))
+                                     + tcp_framed(environmental_packet(applied_version=1)))
 
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 2),
-                        f"se esperaban 2 inserciones, hubo {len(repo.data_1)}")
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 2),
+                        f"se esperaban 2 inserciones, hubo {len(repo.environmental)}")
         self.assertFalse(task.done())
 
     async def test_packet_split_across_segments_is_reassembled(self):
@@ -163,17 +163,17 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
         dev = await self._connect_device(port)
         loop = asyncio.get_running_loop()
 
-        frame = tcp_framed(data_1_packet(applied_version=1))
+        frame = tcp_framed(environmental_packet(applied_version=1))
         cut = len(frame) // 2
 
         await loop.sock_sendall(dev, frame[:cut])
         # Con media telemetría en el buffer no se debe insertar nada todavía
         await asyncio.sleep(0.5)
-        self.assertEqual(len(repo.data_1), 0,
+        self.assertEqual(len(repo.environmental), 0,
                          "se procesó un mensaje incompleto")
 
         await loop.sock_sendall(dev, frame[cut:])
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1),
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1),
                         "el mensaje partido nunca se reensambló")
         self.assertFalse(task.done())
 
@@ -185,11 +185,11 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
 
         dev = await self._connect_device(port)
         loop = asyncio.get_running_loop()
-        await loop.sock_sendall(dev, tcp_framed(data_1_packet(applied_version=1)))
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
+        await loop.sock_sendall(dev, tcp_framed(environmental_packet(applied_version=1)))
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
 
         repo.db_version = 2
-        await loop.sock_sendall(dev, tcp_framed(data_1_packet(applied_version=1)))
+        await loop.sock_sendall(dev, tcp_framed(environmental_packet(applied_version=1)))
 
         raw = await self._recv_frame(dev)
         pushed = DataCodec.deserialize_config(raw)
@@ -212,8 +212,8 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
 
         loop = asyncio.get_running_loop()
         dev = await self._connect_device(port)
-        await loop.sock_sendall(dev, tcp_framed(data_1_packet(applied_version=1)))
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
+        await loop.sock_sendall(dev, tcp_framed(environmental_packet(applied_version=1)))
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
 
         # El device avisa que se duerme y cierra
         await loop.sock_sendall(dev, tcp_framed(DEEP_SLEEP_PACKET))
@@ -221,7 +221,7 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
 
         # Al despertar se reconecta: solo funciona si la sesión reabrió el socket
         dev2 = await self._reconnect_and_send_until(
-            port, tcp_framed(data_1_packet(applied_version=1)), lambda: len(repo.data_1) >= 2,
+            port, tcp_framed(environmental_packet(applied_version=1)), lambda: len(repo.environmental) >= 2,
         )
         self.assertIsNotNone(dev2, "tras el deep sleep la sesión no volvió a aceptar al device")
         self.assertFalse(task.done(), "la sesión debía seguir viva tras reabrir")
@@ -235,13 +235,13 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
 
         loop = asyncio.get_running_loop()
         dev = await self._connect_device(port)
-        await loop.sock_sendall(dev, tcp_framed(data_1_packet(applied_version=1)))
-        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
+        await loop.sock_sendall(dev, tcp_framed(environmental_packet(applied_version=1)))
+        self.assertTrue(await self._wait_until(lambda: len(repo.environmental) >= 1))
 
         dev.close()   # corte abrupto, sin aviso de deep sleep
 
         dev2 = await self._reconnect_and_send_until(
-            port, tcp_framed(data_1_packet(applied_version=1)), lambda: len(repo.data_1) >= 2,
+            port, tcp_framed(environmental_packet(applied_version=1)), lambda: len(repo.environmental) >= 2,
         )
         self.assertIsNotNone(dev2, "tras el corte la sesión no volvió a aceptar al device")
 

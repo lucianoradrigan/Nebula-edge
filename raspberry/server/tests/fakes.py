@@ -12,7 +12,7 @@ UTILIDAD PRINCIPAL
         free_port()     puerto libre del SO, para que dos tests en paralelo no
                         choquen
         make_config()   ConfigData armada, con la versión que pida el test
-        data_1_packet() / config_ack_packet()
+        environmental_packet() / inertial_packet() / config_ack_packet()
                         paquetes ya serializados, idénticos a los que mandaría
                         el firmware
         tcp_framed()    le pone a un paquete el prefijo de largo que exige TCP
@@ -25,7 +25,7 @@ from __future__ import annotations
 import socket
 
 from codec import DataCodec
-from models import ConfigData, ConfigAckData, Data_1, Data_2
+from models import ConfigData, ConfigAckData, Environmental, Inertial
 
 DEVICE_ID = "AA:BB:CC:DD:EE:01"
 
@@ -65,6 +65,7 @@ def make_config(version: int, *, udp_port: int = 0, tcp_port: int = 0,
         gyro_sensibility=500,
         bme688_sampling=8,
         send_interval_s=1,
+        env_interval_s=10,
         sleep_time_s=0,
         sleep_window_size=10,
         tcp_port=tcp_port,
@@ -77,24 +78,24 @@ def make_config(version: int, *, udp_port: int = 0, tcp_port: int = 0,
     )
 
 
-def data_1_packet(applied_version: int, device_id: str = DEVICE_ID) -> bytes:
-    """Paquete de telemetría tal como lo arma el firmware: [tipo][protobuf]."""
-    d = Data_1(
+def environmental_packet(applied_version: int, device_id: str = DEVICE_ID) -> bytes:
+    """Paquete ambiental tal como lo arma el firmware: [tipo][protobuf]."""
+    d = Environmental(
         id_device=device_id, temperature=21.0, press=101000, hum=40, co=100.0,
-        rms=0.1, amp_x=1, freq_x=2, amp_y=3, freq_y=4, amp_z=5, freq_z=6,
-        mag_x=7, mag_y=8, mag_z=9,
         config_version_applied=applied_version, time_client=1_735_000_001,
     )
-    return bytes([DataCodec.TYPE_DATA_1]) + DataCodec.serialize_data_1(d)
+    return bytes([DataCodec.TYPE_ENVIRONMENTAL]) + DataCodec.serialize_environmental(d)
 
 
-def data_2_packet(applied_version: int, device_id: str = DEVICE_ID) -> bytes:
-    d = Data_2(
+def inertial_packet(applied_version: int, device_id: str = DEVICE_ID) -> bytes:
+    """Paquete inercial tal como lo arma el firmware: [tipo][protobuf]."""
+    d = Inertial(
         id_device=device_id, acc_x=0.5, acc_y=-9.8, acc_z=0.1,
         gyr_x=0.001, gyr_y=-0.002, gyr_z=0.003,
+        mag_x=7, mag_y=8, mag_z=9,
         config_version_applied=applied_version, time_client=1_735_000_002,
     )
-    return bytes([DataCodec.TYPE_DATA_2]) + DataCodec.serialize_data_2(d)
+    return bytes([DataCodec.TYPE_INERTIAL]) + DataCodec.serialize_inertial(d)
 
 
 def config_ack_packet(version: int, applied: bool = True,
@@ -117,19 +118,19 @@ class FakeRepo:
         self.db_version = db_version
         self.udp_port = udp_port
         self.tcp_port = tcp_port
-        self.data_1: list[Data_1] = []
-        self.data_2: list[Data_2] = []
+        self.environmental: list[Environmental] = []
+        self.inertial: list[Inertial] = []
         self.logs: list = []
 
     async def get_config_async(self, device_id):
         return make_config(self.db_version, udp_port=self.udp_port,
                            tcp_port=self.tcp_port, device_id=device_id)
 
-    async def insert_data_1_async(self, d):
-        self.data_1.append(d)
+    async def insert_environmental_async(self, d):
+        self.environmental.append(d)
 
-    async def insert_data_2_async(self, d):
-        self.data_2.append(d)
+    async def insert_inertial_async(self, d):
+        self.inertial.append(d)
 
     async def insert_log_async(self, log):
         self.logs.append(log)

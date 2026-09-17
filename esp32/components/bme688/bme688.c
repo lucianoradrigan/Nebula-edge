@@ -501,7 +501,7 @@ static void get_mode(void) {
 
 /* Extrae datos de temperatura, presión, humedad y resistencia de gas
  * del sensor BME688, los procesa e imprime en la salida estándar. */     
-void readout_data_bme688(Data1 *data) {
+void readout_data_bme688(Environmental *data) {
 
     if (!is_bme688_active) {
         ESP_LOGW(TAG, "BME688 no activo, se omite lectura");

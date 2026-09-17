@@ -6,18 +6,20 @@ message Config {
     int32 config_version = 2;               // Versión configuración. Cada cambio realizado debe incrementar este campo.
     int32 protocol_conf = 3;                // Protocolo seleccionado. 0 -> MQTT, 1 -> UDP, 2 -> TCP, 3 -> BLE.
     int32 acc_sampling = 4;
-    int32 gyro_sensibility = 5;  
+    int32 gyro_sensibility = 5;
     int32 bme688_sampling = 6;
-    uint32 send_interval_s = 7;             // Tiempo en segundos entre paquetes de datos (continuo o discontinuo).
+    uint32 send_interval_s = 7;             // Segundos entre paquetes Inertial (el flujo rápido).
     uint32 sleep_time_s = 8;                // Tiempo en segundos que se irá a dormir la ESP. Cuando es > 0 se corre el modo discontinuo.
     int32 sleep_window_size = 9;            // Cantidad de datos que se enviarán antes de irse a deep sleep.
     int32 tcp_port = 10;
-    int32 udp_port = 11;        
+    int32 udp_port = 11;
     string host_ip_addr = 12;               // IPv4 de la raspberry (192.168.1.1 por ejemplo)
     string ssid = 13;                       // Nombre WIFI
     string passwd = 14;                     // Contraseña WIFI
     string mqtt_broker = 15;                // URI del broker MQTT (ej: mqtt://host:1883)
     uint32 time_client = 16;                // Hora
+    uint32 env_interval_s = 17;             // Segundos entre paquetes Environmental (el flujo lento).
+                                            // 0 = usar send_interval_s.
 }
 
 // ACK de configuración
@@ -28,29 +30,28 @@ message ConfigAck {
     uint32 time_client = 4;
 }
 
-// Paquete de datos 1
-message Data_1 {
+// Telemetría ambiental: BME688.
+//
+// Va en su propio mensaje porque su ritmo natural es otro: la temperatura, la
+// presión y la humedad cambian en segundos o minutos, no en milisegundos.
+// Enviarla al ritmo del acelerómetro era gastar ancho de banda y batería en
+// repetir el mismo valor.
+message Environmental {
     string id_device = 1;
     float temperature = 2;
     int32 press = 3;
     int32 hum = 4;
-    float co = 5;
-    float rms = 6;
-    float amp_x = 7;
-    float freq_x = 8;
-    float amp_y = 9;
-    float freq_y = 10;
-    float amp_z = 11;
-    float freq_z = 12;  
-    float mag_x = 13;
-    float mag_y = 14;
-    float mag_z = 15;
-    int32 config_version_applied = 16; // Versión de config aplicada en el dispositivo
-    uint32 time_client = 17;
+    float co = 5;                           // OJO: hoy guarda la resistencia de gas cruda del BME688, no CO.
+    int32 config_version_applied = 6;
+    uint32 time_client = 7;
 }
 
-// Paquete de datos 2
-message Data_2 {
+// Telemetría inercial: BMI270 (acelerómetro + giroscopio) y BMM350 (magnetómetro).
+//
+// Los tres sensores comparten el ritmo rápido, que es el que manda en este
+// mensaje. El magnetómetro vive acá y no en Environmental porque se configura
+// al mismo ODR que el acelerómetro.
+message Inertial {
     string id_device = 1;
     float acc_x = 2;
     float acc_y = 3;
@@ -58,6 +59,9 @@ message Data_2 {
     float gyr_x = 5;
     float gyr_y = 6;
     float gyr_z = 7;
-    int32 config_version_applied = 8;
-    uint32 time_client = 9;
+    float mag_x = 8;
+    float mag_y = 9;
+    float mag_z = 10;
+    int32 config_version_applied = 11;
+    uint32 time_client = 12;
 }

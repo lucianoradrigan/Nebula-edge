@@ -97,97 +97,97 @@ void   config_ack__free_unpacked
   assert(message->base.descriptor == &config_ack__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-void   data_1__init
-                     (Data1         *message)
+void   environmental__init
+                     (Environmental         *message)
 {
-  static const Data1 init_value = DATA_1__INIT;
+  static const Environmental init_value = ENVIRONMENTAL__INIT;
   *message = init_value;
 }
-size_t data_1__get_packed_size
-                     (const Data1 *message)
+size_t environmental__get_packed_size
+                     (const Environmental *message)
 {
-  assert(message->base.descriptor == &data_1__descriptor);
+  assert(message->base.descriptor == &environmental__descriptor);
   return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
 }
-size_t data_1__pack
-                     (const Data1 *message,
+size_t environmental__pack
+                     (const Environmental *message,
                       uint8_t       *out)
 {
-  assert(message->base.descriptor == &data_1__descriptor);
+  assert(message->base.descriptor == &environmental__descriptor);
   return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
 }
-size_t data_1__pack_to_buffer
-                     (const Data1 *message,
+size_t environmental__pack_to_buffer
+                     (const Environmental *message,
                       ProtobufCBuffer *buffer)
 {
-  assert(message->base.descriptor == &data_1__descriptor);
+  assert(message->base.descriptor == &environmental__descriptor);
   return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
 }
-Data1 *
-       data_1__unpack
+Environmental *
+       environmental__unpack
                      (ProtobufCAllocator  *allocator,
                       size_t               len,
                       const uint8_t       *data)
 {
-  return (Data1 *)
-     protobuf_c_message_unpack (&data_1__descriptor,
+  return (Environmental *)
+     protobuf_c_message_unpack (&environmental__descriptor,
                                 allocator, len, data);
 }
-void   data_1__free_unpacked
-                     (Data1 *message,
+void   environmental__free_unpacked
+                     (Environmental *message,
                       ProtobufCAllocator *allocator)
 {
   if(!message)
     return;
-  assert(message->base.descriptor == &data_1__descriptor);
+  assert(message->base.descriptor == &environmental__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-void   data_2__init
-                     (Data2         *message)
+void   inertial__init
+                     (Inertial         *message)
 {
-  static const Data2 init_value = DATA_2__INIT;
+  static const Inertial init_value = INERTIAL__INIT;
   *message = init_value;
 }
-size_t data_2__get_packed_size
-                     (const Data2 *message)
+size_t inertial__get_packed_size
+                     (const Inertial *message)
 {
-  assert(message->base.descriptor == &data_2__descriptor);
+  assert(message->base.descriptor == &inertial__descriptor);
   return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
 }
-size_t data_2__pack
-                     (const Data2 *message,
+size_t inertial__pack
+                     (const Inertial *message,
                       uint8_t       *out)
 {
-  assert(message->base.descriptor == &data_2__descriptor);
+  assert(message->base.descriptor == &inertial__descriptor);
   return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
 }
-size_t data_2__pack_to_buffer
-                     (const Data2 *message,
+size_t inertial__pack_to_buffer
+                     (const Inertial *message,
                       ProtobufCBuffer *buffer)
 {
-  assert(message->base.descriptor == &data_2__descriptor);
+  assert(message->base.descriptor == &inertial__descriptor);
   return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
 }
-Data2 *
-       data_2__unpack
+Inertial *
+       inertial__unpack
                      (ProtobufCAllocator  *allocator,
                       size_t               len,
                       const uint8_t       *data)
 {
-  return (Data2 *)
-     protobuf_c_message_unpack (&data_2__descriptor,
+  return (Inertial *)
+     protobuf_c_message_unpack (&inertial__descriptor,
                                 allocator, len, data);
 }
-void   data_2__free_unpacked
-                     (Data2 *message,
+void   inertial__free_unpacked
+                     (Inertial *message,
                       ProtobufCAllocator *allocator)
 {
   if(!message)
     return;
-  assert(message->base.descriptor == &data_2__descriptor);
+  assert(message->base.descriptor == &inertial__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor config__field_descriptors[16] =
+static const ProtobufCFieldDescriptor config__field_descriptors[17] =
 {
   {
     "id_device",
@@ -381,11 +381,24 @@ static const ProtobufCFieldDescriptor config__field_descriptors[16] =
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "env_interval_s",
+    17,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Config, env_interval_s),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned config__field_indices_by_name[] = {
   3,   /* field[3] = acc_sampling */
   5,   /* field[5] = bme688_sampling */
   1,   /* field[1] = config_version */
+  16,   /* field[16] = env_interval_s */
   4,   /* field[4] = gyro_sensibility */
   11,   /* field[11] = host_ip_addr */
   0,   /* field[0] = id_device */
@@ -403,7 +416,7 @@ static const unsigned config__field_indices_by_name[] = {
 static const ProtobufCIntRange config__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 16 }
+  { 0, 17 }
 };
 const ProtobufCMessageDescriptor config__descriptor =
 {
@@ -413,7 +426,7 @@ const ProtobufCMessageDescriptor config__descriptor =
   "Config",
   "",
   sizeof(Config),
-  16,
+  17,
   config__field_descriptors,
   config__field_indices_by_name,
   1,  config__number_ranges,
@@ -497,7 +510,7 @@ const ProtobufCMessageDescriptor config_ack__descriptor =
   (ProtobufCMessageInit) config_ack__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor data_1__field_descriptors[17] =
+static const ProtobufCFieldDescriptor environmental__field_descriptors[7] =
 {
   {
     "id_device",
@@ -505,7 +518,7 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[17] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
-    offsetof(Data1, id_device),
+    offsetof(Environmental, id_device),
     NULL,
     &protobuf_c_empty_string,
     0,             /* flags */
@@ -517,7 +530,7 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[17] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_FLOAT,
     0,   /* quantifier_offset */
-    offsetof(Data1, temperature),
+    offsetof(Environmental, temperature),
     NULL,
     NULL,
     0,             /* flags */
@@ -529,7 +542,7 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[17] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_INT32,
     0,   /* quantifier_offset */
-    offsetof(Data1, press),
+    offsetof(Environmental, press),
     NULL,
     NULL,
     0,             /* flags */
@@ -541,7 +554,7 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[17] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_INT32,
     0,   /* quantifier_offset */
-    offsetof(Data1, hum),
+    offsetof(Environmental, hum),
     NULL,
     NULL,
     0,             /* flags */
@@ -553,127 +566,7 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[17] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_FLOAT,
     0,   /* quantifier_offset */
-    offsetof(Data1, co),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "rms",
-    6,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, rms),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "amp_x",
-    7,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, amp_x),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "freq_x",
-    8,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, freq_x),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "amp_y",
-    9,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, amp_y),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "freq_y",
-    10,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, freq_y),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "amp_z",
-    11,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, amp_z),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "freq_z",
-    12,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, freq_z),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "mag_x",
-    13,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, mag_x),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "mag_y",
-    14,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, mag_y),
-    NULL,
-    NULL,
-    0,             /* flags */
-    0,NULL,NULL    /* reserved1,reserved2, etc */
-  },
-  {
-    "mag_z",
-    15,
-    PROTOBUF_C_LABEL_NONE,
-    PROTOBUF_C_TYPE_FLOAT,
-    0,   /* quantifier_offset */
-    offsetof(Data1, mag_z),
+    offsetof(Environmental, co),
     NULL,
     NULL,
     0,             /* flags */
@@ -681,11 +574,11 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[17] =
   },
   {
     "config_version_applied",
-    16,
+    6,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_INT32,
     0,   /* quantifier_offset */
-    offsetof(Data1, config_version_applied),
+    offsetof(Environmental, config_version_applied),
     NULL,
     NULL,
     0,             /* flags */
@@ -693,57 +586,47 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[17] =
   },
   {
     "time_client",
-    17,
+    7,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_UINT32,
     0,   /* quantifier_offset */
-    offsetof(Data1, time_client),
+    offsetof(Environmental, time_client),
     NULL,
     NULL,
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
 };
-static const unsigned data_1__field_indices_by_name[] = {
-  6,   /* field[6] = amp_x */
-  8,   /* field[8] = amp_y */
-  10,   /* field[10] = amp_z */
+static const unsigned environmental__field_indices_by_name[] = {
   4,   /* field[4] = co */
-  15,   /* field[15] = config_version_applied */
-  7,   /* field[7] = freq_x */
-  9,   /* field[9] = freq_y */
-  11,   /* field[11] = freq_z */
+  5,   /* field[5] = config_version_applied */
   3,   /* field[3] = hum */
   0,   /* field[0] = id_device */
-  12,   /* field[12] = mag_x */
-  13,   /* field[13] = mag_y */
-  14,   /* field[14] = mag_z */
   2,   /* field[2] = press */
-  5,   /* field[5] = rms */
   1,   /* field[1] = temperature */
-  16,   /* field[16] = time_client */
+  6,   /* field[6] = time_client */
 };
-static const ProtobufCIntRange data_1__number_ranges[1 + 1] =
+static const ProtobufCIntRange environmental__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 17 }
+  { 0, 7 }
 };
-const ProtobufCMessageDescriptor data_1__descriptor =
+const ProtobufCMessageDescriptor environmental__descriptor =
 {
   PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
-  "Data_1",
-  "Data1",
-  "Data1",
+  "Environmental",
+  "Environmental",
+  "Environmental",
   "",
-  sizeof(Data1),
-  17,
-  data_1__field_descriptors,
-  data_1__field_indices_by_name,
-  1,  data_1__number_ranges,
-  (ProtobufCMessageInit) data_1__init,
+  sizeof(Environmental),
+  7,
+  environmental__field_descriptors,
+  environmental__field_indices_by_name,
+  1,  environmental__number_ranges,
+  (ProtobufCMessageInit) environmental__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
+static const ProtobufCFieldDescriptor inertial__field_descriptors[12] =
 {
   {
     "id_device",
@@ -751,7 +634,7 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
-    offsetof(Data2, id_device),
+    offsetof(Inertial, id_device),
     NULL,
     &protobuf_c_empty_string,
     0,             /* flags */
@@ -763,7 +646,7 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_FLOAT,
     0,   /* quantifier_offset */
-    offsetof(Data2, acc_x),
+    offsetof(Inertial, acc_x),
     NULL,
     NULL,
     0,             /* flags */
@@ -775,7 +658,7 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_FLOAT,
     0,   /* quantifier_offset */
-    offsetof(Data2, acc_y),
+    offsetof(Inertial, acc_y),
     NULL,
     NULL,
     0,             /* flags */
@@ -787,7 +670,7 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_FLOAT,
     0,   /* quantifier_offset */
-    offsetof(Data2, acc_z),
+    offsetof(Inertial, acc_z),
     NULL,
     NULL,
     0,             /* flags */
@@ -799,7 +682,7 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_FLOAT,
     0,   /* quantifier_offset */
-    offsetof(Data2, gyr_x),
+    offsetof(Inertial, gyr_x),
     NULL,
     NULL,
     0,             /* flags */
@@ -811,7 +694,7 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_FLOAT,
     0,   /* quantifier_offset */
-    offsetof(Data2, gyr_y),
+    offsetof(Inertial, gyr_y),
     NULL,
     NULL,
     0,             /* flags */
@@ -823,7 +706,43 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_FLOAT,
     0,   /* quantifier_offset */
-    offsetof(Data2, gyr_z),
+    offsetof(Inertial, gyr_z),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "mag_x",
+    8,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FLOAT,
+    0,   /* quantifier_offset */
+    offsetof(Inertial, mag_x),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "mag_y",
+    9,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FLOAT,
+    0,   /* quantifier_offset */
+    offsetof(Inertial, mag_y),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "mag_z",
+    10,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FLOAT,
+    0,   /* quantifier_offset */
+    offsetof(Inertial, mag_z),
     NULL,
     NULL,
     0,             /* flags */
@@ -831,11 +750,11 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
   },
   {
     "config_version_applied",
-    8,
+    11,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_INT32,
     0,   /* quantifier_offset */
-    offsetof(Data2, config_version_applied),
+    offsetof(Inertial, config_version_applied),
     NULL,
     NULL,
     0,             /* flags */
@@ -843,45 +762,48 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[9] =
   },
   {
     "time_client",
-    9,
+    12,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_UINT32,
     0,   /* quantifier_offset */
-    offsetof(Data2, time_client),
+    offsetof(Inertial, time_client),
     NULL,
     NULL,
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
 };
-static const unsigned data_2__field_indices_by_name[] = {
+static const unsigned inertial__field_indices_by_name[] = {
   1,   /* field[1] = acc_x */
   2,   /* field[2] = acc_y */
   3,   /* field[3] = acc_z */
-  7,   /* field[7] = config_version_applied */
+  10,   /* field[10] = config_version_applied */
   4,   /* field[4] = gyr_x */
   5,   /* field[5] = gyr_y */
   6,   /* field[6] = gyr_z */
   0,   /* field[0] = id_device */
-  8,   /* field[8] = time_client */
+  7,   /* field[7] = mag_x */
+  8,   /* field[8] = mag_y */
+  9,   /* field[9] = mag_z */
+  11,   /* field[11] = time_client */
 };
-static const ProtobufCIntRange data_2__number_ranges[1 + 1] =
+static const ProtobufCIntRange inertial__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 9 }
+  { 0, 12 }
 };
-const ProtobufCMessageDescriptor data_2__descriptor =
+const ProtobufCMessageDescriptor inertial__descriptor =
 {
   PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
-  "Data_2",
-  "Data2",
-  "Data2",
+  "Inertial",
+  "Inertial",
+  "Inertial",
   "",
-  sizeof(Data2),
-  9,
-  data_2__field_descriptors,
-  data_2__field_indices_by_name,
-  1,  data_2__number_ranges,
-  (ProtobufCMessageInit) data_2__init,
+  sizeof(Inertial),
+  12,
+  inertial__field_descriptors,
+  inertial__field_indices_by_name,
+  1,  inertial__number_ranges,
+  (ProtobufCMessageInit) inertial__init,
   NULL,NULL,NULL    /* reserved[123] */
 };

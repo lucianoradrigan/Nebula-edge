@@ -36,7 +36,14 @@ QueueHandle_t xQueueData = NULL;
 QueueHandle_t xQueueConfigBle = NULL;
 
 Config *current_config = NULL;
-TaskHandle_t xHandleCollectSensorData = NULL;
+
+/* Dos productoras de telemetría, una por ritmo. Los sensores tienen tiempos
+ * naturales muy distintos: la temperatura cambia en minutos y el acelerómetro
+ * en milisegundos. Con una sola task había que elegir un intervalo único, que
+ * sobremuestreaba el ambiente o submuestreaba el movimiento. Ahora cada una
+ * corre a lo suyo y ambas escriben en la misma xQueueData. */
+TaskHandle_t xHandleCollectInertial = NULL;       // cada send_interval_s
+TaskHandle_t xHandleCollectEnvironmental = NULL;  // cada env_interval_s
 
 TaskHandle_t xHandleSendUDP = NULL;
 TaskHandle_t xHandleGetResponseUDP = NULL;
@@ -48,7 +55,8 @@ TaskHandle_t xHandleSendBLE = NULL;
 TaskHandle_t xHandleGetResponseBLE = NULL;
 
 const char *TAG = "main_task";
-const char *TAG_COLLECT_DATA = "task_collect_data"; 
+const char *TAG_COLLECT_INERTIAL = "task_collect_inertial";
+const char *TAG_COLLECT_ENV = "task_collect_env";
 
 const char *TAG_SEND_MQTT = "task_send_mqtt";
 const char *TAG_SEND_UDP = "task_send_udp";
@@ -74,18 +82,23 @@ static char this_device_id[18] = "00:00:00:00:00:00";
 #define CONTROL_PKT_REDUNDANCY 3
 #define CONTROL_PKT_REDUNDANCY_DELAY_MS 50
 
-/* Suspende la task de sensores solo cuando el bus I2C está libre.
- * Evita pausar la task en mitad de una transacción I2C. */
-static void suspend_collect_task_when_i2c_idle(void) {
-    // Si la task no existe todavía, no hay nada que suspender.
-    if (!xHandleCollectSensorData) {
+/* Suspende las dos tasks de sensores solo cuando el bus I2C está libre.
+ * Evita pausar una task en mitad de una transacción I2C.
+ *
+ * Las dos se suspenden bajo el MISMO mutex tomado una sola vez: si se hiciera
+ * en dos pasos, la que quedara viva podría empezar una transacción justo entre
+ * medio y volveríamos al problema que esto evita. */
+static void suspend_collect_tasks_when_i2c_idle(void) {
+    // Si no existe ninguna todavía, no hay nada que suspender.
+    if (!xHandleCollectInertial && !xHandleCollectEnvironmental) {
         return;
     }
 
     // Fallback defensivo: si el mutex aún no fue creado, suspende igual.
     if (i2c_bus_mutex == NULL) {
-        ESP_LOGW(TAG, "i2c_bus_mutex es NULL, se suspende task de sensores sin validación");
-        vTaskSuspend(xHandleCollectSensorData);
+        ESP_LOGW(TAG, "i2c_bus_mutex es NULL, se suspenden tasks de sensores sin validación");
+        if (xHandleCollectInertial) vTaskSuspend(xHandleCollectInertial);
+        if (xHandleCollectEnvironmental) vTaskSuspend(xHandleCollectEnvironmental);
         return;
     }
 
@@ -93,21 +106,28 @@ static void suspend_collect_task_when_i2c_idle(void) {
     // Así se evita la carrera entre "mutex libre" y "vTaskSuspend".
     while (1) {
         if (xSemaphoreTake(i2c_bus_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-            vTaskSuspend(xHandleCollectSensorData);
+            if (xHandleCollectInertial) vTaskSuspend(xHandleCollectInertial);
+            if (xHandleCollectEnvironmental) vTaskSuspend(xHandleCollectEnvironmental);
             xSemaphoreGive(i2c_bus_mutex);
-            ESP_LOGI(TAG, "Task de sensores suspendida con mutex I2C libre");
+            ESP_LOGI(TAG, "Tasks de sensores suspendidas con mutex I2C libre");
             return;
         }
 
-        ESP_LOGW(TAG, "Esperando mutex I2C libre para suspender task de sensores...");
+        ESP_LOGW(TAG, "Esperando mutex I2C libre para suspender tasks de sensores...");
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+}
+
+/* Reanuda las dos tasks de sensores. */
+static void resume_collect_tasks(void) {
+    if (xHandleCollectInertial) vTaskResume(xHandleCollectInertial);
+    if (xHandleCollectEnvironmental) vTaskResume(xHandleCollectEnvironmental);
 }
 
 /* Vacía xQueueData liberando la memoria de cada packet_t pendiente.
  *
  * xQueueReset() por sí solo descarta los elementos en cola SIN liberar
- * su packet_t.data (reservada con malloc() en vTaskCollectSensorData):
+ * su packet_t.data (reservada con malloc() en las tasks productoras):
  * cada cambio de config/protocolo (4 sitios: vTaskGetResponseMQTT/UDP/
  * TCP/BLE) perdía esa memoria. Se llama en el mismo punto donde antes
  * se llamaba xQueueReset(xQueueData) directamente. */
@@ -272,8 +292,8 @@ static void deep_sleep_if_needed(void) {
     uint64_t sleep_us = (uint64_t)current_config->sleep_time_s * 1000000ULL;
     
     // Suspende recogida de datos
-    ESP_LOGI(TAG, "Suspendiendo vTaskCollectSensorData");
-    suspend_collect_task_when_i2c_idle();
+    ESP_LOGI(TAG, "Suspendiendo tasks de sensores");
+    suspend_collect_tasks_when_i2c_idle();
     
     // En MQTT
     if (current_config->protocol_conf == 0) {
@@ -480,80 +500,101 @@ static void send_config_ack_tcp(const Config *cfg, bool applied) {
     ESP_LOGI(TAG, "TCP: ACK de config enviado.");
 }
 
-// GEN_DATA: Lee datos de sensores, los empaqueta y los inserta en una xQueue.
-void vTaskCollectSensorData(void *pvParameters) {
+/* Encola un paquete ya serializado, liberando su memoria si la cola lo rechaza.
+ * Lo comparten las dos tasks productoras. */
+static void enqueue_packet(packet_t *pkt, const char *tag) {
+    int send = xQueueSend(xQueueData, pkt, portMAX_DELAY);
+    if (send == pdTRUE) {
+        ESP_LOGI(tag, "Se ha insertado correctamente en la xQueue");
+    }
+    else {
+        ESP_LOGW(tag, "xQueueSend falló (code=%d), paquete descartado y memoria liberada", send);
+        free(pkt->data);
+    }
+}
+
+/* Epoch actual en segundos, o 0 si el reloj todavía no está puesto en hora. */
+static uint32_t now_unix_s(void) {
+    time_t now_s = 0;
+    time(&now_s);
+    return now_s > 0 ? (uint32_t)now_s : 0;
+}
+
+/* Intervalo del flujo lento. env_interval_s = 0 significa "el mismo que el
+ * rápido", para que una config antigua sin ese campo siga comportándose como
+ * antes en vez de girar en vacío. */
+static uint32_t environmental_interval_s(void) {
+    if (!current_config) {
+        return 1;
+    }
+    uint32_t env_s = current_config->env_interval_s;
+    if (env_s == 0) {
+        env_s = current_config->send_interval_s;
+    }
+    return env_s > 0 ? env_s : 1;
+}
+
+// GEN_DATA (rápido): BMI270 + BMM350 -> paquete Inertial, cada send_interval_s.
+void vTaskCollectInertial(void *pvParameters) {
     for (;;) {
-        Data1 data_1 = DATA_1__INIT;
-        data_1.id_device = this_device_id;
-        data_1.config_version_applied = current_config ? current_config->config_version : 0;
+        Inertial inertial = INERTIAL__INIT;
+        inertial.id_device = this_device_id;
+        inertial.config_version_applied = current_config ? current_config->config_version : 0;
+        inertial.time_client = now_unix_s();
 
-        Data2 data_2 = DATA_2__INIT;
-        data_2.id_device = this_device_id;
-        data_2.config_version_applied = current_config ? current_config->config_version : 0;
+        // Recogida de datos de sensores inerciales
+        readout_data_bmi270(&inertial);
+        readout_data_bmm350(&inertial);
 
-        // Deja timestamp en paquetes
-        time_t now_s = 0;
-        time(&now_s);
-        uint32_t now_unix_s = now_s > 0 ? (uint32_t)now_s : 0;
-        data_1.time_client = now_unix_s;
-        data_2.time_client = now_unix_s;
-
-        packet_t packet_1;
-        packet_t packet_2;
-
-        // Recogida de datos de sensores
-        readout_data_bmi270(&data_2);
-        readout_data_bmm350(&data_1);
-        readout_data_bme688(&data_1);
-        
-        // Serializa el mensaje protobuf
-        packet_1.size = data_1__get_packed_size(&data_1) + 1;
-        packet_1.data = malloc(packet_1.size);
-        if (packet_1.data == NULL) {
-            ESP_LOGI(TAG_COLLECT_DATA, "Error: no se pudo reservar memoria para el paquete");
+        // Serializa el mensaje protobuf, con el byte de tipo por delante
+        packet_t packet;
+        packet.size = inertial__get_packed_size(&inertial) + 1;
+        packet.data = malloc(packet.size);
+        if (packet.data == NULL) {
+            ESP_LOGE(TAG_COLLECT_INERTIAL, "Error: no se pudo reservar memoria para el paquete");
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
-        packet_1.data[0] = 0x01;
-        data_1__pack(&data_1, packet_1.data + 1);
-        ESP_LOGI(TAG_COLLECT_DATA, "Paquete Data1 generado");
+        packet.data[0] = 0x02;
+        inertial__pack(&inertial, packet.data + 1);
+        ESP_LOGI(TAG_COLLECT_INERTIAL, "Paquete Inertial generado");
 
-        // Inserción en la queue
-        int send = xQueueSend(xQueueData, &packet_1, portMAX_DELAY);
-        if (send == pdTRUE) {
-            ESP_LOGI(TAG_COLLECT_DATA, "Se ha insertado correctamente en la xQueue");
-        }
-        else {
-            ESP_LOGW(TAG_COLLECT_DATA, "xQueueSend falló (code=%d), paquete descartado y memoria liberada", send);
-            free(packet_1.data);
-        }
-        
+        enqueue_packet(&packet, TAG_COLLECT_INERTIAL);
+
         // Ritma la producción
-        vTaskDelay(1);
+        uint32_t interval_s = current_config ? current_config->send_interval_s : 1;
+        vTaskDelay(pdMS_TO_TICKS(interval_s * 1000U) + 1);
+    }
+}
 
-        packet_2.size = data_2__get_packed_size(&data_2) + 1;
-        packet_2.data = malloc(packet_2.size);
-        if (packet_2.data == NULL) {
-            ESP_LOGI(TAG_COLLECT_DATA, "Error: no se pudo reservar memoria para el paquete");
+// GEN_DATA (lento): BME688 -> paquete Environmental, cada env_interval_s.
+void vTaskCollectEnvironmental(void *pvParameters) {
+    for (;;) {
+        Environmental env = ENVIRONMENTAL__INIT;
+        env.id_device = this_device_id;
+        env.config_version_applied = current_config ? current_config->config_version : 0;
+        env.time_client = now_unix_s();
+
+        // Recogida de datos ambientales
+        readout_data_bme688(&env);
+
+        // Serializa el mensaje protobuf, con el byte de tipo por delante
+        packet_t packet;
+        packet.size = environmental__get_packed_size(&env) + 1;
+        packet.data = malloc(packet.size);
+        if (packet.data == NULL) {
+            ESP_LOGE(TAG_COLLECT_ENV, "Error: no se pudo reservar memoria para el paquete");
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
-        packet_2.data[0] = 0x02;
-        data_2__pack(&data_2, packet_2.data + 1);
-        ESP_LOGI(TAG_COLLECT_DATA, "Paquete Data2 generado");
+        packet.data[0] = 0x01;
+        environmental__pack(&env, packet.data + 1);
+        ESP_LOGI(TAG_COLLECT_ENV, "Paquete Environmental generado");
 
-        // Inserción en la queue
-        send = xQueueSend(xQueueData, &packet_2, portMAX_DELAY);
-        if (send == pdTRUE) {
-            ESP_LOGI(TAG_COLLECT_DATA, "Se ha insertado correctamente en la xQueue");
-        }
-        else {
-            ESP_LOGW(TAG_COLLECT_DATA, "xQueueSend falló (code=%d), paquete descartado y memoria liberada", send);
-            free(packet_2.data);
-        }
+        enqueue_packet(&packet, TAG_COLLECT_ENV);
 
         // Ritma la producción
-        vTaskDelay(pdMS_TO_TICKS((uint32_t)current_config->send_interval_s * 1000U) + 1);
+        vTaskDelay(pdMS_TO_TICKS(environmental_interval_s() * 1000U) + 1);
     }
 }
 
@@ -632,12 +673,10 @@ void vTaskGetResponseMQTT(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskSendMQTT");
             }
 
-            if (xHandleCollectSensorData) { 
-                // Se resetea queue para que quede vacía
-                drain_and_free_data_queue();
-                suspend_collect_task_when_i2c_idle();
-                ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskCollectSensorData");  
-            }
+            // Se resetea queue para que quede vacía
+            drain_and_free_data_queue();
+            ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspenden tasks de sensores");
+            suspend_collect_tasks_when_i2c_idle();
 
             send_config_ack_mqtt(current_config, true);
             vTaskDelay(4000 / portTICK_PERIOD_MS);
@@ -731,12 +770,10 @@ void vTaskGetResponseBLE(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskSendBLE");
                 vTaskSuspend(xHandleSendBLE);
             }
-            if (xHandleCollectSensorData) {
-                // Se resetea queue para que quede vacía
-                drain_and_free_data_queue();
-                ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskCollectSensorData");
-                suspend_collect_task_when_i2c_idle();
-            }
+            // Se resetea queue para que quede vacía
+            drain_and_free_data_queue();
+            ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo tasks de sensores");
+            suspend_collect_tasks_when_i2c_idle();
 
             // Señala a app_main que debe cambiar de protocolo
             if (xSemaphoreGive(semaphore)) {
@@ -813,12 +850,10 @@ void vTaskGetResponseUDP(void *pvParameters) {
                 vTaskSuspend(xHandleSendUDP);
             }
 
-            if (xHandleCollectSensorData) {
-                // Se resetea queue para que quede vacía
-                drain_and_free_data_queue();
-                ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo vTaskCollectSensorData");
-                suspend_collect_task_when_i2c_idle();
-            }
+            // Se resetea queue para que quede vacía
+            drain_and_free_data_queue();
+            ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo tasks de sensores");
+            suspend_collect_tasks_when_i2c_idle();
 
             send_config_ack_udp(current_config, true);
             vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -903,12 +938,10 @@ void vTaskGetResponseTCP(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskSendTCP");
                 vTaskSuspend(xHandleSendTCP);
             }
-            if (xHandleCollectSensorData) {
-                // Se resetea queue para que quede vacía
-                drain_and_free_data_queue();
-                ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskCollectSensorData");
-                suspend_collect_task_when_i2c_idle();
-            }
+            // Se resetea queue para que quede vacía
+            drain_and_free_data_queue();
+            ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo tasks de sensores");
+            suspend_collect_tasks_when_i2c_idle();
 
             send_config_ack_tcp(current_config, true);
             vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -1071,14 +1104,16 @@ void app_main() {
                 mqtt_subscribe(topic_cfg, 0);
                 
                 // Crea una sola vez las tasks
-                if (!xHandleCollectSensorData)
-                    xTaskCreate(vTaskCollectSensorData, TAG_COLLECT_DATA, 4096, NULL, 2, &xHandleCollectSensorData);
+                if (!xHandleCollectInertial)
+                    xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
+                if (!xHandleCollectEnvironmental)
+                    xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
                 if (!xHandleSendMQTT)
                     xTaskCreate(vTaskSendMQTT, TAG_SEND_MQTT, 4096, NULL, 2, &xHandleSendMQTT);
                 if (!xHandleGetResponseMQTT) 
                     xTaskCreate(vTaskGetResponseMQTT, TAG_GET_RSP_MQTT, 4096, NULL, 3, &xHandleGetResponseMQTT);
 
-                vTaskResume(xHandleCollectSensorData);
+                resume_collect_tasks();
                 vTaskResume(xHandleSendMQTT);
                 vTaskResume(xHandleGetResponseMQTT);
 
@@ -1117,14 +1152,16 @@ void app_main() {
                 nebulaedge_udp_open_socket(&params);
 
                 // Crea una sola vez las tasks
-                if (!xHandleCollectSensorData)
-                    xTaskCreate(vTaskCollectSensorData, TAG_COLLECT_DATA, 4096, NULL, 2, &xHandleCollectSensorData);
+                if (!xHandleCollectInertial)
+                    xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
+                if (!xHandleCollectEnvironmental)
+                    xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
                 if (!xHandleSendUDP)
                     xTaskCreate(vTaskSendUDP, TAG_SEND_UDP, 4096, NULL, 2, &xHandleSendUDP);
                 if (!xHandleGetResponseUDP) 
                     xTaskCreate(vTaskGetResponseUDP, TAG_GET_RSP_UDP, 4096, NULL, 3, &xHandleGetResponseUDP);
 
-                vTaskResume(xHandleCollectSensorData);
+                resume_collect_tasks();
                 vTaskResume(xHandleSendUDP);
                 vTaskResume(xHandleGetResponseUDP);
 
@@ -1172,14 +1209,16 @@ void app_main() {
                 }
 
                 // Crea una sola vez las tasks
-                if (!xHandleCollectSensorData)
-                    xTaskCreate(vTaskCollectSensorData, TAG_COLLECT_DATA, 4096, NULL, 2, &xHandleCollectSensorData);
+                if (!xHandleCollectInertial)
+                    xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
+                if (!xHandleCollectEnvironmental)
+                    xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
                 if (!xHandleSendTCP)
                     xTaskCreate(vTaskSendTCP, TAG_SEND_TCP, 4096, NULL, 2, &xHandleSendTCP);
                 if (!xHandleGetResponseTCP) 
                     xTaskCreate(vTaskGetResponseTCP, TAG_GET_RSP_TCP, 4096, NULL, 3, &xHandleGetResponseTCP);
 
-                vTaskResume(xHandleCollectSensorData);
+                resume_collect_tasks();
                 vTaskResume(xHandleSendTCP);
                 vTaskResume(xHandleGetResponseTCP);
 
@@ -1210,14 +1249,16 @@ void app_main() {
                 vTaskDelay(5000 / portTICK_PERIOD_MS);
 
                 // Crea una sola vez las tasks
-                if (!xHandleCollectSensorData)
-                    xTaskCreate(vTaskCollectSensorData, TAG_COLLECT_DATA, 4096, NULL, 2, &xHandleCollectSensorData);
+                if (!xHandleCollectInertial)
+                    xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
+                if (!xHandleCollectEnvironmental)
+                    xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
                 if (!xHandleSendBLE)
                     xTaskCreate(vTaskSendBLE, TAG_SEND_BLE, 4096, NULL, 2, &xHandleSendBLE);
                 if (!xHandleGetResponseBLE) 
                     xTaskCreate(vTaskGetResponseBLE, TAG_GET_RSP_BLE, 4096, NULL, 3, &xHandleGetResponseBLE);
 
-                vTaskResume(xHandleCollectSensorData);
+                resume_collect_tasks();
                 vTaskResume(xHandleSendBLE);
                 vTaskResume(xHandleGetResponseBLE);
 

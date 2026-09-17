@@ -393,7 +393,7 @@ static void internal_status(void) {
 
 /* Extrae datos magnéticos y de temperatura del sensor BMM350, los procesa 
  * e imprime en la salida estándar. */           
-void readout_data_bmm350(Data1 *data) {
+void readout_data_bmm350(Inertial *data) {
 
     if (!is_bmm350_active) {
         ESP_LOGW(TAG, "BMM350 no activo, se omite lectura");

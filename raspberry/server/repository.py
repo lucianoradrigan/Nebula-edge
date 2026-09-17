@@ -4,11 +4,11 @@ UTILIDAD PRINCIPAL
     Leer la configuración de cada dispositivo y escribir su telemetría y sus
     logs, contra las cuatro tablas de `nebulaedge_schema`:
 
-        config    una fila por device; es la fuente de verdad de qué protocolo
-                  y qué parámetros de sensor le tocan
-        data_1    telemetría ambiental + vibración ya procesada
-        data_2    acelerómetro y giroscopio crudos
-        log       eventos de operación: conexión, heartbeat, desconexión
+        config         una fila por device; es la fuente de verdad de qué
+                       protocolo y qué parámetros de sensor le tocan
+        environmental  telemetría del BME688, al ritmo de env_interval_s
+        inertial       BMI270 + BMM350, al ritmo de send_interval_s
+        log            eventos de operación: conexión, heartbeat, desconexión
 
 USAR SIEMPRE LOS MÉTODOS *_async DESDE CORUTINAS
     psycopg2 es bloqueante. Llamar `get_config()` directo desde una corutina
@@ -35,7 +35,7 @@ from psycopg2.pool import ThreadedConnectionPool
 import asyncio
 import threading
 
-from models import ConfigData, Data_1, Data_2, Log
+from models import ConfigData, Environmental, Inertial, Log
 from system import utc_epoch_now, LocalWifiConfig
 
 
@@ -114,8 +114,8 @@ class DatabaseRepository:
             with db.cursor() as cursor:
                 cursor.execute("""
                     SELECT id_device, config_version, protocol_conf, acc_sampling, gyro_sensibility,
-                        bme688_sampling, send_interval_s, sleep_time_s, sleep_window_size,
-                        tcp_port, udp_port, mqtt_broker
+                        bme688_sampling, send_interval_s, env_interval_s, sleep_time_s,
+                        sleep_window_size, tcp_port, udp_port, mqtt_broker
                     FROM nebulaedge_schema.config
                     WHERE id_device = %s;
                 """, (device_id,))
@@ -133,48 +133,38 @@ class DatabaseRepository:
                         gyro_sensibility=row[4],
                         bme688_sampling=row[5],
                         send_interval_s=row[6],
-                        sleep_time_s=row[7],
-                        sleep_window_size=row[8],
-                        tcp_port=row[9],
-                        udp_port=row[10],
+                        env_interval_s=row[7] or 0,
+                        sleep_time_s=row[8],
+                        sleep_window_size=row[9],
+                        tcp_port=row[10],
+                        udp_port=row[11],
                         host_ip_addr=host_ip_addr,
                         ssid=ssid,
                         passwd=passwd,
-                        mqtt_broker=row[11],
+                        mqtt_broker=row[12],
                         time_client=time_cli        # Timestamp en segundos
                     )
                 else:
                     return None
 
-    def insert_data_1(self, data_1: Data_1):
-        """Inserta datos de sensor en la BD."""
+    def insert_environmental(self, environmental: Environmental):
+        """Inserta telemetría ambiental (BME688) en la BD."""
         try:
             with self._connection() as db:
                 with db.cursor() as cursor:
                     cursor.execute("""
-                        INSERT INTO nebulaedge_schema.data_1 (
-                            id_device, temperature, press, hum, co, rms,
-                            amp_x, freq_x, amp_y, freq_y, amp_z, freq_z,
-                            mag_x, mag_y, mag_z, config_version_applied, time_client
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO nebulaedge_schema.environmental (
+                            id_device, temperature, press, hum, co,
+                            config_version_applied, time_client
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """, (
-                        data_1.id_device,
-                        data_1.temperature,
-                        data_1.press,
-                        data_1.hum,
-                        data_1.co,
-                        data_1.rms,
-                        data_1.amp_x,
-                        data_1.freq_x,
-                        data_1.amp_y,
-                        data_1.freq_y,
-                        data_1.amp_z,
-                        data_1.freq_z,
-                        data_1.mag_x,
-                        data_1.mag_y,
-                        data_1.mag_z,
-                        data_1.config_version_applied,
-                        self._int_to_db_datetime(data_1.time_client)
+                        environmental.id_device,
+                        environmental.temperature,
+                        environmental.press,
+                        environmental.hum,
+                        environmental.co,
+                        environmental.config_version_applied,
+                        self._int_to_db_datetime(environmental.time_client)
                     ))
                     db.commit()
         except AttributeError:
@@ -182,27 +172,31 @@ class DatabaseRepository:
         except Exception as e:
             print(e)
 
-    def insert_data_2(self, data_2: "Data_2"):
-        """Inserta datos Data_2 en la BD."""
+    def insert_inertial(self, inertial: "Inertial"):
+        """Inserta telemetría inercial (BMI270 + BMM350) en la BD."""
         try:
             with self._connection() as db:
                 with db.cursor() as cursor:
                     cursor.execute("""
-                        INSERT INTO nebulaedge_schema.data_2 (
+                        INSERT INTO nebulaedge_schema.inertial (
                             id_device, acc_x, acc_y, acc_z,
                             gyr_x, gyr_y, gyr_z,
+                            mag_x, mag_y, mag_z,
                             config_version_applied, time_client
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
-                        data_2.id_device,
-                        data_2.acc_x,
-                        data_2.acc_y,
-                        data_2.acc_z,
-                        data_2.gyr_x,
-                        data_2.gyr_y,
-                        data_2.gyr_z,
-                        data_2.config_version_applied,
-                        self._int_to_db_datetime(data_2.time_client),
+                        inertial.id_device,
+                        inertial.acc_x,
+                        inertial.acc_y,
+                        inertial.acc_z,
+                        inertial.gyr_x,
+                        inertial.gyr_y,
+                        inertial.gyr_z,
+                        inertial.mag_x,
+                        inertial.mag_y,
+                        inertial.mag_z,
+                        inertial.config_version_applied,
+                        self._int_to_db_datetime(inertial.time_client),
                     ))
                     db.commit()
         except AttributeError:
@@ -241,11 +235,11 @@ class DatabaseRepository:
     async def get_config_async(self, device_id: str) -> ConfigData | None:
         return await asyncio.to_thread(self.get_config, device_id)
 
-    async def insert_data_1_async(self, data_1: "Data_1") -> None:
-        await asyncio.to_thread(self.insert_data_1, data_1)
+    async def insert_environmental_async(self, environmental: "Environmental") -> None:
+        await asyncio.to_thread(self.insert_environmental, environmental)
 
-    async def insert_data_2_async(self, data_2: "Data_2") -> None:
-        await asyncio.to_thread(self.insert_data_2, data_2)
+    async def insert_inertial_async(self, inertial: "Inertial") -> None:
+        await asyncio.to_thread(self.insert_inertial, inertial)
 
     async def insert_log_async(self, log: "Log") -> None:
         await asyncio.to_thread(self.insert_log, log)

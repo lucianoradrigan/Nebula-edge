@@ -3,7 +3,7 @@
 
 #include "schema.pb-c.h"
 
-void readout_data_bme688(Data1 *data);
+void readout_data_bme688(Environmental *data);
 void bme688_init(int temp_ovs, int press_ovs, int hum_ovs);
 
 #endif
