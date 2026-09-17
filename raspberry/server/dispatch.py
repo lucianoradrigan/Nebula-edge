@@ -31,6 +31,13 @@ from models import ConfigData, Timeouts
 from repository import DatabaseRepository
 from sessions import MQTTDeviceSession, UDPDeviceSession, TCPDeviceSession, BLEDeviceSession
 
+# Valores de `protocol_conf` en la tabla config. Son parte del contrato con el
+# firmware (ver el switch de app_main en esp32/main/main.c): no se reordenan.
+PROTOCOL_MQTT = 0
+PROTOCOL_UDP = 1
+PROTOCOL_TCP = 2
+PROTOCOL_BLE = 3
+
 
 async def handle_protocol(
     device: BLEDevice,
@@ -41,6 +48,7 @@ async def handle_protocol(
     scanner_start = None,
     ble_adapter: str | None = None,
     timeouts: Timeouts | None = None,
+    ble_client=None,
 ):
     """Despacha la sesión según el protocolo configurado en `ConfigData`."""
     config = initial_config
@@ -48,10 +56,10 @@ async def handle_protocol(
     timeouts = timeouts or Timeouts()
     database_repo = DatabaseRepository(db_dsn)
     session_classes = {
-        0: MQTTDeviceSession,
-        1: UDPDeviceSession,
-        2: TCPDeviceSession,
-        3: BLEDeviceSession,
+        PROTOCOL_MQTT: MQTTDeviceSession,
+        PROTOCOL_UDP: UDPDeviceSession,
+        PROTOCOL_TCP: TCPDeviceSession,
+        PROTOCOL_BLE: BLEDeviceSession,
     }
 
     device_id = device.address
@@ -72,7 +80,11 @@ async def handle_protocol(
             scanner_start,
             ble_adapter,
             timeouts,
+            ble_client=ble_client,
         )
+        # Solo la primera sesión puede aprovechar la conexión del
+        # descubrimiento; para cuando se cambie de protocolo ya estará cerrada.
+        ble_client = None
 
         # Heartbeat / loggeo rutinario
         heartbeat_task = asyncio.create_task(session._protocol_heartbeat_loop())

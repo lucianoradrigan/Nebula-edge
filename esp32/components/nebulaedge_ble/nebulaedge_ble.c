@@ -291,6 +291,17 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 
 static bool notify_enabled_b = false;
 static bool notify_enabled_d = false;
+
+/* Congestión del buffer de salida del stack. Lo actualiza
+ * ESP_GATTS_CONGEST_EVT; es el único caso en que una notificación se pierde
+ * de verdad estando la conexión viva (ver set_char_with_notify). */
+static volatile bool notify_congested = false;
+
+/* Reintentos de una notificación que el stack no aceptó. No es redundancia:
+ * solo se reintenta si el envío falló, nunca "por si acaso". El link layer
+ * de BLE ya garantiza la entrega de lo que sí se llegó a encolar. */
+#define NOTIFY_MAX_RETRIES   5
+#define NOTIFY_RETRY_DELAY_MS 20
 static uint16_t cccd_b = 0x0000;
 static uint8_t prepare_buf[PREPARE_BUF_MAX_SIZE];
 static uint16_t prepare_len = 0;
@@ -539,6 +550,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_DISCONNECT_EVT, reason = 0x%x", param->disconnect.reason);
             notify_enabled_b = false;
             notify_enabled_d = false;
+            notify_congested = false;   // el buffer se va con la conexión
             esp_ble_gap_start_advertising(&adv_params);
             break;
         case ESP_GATTS_CREAT_ATTR_TAB_EVT:{
@@ -556,12 +568,20 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             }
             break;
         }
+        /* El stack avisa cuando el buffer de salida se llena y cuando se
+         * vacía. Mientras esté congestionado, esp_ble_gatts_send_indicate()
+         * descarta la notificación: este flag permite esperar en vez de
+         * perderla (ver set_char_with_notify). */
+        case ESP_GATTS_CONGEST_EVT:
+            notify_congested = param->congest.congested;
+            ESP_LOGW(GATTS_TABLE_TAG, "Enlace %s", notify_congested ? "CONGESTIONADO" : "descongestionado");
+            break;
+
         case ESP_GATTS_STOP_EVT:
         case ESP_GATTS_OPEN_EVT:
         case ESP_GATTS_CANCEL_OPEN_EVT:
         case ESP_GATTS_CLOSE_EVT:
         case ESP_GATTS_LISTEN_EVT:
-        case ESP_GATTS_CONGEST_EVT:
         case ESP_GATTS_UNREG_EVT:
         case ESP_GATTS_DELETE_EVT:
         default:
@@ -619,8 +639,25 @@ esp_err_t set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_
     }
 
     // Intenta notificar solo si está habilitado para esta característica
-    if (notify_enabled && profile_tab[PROFILE_APP_IDX].gatts_if != ESP_GATT_IF_NONE) {
-        esp_err_t notify_ret = esp_ble_gatts_send_indicate(
+    if (!notify_enabled || profile_tab[PROFILE_APP_IDX].gatts_if == ESP_GATT_IF_NONE) {
+        return status;
+    }
+
+    /* Una notificación encolada con éxito llega o se cae la conexión entera:
+     * el link layer de BLE retransmite hasta que el peer confirme cada PDU.
+     * El único modo de pérdida con la conexión viva es que el stack no la
+     * acepte por congestión, y eso se detecta por el valor de retorno. Por
+     * eso se reintenta ante el error concreto, en vez de mandar el paquete
+     * N veces a ciegas. */
+    esp_err_t notify_ret = ESP_FAIL;
+    for (int attempt = 0; attempt < NOTIFY_MAX_RETRIES; attempt++) {
+
+        if (notify_congested) {
+            vTaskDelay(pdMS_TO_TICKS(NOTIFY_RETRY_DELAY_MS));
+            continue;
+        }
+
+        notify_ret = esp_ble_gatts_send_indicate(
             profile_tab[PROFILE_APP_IDX].gatts_if,
             profile_tab[PROFILE_APP_IDX].conn_id,
             ble_handle_table[char_index],
@@ -628,12 +665,22 @@ esp_err_t set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_
             (uint8_t *)value,
             confirm
         );
-        if (notify_ret != ESP_OK) {
-            ESP_LOGW(GATTS_TABLE_TAG, "Notify ignorado: %s", esp_err_to_name(notify_ret));
+
+        if (notify_ret == ESP_OK) {
+            if (attempt > 0) {
+                ESP_LOGI(GATTS_TABLE_TAG, "Notify en char %s entregado al reintento %d", label, attempt);
+            }
+            return status;
         }
+
+        ESP_LOGW(GATTS_TABLE_TAG, "Notify en char %s falló (%s), reintento %d/%d",
+                 label, esp_err_to_name(notify_ret), attempt + 1, NOTIFY_MAX_RETRIES);
+        vTaskDelay(pdMS_TO_TICKS(NOTIFY_RETRY_DELAY_MS));
     }
 
-    return status;
+    ESP_LOGE(GATTS_TABLE_TAG, "Notify en char %s descartado tras %d intentos: %s",
+             label, NOTIFY_MAX_RETRIES, esp_err_to_name(notify_ret));
+    return notify_ret;
 }
 
 // Lee el valor de cualquier característica dado su índice.

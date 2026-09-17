@@ -62,6 +62,7 @@ class DeviceSession:
         scanner_start: Callable[[], Any] | None = None, # Callback para iniciar el scanner
         ble_adapter: str | None = None,                 # Adaptador BLE a usar
         timeouts: Timeouts | None = None,               # Timeouts centralizados
+        ble_client=None,                                # Conexión BLE ya abierta por el descubrimiento
     ):
         """Inicializa contexto de dispositivo y repositorios."""
         self.device = device                            # Dispositivo BLE asociado a la sesión
@@ -73,6 +74,7 @@ class DeviceSession:
         self.scanner_start = scanner_start              # Función para iniciar el scanner
         self.ble_adapter = ble_adapter or "hci1"         # Adaptador BLE a usar
         self.timeouts = timeouts or Timeouts()          # Timeouts centralizados
+        self.ble_client = ble_client                    # Solo BLE la usa; los demás la ignoran
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
         self._last_client_time: int | None = None       # Último time_client recibido desde Data_1/Data_2
 
@@ -310,6 +312,10 @@ class BLEDeviceSession(ProtocolSession):
     transport_cls = BleTransport
 
     def _make_transport(self) -> Transport:
+        # La conexión que trae el descubrimiento sirve una sola vez: si el
+        # enlace se cae y la sesión reabre, ese cliente ya no vale y el
+        # transporte tiene que conectar por su cuenta.
+        client, self.ble_client = self.ble_client, None
         return BleTransport(
             self.config,
             self._sleep_timeout_sec(),
@@ -319,4 +325,5 @@ class BLEDeviceSession(ProtocolSession):
             scanner_stop=self.scanner_stop,
             scanner_start=self.scanner_start,
             ack_window_sec=self.timeouts.ble_ack_short_sec,
+            client=client,
         )

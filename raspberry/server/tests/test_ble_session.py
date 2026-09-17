@@ -98,9 +98,10 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def _build_session(self, repo, timeouts):
+    def _build_session(self, repo, timeouts, ble_client=None):
         return sessions.BLEDeviceSession(
             FakeBLEDevice(), make_config(1), repo, None, None, None, None, timeouts,
+            ble_client=ble_client,
         )
 
     async def _wait_until(self, predicate, timeout=5.0):
@@ -214,6 +215,56 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
             self._build_session(repo, quick_timeouts()).run(), timeout=10.0,
         )
         self.assertIsNone(result)
+
+    async def test_reutiliza_la_conexion_del_descubrimiento(self):
+        """Si el descubrimiento entrega una conexión viva, la sesión la adopta
+        en vez de abrir otra: reconectar cuesta otro descubrimiento de
+        servicios en BlueZ, que es la parte cara."""
+        repo = FakeRepo(db_version=1)
+
+        # Conexión que dejó abierta el handshake inicial
+        adopted = FakeBleakClient(FakeBLEDevice())
+        await adopted.connect()
+
+        task = asyncio.create_task(
+            self._build_session(repo, quick_timeouts(), ble_client=adopted).run()
+        )
+        self.addCleanup(task.cancel)
+
+        # El "start" tiene que salir por la conexión adoptada
+        self.assertTrue(await self._wait_until(
+            lambda: any(u == UUID_CHAR_C and d == b"start" for u, d in adopted.escrituras)),
+            "no se usó la conexión entregada por el descubrimiento")
+
+        # Y no debe haberse construido ningún cliente nuevo
+        self.assertIs(FakeBleakClient.ultima, adopted,
+                      "se abrió una conexión nueva teniendo una viva")
+
+        # La telemetría fluye por esa misma conexión
+        adopted.notificar(UUID_CHAR_B, data_1_packet(applied_version=1))
+        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1))
+
+    async def test_tras_deep_sleep_no_reusa_la_conexion_vieja(self):
+        """La conexión adoptada sirve una sola vez: si el device se duerme y el
+        enlace se corta, reabrir tiene que conectar de nuevo."""
+        repo = FakeRepo(db_version=1)
+
+        adopted = FakeBleakClient(FakeBLEDevice())
+        await adopted.connect()
+
+        task = asyncio.create_task(
+            self._build_session(repo, quick_timeouts(), ble_client=adopted).run()
+        )
+        self.addCleanup(task.cancel)
+        self.assertTrue(await self._wait_until(
+            lambda: any(u == UUID_CHAR_C for u, _ in adopted.escrituras)))
+
+        adopted.notificar(UUID_CHAR_B, DEEP_SLEEP_PACKET)
+
+        self.assertTrue(await self._wait_until(
+            lambda: FakeBleakClient.ultima is not None and FakeBleakClient.ultima is not adopted),
+            "tras el deep sleep se reusó la conexión vieja en vez de reconectar")
+        self.assertFalse(task.done(), "la sesión debía seguir viva tras reconectar")
 
 
 if __name__ == "__main__":

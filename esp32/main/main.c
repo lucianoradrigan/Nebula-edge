@@ -325,12 +325,12 @@ static void deep_sleep_if_needed(void) {
         if (xHandleGetResponseBLE) {
             vTaskSuspend(xHandleGetResponseBLE);
         }
-        for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-            set_char_with_notify(IDX_CHAR_VAL_B_BLE, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
-            vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-        }
+        /* Una sola vez: ver el comentario en send_config_ack_ble(). Acá importa
+         * más todavía, porque cada reenvío son milisegundos despierto antes de
+         * dormir. */
+        set_char_with_notify(IDX_CHAR_VAL_B_BLE, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
         // nvs_clear_config();
-    } 
+    }
     
     nvs_save_config(current_config);
     
@@ -411,12 +411,21 @@ static void send_config_ack_ble(const Config *cfg, bool applied) {
         return;
     }
     config_ack__pack(&ack, buf);
-    for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-        set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
-        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-    }
+
+    /* Una sola vez, a diferencia de UDP: en BLE el link layer ya retransmite
+     * lo que se encoló, y set_char_with_notify() reintenta por su cuenta si el
+     * stack rechaza el envío por congestión. Además el ACK queda legible en
+     * char D, así que si se cae la conexión el servidor lo reconcilia
+     * leyéndolo (BleTransport.confirm_config_applied). */
+    esp_err_t ack_ret = set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
     free(buf);
-    ESP_LOGI(TAG, "BLE: ACK de config enviado.");
+
+    if (ack_ret == ESP_OK) {
+        ESP_LOGI(TAG, "BLE: ACK de config enviado.");
+    } else {
+        ESP_LOGW(TAG, "BLE: ACK no se pudo notificar (%s); queda legible en char D.",
+                 esp_err_to_name(ack_ret));
+    }
 }
 
 /* Envía ACK en protocolo UDP después de recibir una nueva configuración del servidor. */

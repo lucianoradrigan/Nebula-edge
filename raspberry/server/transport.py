@@ -380,6 +380,7 @@ class BleTransport(Transport):
         scanner_stop=None,
         scanner_start=None,
         ack_window_sec: float | None = None,
+        client: BleakClient | None = None,
     ):
         super().__init__(config, connect_timeout_sec)
         self.device = device
@@ -389,6 +390,10 @@ class BleTransport(Transport):
         self.scanner_start = scanner_start
         self.ack_window_sec = ack_window_sec
 
+        # Conexión que el descubrimiento dejó abierta al entregar la config
+        # inicial. Sirve solo para la primera apertura: si el enlace se cae y
+        # la sesión reabre, hay que conectar de nuevo.
+        self._adopted = client
         self._client: BleakClient | None = None
         self._queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._pending: asyncio.Task | None = None
@@ -406,23 +411,32 @@ class BleTransport(Transport):
             await action()
 
     async def open(self) -> bool:
-        print(f"BLE: Modo persistente. Intentando conectar al dispositivo {self.config.id_device}")
+        # El descubrimiento ya abrió una conexión para escribir la config; si
+        # el protocolo es BLE, se sigue usando esa misma en vez de cerrarla y
+        # volver a abrirla. Lo caro de reconectar no es el connect sino el
+        # descubrimiento de servicios que bleak/BlueZ hace en cada uno.
+        client, self._adopted = self._adopted, None
 
-        # Conectar con el scanner corriendo da problemas (ver docs de bleak).
-        await self._scanner(self.scanner_stop)
-        try:
-            client = BleakClient(self.device, adapter=self.adapter)
-            await client.connect()
-            if not client.is_connected:
-                print(f"No se pudo conectar a {self.config.id_device} para RECIBIR DATOS.")
+        if client is not None and client.is_connected:
+            print(f"BLE: se reutiliza la conexión del descubrimiento para {self.config.id_device}")
+        else:
+            print(f"BLE: Modo persistente. Intentando conectar al dispositivo {self.config.id_device}")
+
+            # Conectar con el scanner corriendo da problemas (ver docs de bleak).
+            await self._scanner(self.scanner_stop)
+            try:
+                client = BleakClient(self.device, adapter=self.adapter)
+                await client.connect()
+                if not client.is_connected:
+                    print(f"No se pudo conectar a {self.config.id_device} para RECIBIR DATOS.")
+                    return False
+            except Exception as e:
+                print(f"BLE: fallo conectando a {self.config.id_device}: {type(e).__name__}: {e}")
                 return False
-        except Exception as e:
-            print(f"BLE: fallo conectando a {self.config.id_device}: {type(e).__name__}: {e}")
-            return False
-        finally:
-            # El scanner vuelve pase lo que pase: si queda apagado, no se
-            # descubre ningún otro device.
-            await self._scanner(self.scanner_start)
+            finally:
+                # El scanner vuelve pase lo que pase: si queda apagado, no se
+                # descubre ningún otro device.
+                await self._scanner(self.scanner_start)
 
         self._client = client
 
@@ -447,6 +461,14 @@ class BleTransport(Transport):
         if self._pending is not None:
             self._pending.cancel()
             self._pending = None
+
+        # Si open() nunca llegó a adoptarla, igual hay que soltarla.
+        if self._adopted is not None:
+            adopted, self._adopted = self._adopted, None
+            try:
+                await adopted.disconnect()
+            except Exception:
+                pass
 
         client, self._client = self._client, None
         if client is None:

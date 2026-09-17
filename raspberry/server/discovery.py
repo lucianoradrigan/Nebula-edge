@@ -39,7 +39,7 @@ from models import Timeouts, ConfigData, Log
 from codec import DataCodec
 from system import utc_epoch_now, BLEAdapterResolver
 from repository import DatabaseRepository
-from dispatch import handle_protocol
+from dispatch import handle_protocol, PROTOCOL_BLE
 
 
 class MasterConnection:
@@ -175,35 +175,47 @@ class MasterConnection:
                 async with self.scanner_lock:
                     await self._scanner_stop()
 
-            try:
-                async with BleakClient(
-                    device,
-                    timeout=self.timeouts.ble_connect_sec,
-                    adapter=self.ble_adapter,
-                ) as client:
-                    print(f"Conectado exitosamente a {addr}")
-                    self.devices[addr] = self.State.CONNECTED
-                    await client.write_gatt_char(UUID_CHAR_A, serialized_config, response=True)
+            # Si el protocolo es BLE, esta misma conexión es la que va a usar
+            # la sesión: cerrarla acá obligaría al transporte a reconectar de
+            # inmediato, y cada conexión nueva paga otro descubrimiento de
+            # servicios en BlueZ. Para los otros protocolos sí se cierra: el
+            # device se va a WiFi y no vuelve a usar BLE.
+            reuse_connection = config.protocol_conf == PROTOCOL_BLE
+            client = BleakClient(
+                device,
+                timeout=self.timeouts.ble_connect_sec,
+                adapter=self.ble_adapter,
+            )
+            connection_handed_over = False
 
-                    # Registra envío de configuración inicial al dispositivo.
-                    await DatabaseRepository(self.db_dsn).insert_log_async(
-                        Log(
-                            id_device=config.id_device,
-                            status_report=1,
-                            protocol_report=config.protocol_conf,
-                            batt_level=100,
-                            time_client=config.time_client,
-                            time_server=config.time_client
-                        )
+            try:
+                await client.connect()
+                print(f"Conectado exitosamente a {addr}")
+                self.devices[addr] = self.State.CONNECTED
+                await client.write_gatt_char(UUID_CHAR_A, serialized_config, response=True)
+
+                # Registra envío de configuración inicial al dispositivo.
+                await DatabaseRepository(self.db_dsn).insert_log_async(
+                    Log(
+                        id_device=config.id_device,
+                        status_report=1,
+                        protocol_report=config.protocol_conf,
+                        batt_level=100,
+                        time_client=config.time_client,
+                        time_server=config.time_client
                     )
+                )
 
                 if self.active_tasks:
                     print(f"Tasks activas: {len(self.active_tasks)} -> {list(self.active_tasks.keys())}")
                 else:
                     print("Tasks activas: 0")
                 print(f"Creando task de sesión por dispositivo {addr}")
-                task = asyncio.create_task(self._device_session(device, config))
+                task = asyncio.create_task(
+                    self._device_session(device, config, client if reuse_connection else None)
+                )
                 self.active_tasks[addr] = task
+                connection_handed_over = reuse_connection
 
             except Exception as e:
                 print(f"Fallo en la primera conexión BLE con {addr}: {type(e).__name__}: {e!r}")
@@ -212,13 +224,27 @@ class MasterConnection:
                 self.devices.pop(addr, None)
 
             finally:
+                # La conexión se cierra salvo que se la haya entregado a una
+                # sesión, que a partir de ese momento es su dueña.
+                if not connection_handed_over:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+
                 # Reactiva scanner
                 if self.scanner is not None:
                     async with self.scanner_lock:
                         await self._scanner_start()
 
-    async def _device_session(self, device: BLEDevice, initial_config: "ConfigData"):
-        """Wrapper de sesión por dispositivo, asegura limpieza al terminar."""
+    async def _device_session(self, device: BLEDevice, initial_config: "ConfigData", ble_client=None):
+        """Wrapper de sesión por dispositivo, asegura limpieza al terminar.
+
+        `ble_client` es la conexión que quedó abierta del handshake inicial
+        cuando el protocolo es BLE. La sesión la adopta y normalmente la cierra
+        ella misma; el cierre de acá es la red de seguridad para cuando nunca
+        llegó a adoptarla (protocol_conf inválido, excepción al abrir, cancelación).
+        """
         last_protocol = -1
         try:
             last_protocol = await handle_protocol(
@@ -230,8 +256,14 @@ class MasterConnection:
                 scanner_start=self._scanner_start,
                 ble_adapter=self.ble_adapter,
                 timeouts=self.timeouts,
+                ble_client=ble_client,
             )
         finally:
+            if ble_client is not None and ble_client.is_connected:
+                try:
+                    await ble_client.disconnect()
+                except Exception:
+                    pass
             addr = device.address
             self.active_tasks.pop(addr, None)
             server_time = utc_epoch_now()
