@@ -15,6 +15,7 @@ UTILIDAD PRINCIPAL
         data_1_packet() / config_ack_packet()
                         paquetes ya serializados, idénticos a los que mandaría
                         el firmware
+        tcp_framed()    le pone a un paquete el prefijo de largo que exige TCP
 
     Los paquetes se construyen con el `DataCodec` real, no a mano: si cambia el
     formato del protocolo, estos tests fallan, que es justamente lo que se
@@ -30,6 +31,17 @@ DEVICE_ID = "AA:BB:CC:DD:EE:01"
 
 # Mismo formato que DEEP_SLEEP_FLAG del firmware (nebulaedge_defs.c): {0x04,'d','s'}
 DEEP_SLEEP_PACKET = bytes([DataCodec.TYPE_DEEP_SLEEP]) + b"ds"
+
+
+def tcp_framed(payload: bytes) -> bytes:
+    """Antepone el largo en 2 bytes big-endian, como hace tcp_send() del firmware.
+
+    Escrito a mano y no reusando TcpTransport a propósito: así el test fija el
+    formato de forma independiente de la implementación que está probando. Si
+    alguien cambia el prefijo en transport.py sin cambiarlo en el firmware,
+    estos tests tienen que fallar.
+    """
+    return len(payload).to_bytes(2, "big") + payload
 
 
 def free_port(kind: int = socket.SOCK_DGRAM) -> int:

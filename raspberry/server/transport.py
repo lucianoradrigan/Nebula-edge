@@ -205,15 +205,40 @@ class TcpTransport(Transport):
     A diferencia de UDP hay una conexión real que se puede cortar: cuando el
     device se duerme o cierra, `recv()` lanza TransportClosed y la sesión reabre
     el socket para esperar a que vuelva (`reopens = True`).
+
+    TCP NO CONSERVA LOS LÍMITES DE MENSAJE
+        Es un stream de bytes, no de paquetes. Dos telemetrías que el device
+        manda seguidas pueden llegar juntas en un solo recv(), y un mensaje
+        grande puede llegar partido en dos. Sin marcar dónde termina cada uno,
+        el codec recibe dos protobuf pegados (o medio) y los descarta: se
+        pierden ambos.
+
+        Por eso cada mensaje viaja como [largo: 2 bytes big-endian][payload].
+        El firmware hace exactamente lo mismo en tcp_send()/tcp_receive()
+        (esp32/components/nebulaedge_tcp/nebulaedge_tcp.c). Si el formato
+        cambia de un lado, hay que cambiarlo del otro.
+
+        UDP y BLE no necesitan nada de esto: el datagrama y la notificación
+        GATT llegan enteros o no llegan.
     """
     name = "TCP"
     reopens = True
+
+    # Prefijo de largo: uint16 big-endian (orden de red).
+    LENGTH_PREFIX_BYTES = 2
+
+    # Tope de sanidad. Config y telemetría no pasan de ~250 bytes, así que un
+    # largo mayor que esto significa que los dos extremos se desincronizaron y
+    # el stream ya no es interpretable: mejor cortar y reabrir que seguir
+    # acumulando bytes a la espera de un mensaje que no existe.
+    MAX_FRAME_BYTES = 4096
 
     def __init__(self, config: ConfigData, connect_timeout_sec: float):
         super().__init__(config, connect_timeout_sec)
         self._listen: socket.socket | None = None
         self._conn: socket.socket | None = None
         self._pending: asyncio.Task | None = None
+        self._inbox = b""    # bytes leídos que todavía no forman un mensaje completo
 
     @property
     def can_send(self) -> bool:
@@ -251,6 +276,7 @@ class TcpTransport(Transport):
         if self._pending is not None:
             self._pending.cancel()
             self._pending = None
+        self._inbox = b""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
@@ -258,33 +284,75 @@ class TcpTransport(Transport):
             self._listen.close()
             self._listen = None
 
-    async def recv(self, timeout_sec: float) -> bytes | None:
-        # Misma precaución que en UdpTransport.recv: no cancelar una recepción
-        # que puede haber consumido datos, para no perder paquetes en el borde
-        # del timeout.
-        loop = asyncio.get_running_loop()
-
-        if self._pending is None:
-            self._pending = asyncio.ensure_future(loop.sock_recv(self._conn, 1024))
-
-        done, _ = await asyncio.wait({self._pending}, timeout=timeout_sec)
-        if not done:
+    def _take_frame(self) -> bytes | None:
+        """Saca un mensaje completo del buffer. None si todavía no llegó entero."""
+        n = self.LENGTH_PREFIX_BYTES
+        if len(self._inbox) < n:
             return None
 
-        pending, self._pending = self._pending, None
-        try:
-            packet = pending.result()
-        except Exception as e:
-            raise TransportClosed(f"recepción TCP falló: {e}") from e
+        size = int.from_bytes(self._inbox[:n], "big")
+        if size > self.MAX_FRAME_BYTES:
+            raise TransportClosed(
+                f"largo de mensaje TCP fuera de rango ({size} B): stream desincronizado"
+            )
 
-        if not packet:
-            # recv vacío en TCP = el otro extremo cerró la conexión.
-            raise TransportClosed("el device cerró la conexión")
-        return packet
+        if len(self._inbox) < n + size:
+            return None     # falta cola; se completa con el próximo recv
+
+        frame = self._inbox[n:n + size]
+        self._inbox = self._inbox[n + size:]
+        return frame
+
+    async def recv(self, timeout_sec: float) -> bytes | None:
+        """Devuelve UN mensaje completo, o None si no llegó entero a tiempo.
+
+        Conviven dos precauciones:
+
+        - No cancelar una lectura que puede haber consumido datos (igual que en
+          UdpTransport.recv): la task sigue viva en `self._pending` entre
+          llamadas, así que ningún byte se descarta al vencer el timeout.
+        - No entregar bytes sueltos: lo que llega del socket se acumula en
+          `self._inbox` y solo sale cuando hay un mensaje completo.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = time.monotonic() + timeout_sec
+
+        while True:
+            # Lo que ya está completo sale sin tocar el socket: un solo recv()
+            # del kernel puede traer varios mensajes pegados.
+            frame = self._take_frame()
+            if frame is not None:
+                return frame
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+
+            if self._pending is None:
+                self._pending = asyncio.ensure_future(loop.sock_recv(self._conn, 1024))
+
+            done, _ = await asyncio.wait({self._pending}, timeout=remaining)
+            if not done:
+                return None
+
+            pending, self._pending = self._pending, None
+            try:
+                chunk = pending.result()
+            except Exception as e:
+                raise TransportClosed(f"recepción TCP falló: {e}") from e
+
+            if not chunk:
+                # recv vacío en TCP = el otro extremo cerró la conexión.
+                raise TransportClosed("el device cerró la conexión")
+
+            self._inbox += chunk
 
     async def send(self, data: bytes) -> None:
         loop = asyncio.get_running_loop()
-        await loop.sock_sendall(self._conn, data)
+        header = len(data).to_bytes(self.LENGTH_PREFIX_BYTES, "big")
+        # Header y payload en un solo sendall: mandarlos por separado dejaría,
+        # ante una escritura parcial, un header sin su mensaje detrás.
+        await loop.sock_sendall(self._conn, header + data)
 
 
 class MqttTransport(Transport):
