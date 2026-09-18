@@ -38,7 +38,7 @@ from dataclasses import dataclass
 class Timeouts:
     """Todos los tiempos del servidor, centralizados.
 
-    Se arma una vez en MasterConnection y baja por descubrimiento -> dispatch
+    Se arma una vez en MasterConnection y baja por descubrimiento -> despacho
     -> sesión -> transporte. Los tests construyen uno con valores chicos para
     que la suite corra en segundos en vez de minutos.
     """

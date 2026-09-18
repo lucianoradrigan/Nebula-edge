@@ -28,7 +28,7 @@ REPARTO INTERNO
 
 QUÉ DEVUELVE run()
     Una ConfigData cuando la sesión termina porque hay que reconfigurar -el
-    caller (dispatch.py) decide con ella qué sesión abrir ahora- o None cuando
+    caller (protocol_dispatch.py) decide con ella qué sesión abrir- o None cuando
     la sesión se acabó del todo y el device tiene que volver a descubrirse.
 """
 from __future__ import annotations

@@ -31,8 +31,13 @@ PORTABILIDAD
     de la Raspberry -por ejemplo corriendo el servidor en un Mac- esas llamadas
     fallan en silencio: BLEAdapterResolver cae a su valor por defecto y
     LocalWifiConfig devuelve SSID y password vacíos, con la IP resuelta por el
-    fallback de socket. El servidor arranca igual, pero los devices que usen
-    WiFi no van a recibir credenciales válidas.
+    fallback de socket. El servidor arranca igual, y BLE funciona, pero los
+    devices que usen WiFi no recibirían credenciales válidas.
+
+    Para ese caso están las variables de entorno WIFI_SSID, WIFI_PASSWD y
+    HOST_IP: si están puestas, ganan sobre lo que diga nmcli. Sirven tanto para
+    desarrollar fuera de la Raspberry como para forzar una red de pruebas
+    estando en ella.
 """
 from __future__ import annotations
 import os
@@ -282,6 +287,20 @@ class LocalWifiConfig:
             return ""
 
     @classmethod
+    def _env_overrides(cls) -> tuple[str, str, str]:
+        """Lee WIFI_SSID / WIFI_PASSWD / HOST_IP del entorno.
+
+        Cada una gana sobre lo que devuelva nmcli, y se pueden poner por
+        separado. Sin nmcli -corriendo el servidor en un Mac, por ejemplo- son
+        la única forma de que los devices en WiFi reciban credenciales usables.
+        """
+        return (
+            os.getenv("HOST_IP", "").strip(),
+            os.getenv("WIFI_SSID", "").strip(),
+            os.getenv("WIFI_PASSWD", "").strip(),
+        )
+
+    @classmethod
     def get(cls, cache_ttl_sec: float | None = None) -> tuple[str, str, str]:
         """Retorna (host_ip_addr, ssid, passwd) con cache de corto plazo."""
         ttl = cls._CACHE_TTL_SEC if cache_ttl_sec is None else cache_ttl_sec
@@ -294,13 +313,20 @@ class LocalWifiConfig:
                 str(cls._CACHE.get("passwd", "")),
             )
 
-        # device = cls.active_wifi_device()
-        device = "wlan0"
-        # device = "wlan1"
-        conn_name = cls._active_connection_name(device)
-        ssid = cls._active_wifi_ssid(device, conn_name)
-        passwd = cls._active_wifi_psk(conn_name)
-        host_ip_addr = cls.active_wifi_ip(device) or cls._local_ip_fallback()
+        env_ip, env_ssid, env_passwd = cls._env_overrides()
+
+        # Si el entorno define las tres, no hace falta molestar a nmcli: son
+        # cuatro subprocesos que en un Mac fallan igual.
+        if env_ip and env_ssid and env_passwd:
+            ssid, passwd, host_ip_addr = env_ssid, env_passwd, env_ip
+        else:
+            # device = cls.active_wifi_device()
+            device = "wlan0"
+            # device = "wlan1"
+            conn_name = cls._active_connection_name(device)
+            ssid = env_ssid or cls._active_wifi_ssid(device, conn_name)
+            passwd = env_passwd or cls._active_wifi_psk(conn_name)
+            host_ip_addr = env_ip or cls.active_wifi_ip(device) or cls._local_ip_fallback()
 
         cls._CACHE.update({
             "ts": now,

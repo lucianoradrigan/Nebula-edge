@@ -17,7 +17,7 @@ UTILIDAD PRINCIPAL
 AGREGAR UN PROTOCOLO NUEVO (CoAP, LoRa, el que sea)
     1. escribir un Transport nuevo en este archivo,
     2. `class CoAPDeviceSession(ProtocolSession): transport_cls = CoapTransport`,
-    3. una línea en el dict `session_classes` de dispatch.py.
+    3. una línea en el dict `session_classes` de protocol_dispatch.py.
 
 PUNTOS DEL CONTRATO, Y QUÉ PROTOCOLO LOS PIDIÓ
     reopens                     el enlace se corta y hay que reabrirlo (TCP, BLE)

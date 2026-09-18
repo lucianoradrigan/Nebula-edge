@@ -13,7 +13,7 @@ MAPA DEL SERVIDOR
 
     server.py           arranca el proceso
     discovery.py        escanea BLE, entrega la config inicial, abre una sesión
-    dispatch.py         elige qué sesión corre según protocol_conf
+    protocol_dispatch.py  elige qué sesión corre según protocol_conf
     sessions.py         el bucle de sesión, idéntico para los 4 protocolos
     transport.py        lo único que cambia entre protocolos: mover los bytes
     router.py           clasifica el paquete entrante y persiste la telemetría

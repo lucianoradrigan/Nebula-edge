@@ -10,7 +10,7 @@ FLUJO POR DISPOSITIVO DESCUBIERTO
     2. Busca su configuración en Postgres usando la MAC como id_device.
     3. Se conecta por BLE y escribe la config en la característica A.
     4. Registra la conexión en la tabla `log`.
-    5. Lanza una task de sesión (`dispatch.handle_protocol`) y vuelve a escanear.
+    5. Lanza una task de sesión (`protocol_dispatch.handle_protocol`) y vuelve a escanear.
 
 CONCURRENCIA
     Cada dispositivo corre en su propia task de asyncio, así que varios nodos
@@ -39,7 +39,7 @@ from models import Timeouts, ConfigData, Log
 from codec import DataCodec
 from system import utc_epoch_now, BLEAdapterResolver
 from repository import DatabaseRepository
-from dispatch import handle_protocol, PROTOCOL_BLE
+from protocol_dispatch import handle_protocol, PROTOCOL_BLE
 
 
 class MasterConnection:
