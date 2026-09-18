@@ -14,7 +14,6 @@
 #include "esp_sleep.h"
 #include "esp_attr.h"
 #include "nvs_flash.h"
-#include "nvs.h"
 #include "freertos/semphr.h"
 
 #include "nebulaedge_wifi.h"
@@ -23,6 +22,7 @@
 #include "nebulaedge_tcp.h"
 #include "nebulaedge_ble.h"
 #include "nebulaedge_defs.h"
+#include "nebulaedge_config_store.h"
 #include "nebulaedge_i2c.h"
 #include "bmm350.h"
 #include "bme688.h"
@@ -81,9 +81,6 @@ const char *TAG_GET_RSP_UDP = "task_get_rsp_udp";
 static uint32_t data_window_count = 0;
 RTC_DATA_ATTR static uint32_t rtc_unix_time_s = 0;
 static char this_device_id[18] = "00:00:00:00:00:00";
-
-#define NVS_NAMESPACE "nebulaedge"
-#define NVS_KEY_CONFIG "config_blob"
 
 /* Los paquetes de control (ACK de config, aviso de deep sleep) no esperan respuesta:
  * se mandan varias veces seguidas para bajar la probabilidad de que se pierdan, en
@@ -278,70 +275,6 @@ static void get_bt_mac(void) {
     ESP_LOGI(TAG, "ID del device detectado: %s", this_device_id);
 }
 
-/* Borra los datos de la NVS. */
-static void nvs_clear_config(void) {
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
-        return;
-    }
-    nvs_erase_key(nvs, NVS_KEY_CONFIG);
-    nvs_commit(nvs);
-    nvs_close(nvs);
-}
-
-/* Guarda un paquete Config en la NVS */
-static void nvs_save_config(const Config *cfg) {
-    if (!cfg) return;
-
-    size_t size = config__get_packed_size(cfg);
-    if (size == 0) return;
-
-    uint8_t *buf = malloc(size);
-    if (!buf) {
-        ESP_LOGE(TAG, "No hay memoria para guardar config en NVS");
-        return;
-    }
-    config__pack(cfg, buf);
-
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
-        if (nvs_set_blob(nvs, NVS_KEY_CONFIG, buf, size) == ESP_OK) {
-            nvs_commit(nvs);
-        }
-        nvs_close(nvs);
-    }
-    free(buf);
-}
-
-/* Carga un paquete Config desde la NVS. */
-static Config *nvs_load_config(void) {
-    nvs_handle_t nvs;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
-        return NULL;
-    }
-
-    size_t size = 0;
-    if (nvs_get_blob(nvs, NVS_KEY_CONFIG, NULL, &size) != ESP_OK || size == 0) {
-        nvs_close(nvs);
-        return NULL;
-    }
-
-    uint8_t *buf = malloc(size);
-    if (!buf) {
-        nvs_close(nvs);
-        return NULL;
-    }
-
-    Config *cfg = NULL;
-    if (nvs_get_blob(nvs, NVS_KEY_CONFIG, buf, &size) == ESP_OK) {
-        cfg = config__unpack(NULL, size, buf);
-    }
-
-    free(buf);
-    nvs_close(nvs);
-    return cfg;
-}
-
 /* Deep sleep helper para modo discontinuo.
  * Se llama en la función de envío de cada protocolo. */
 static void deep_sleep_if_needed(void) {
@@ -430,10 +363,10 @@ static void deep_sleep_if_needed(void) {
          * más todavía, porque cada reenvío son milisegundos despierto antes de
          * dormir. */
         set_char_with_notify(IDX_CHAR_VAL_B_BLE, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
-        // nvs_clear_config();
+        // config_store_clear();
     }
     
-    nvs_save_config(current_config);
+    config_store_save(current_config);
     
     /* Cada driver se saca del bus solo. Tiene que ser ANTES del
      * i2c_master_deinit: borrar el bus invalida los handles de sus slaves. */
@@ -1136,7 +1069,7 @@ void app_main() {
     // En caso de reinicio espera configuración vía BLE.
     esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
     if (wake_cause == ESP_SLEEP_WAKEUP_TIMER) {
-        current_config = nvs_load_config();
+        current_config = config_store_load();
         if (current_config) {
             ESP_LOGI(TAG, "Config cargada desde NVS (wake-up por deep sleep)");
             restore_device_time_after_deep_sleep();
@@ -1144,7 +1077,7 @@ void app_main() {
         }
     }
     else {
-        nvs_clear_config();
+        config_store_clear();
     }
 
     /********************************************************************/
