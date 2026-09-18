@@ -25,10 +25,15 @@ typedef struct {
     uint32_t freq_hz;       // velocidad por defecto de los slaves de este bus
 } i2c_bus_config_t;
 
-/* Las funciones i2c de por sí son thread safe. El mutex existe para que, al
- * suspender una task desde afuera de sí misma, no quede a medias de una
- * transacción I2C. La aplicación lo necesita para eso; los drivers no lo usan
- * directamente, `device_read`/`device_write` ya lo toman por dentro. */
+/* El driver i2c_master de ESP-IDF ya serializa cada transacción por su cuenta,
+ * así que este mutex NO está para eso. Lo que agrega es atomicidad de la
+ * secuencia completa: `device_read` son dos transacciones (escribir la
+ * dirección del registro, después leer), y sin el mutex otra task podría
+ * colarse entre las dos si ambas hablan con el MISMO device.
+ *
+ * Nadie tiene que tomarlo a mano: `device_read`/`device_write` ya lo hacen por
+ * dentro. Se expone por compatibilidad; no lo uses desde afuera para congelar
+ * tasks — suspender una task desde otra es justamente lo que hay que evitar. */
 extern SemaphoreHandle_t i2c_bus_mutex;
 
 esp_err_t i2c_master_init(i2c_master_bus_handle_t *bus, const i2c_bus_config_t *config);

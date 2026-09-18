@@ -6,6 +6,7 @@
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -91,48 +92,6 @@ static char this_device_id[18] = "00:00:00:00:00:00";
 #define CONTROL_PKT_REDUNDANCY 3
 #define CONTROL_PKT_REDUNDANCY_DELAY_MS 50
 
-/* Suspende las dos tasks de sensores solo cuando el bus I2C está libre.
- * Evita pausar una task en mitad de una transacción I2C.
- *
- * Las dos se suspenden bajo el MISMO mutex tomado una sola vez: si se hiciera
- * en dos pasos, la que quedara viva podría empezar una transacción justo entre
- * medio y volveríamos al problema que esto evita. */
-static void suspend_collect_tasks_when_i2c_idle(void) {
-    // Si no existe ninguna todavía, no hay nada que suspender.
-    if (!xHandleCollectInertial && !xHandleCollectEnvironmental) {
-        return;
-    }
-
-    // Fallback defensivo: si el mutex aún no fue creado, suspende igual.
-    if (i2c_bus_mutex == NULL) {
-        ESP_LOGW(TAG, "i2c_bus_mutex es NULL, se suspenden tasks de sensores sin validación");
-        if (xHandleCollectInertial) vTaskSuspend(xHandleCollectInertial);
-        if (xHandleCollectEnvironmental) vTaskSuspend(xHandleCollectEnvironmental);
-        return;
-    }
-
-    // Espera hasta tomar el mutex y suspende antes de liberarlo.
-    // Así se evita la carrera entre "mutex libre" y "vTaskSuspend".
-    while (1) {
-        if (xSemaphoreTake(i2c_bus_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-            if (xHandleCollectInertial) vTaskSuspend(xHandleCollectInertial);
-            if (xHandleCollectEnvironmental) vTaskSuspend(xHandleCollectEnvironmental);
-            xSemaphoreGive(i2c_bus_mutex);
-            ESP_LOGI(TAG, "Tasks de sensores suspendidas con mutex I2C libre");
-            return;
-        }
-
-        ESP_LOGW(TAG, "Esperando mutex I2C libre para suspender tasks de sensores...");
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-
-/* Reanuda las dos tasks de sensores. */
-static void resume_collect_tasks(void) {
-    if (xHandleCollectInertial) vTaskResume(xHandleCollectInertial);
-    if (xHandleCollectEnvironmental) vTaskResume(xHandleCollectEnvironmental);
-}
-
 /* Vacía xQueueData liberando la memoria de cada packet_t pendiente.
  *
  * xQueueReset() por sí solo descarta los elementos en cola SIN liberar
@@ -145,6 +104,119 @@ static void drain_and_free_data_queue(void) {
     while (xQueueReceive(xQueueData, &pkt, 0) == pdTRUE) {
         free(pkt.data);
     }
+}
+
+/* COMPUERTA DE LAS TASKS DE SENSORES
+ *
+ * Antes las dos productoras se detenían con vTaskSuspend() desde afuera. Eso
+ * congela a la víctima en la instrucción exacta en que iba: si justo estaba
+ * dentro de malloc() o free(), se queda con el lock del heap tomado y la
+ * siguiente reserva de CUALQUIER task del sistema se bloquea para siempre.
+ * Las dos tasks hacen malloc() en cada paquete, así que la ventana existía de
+ * verdad — es el cuelgue que se veía.
+ *
+ * El mutex I2C no tapaba ese hueco: solo cubría las transacciones del bus, no
+ * el heap. Y para lo que decía proteger tampoco hacía falta, porque el driver
+ * i2c_master de ESP-IDF ya serializa cada transacción con su propio lock
+ * interno (bus_lock_mux).
+ *
+ * La solución es no interrumpirlas: se les PIDE que paren y ellas se detienen
+ * solas en un punto donde no tienen nada tomado (el tope de su bucle). */
+#define GATE_RUN            (1 << 0)  // permiso para producir
+#define GATE_PAUSE_REQ      (1 << 1)  // hay una pausa pedida (despierta los sleeps)
+#define GATE_INERTIAL_IDLE  (1 << 2)  // la task Inertial ya está detenida
+#define GATE_ENV_IDLE       (1 << 3)  // la task Environmental ya está detenida
+
+/* Cuánto se espera a que lleguen a la compuerta. Una lectura de sensor a medio
+ * hacer puede tardar lo suyo si el bus está lento; pasado esto se sigue igual,
+ * porque ya nadie queda suspendido y lo peor que pasa es un paquete de más. */
+#define GATE_PAUSE_TIMEOUT_MS 5000
+
+static EventGroupHandle_t sensor_gate = NULL;
+
+/* Punto seguro. Va al tope del bucle de cada productora: si hay una pausa
+ * pedida, la task levanta su bit de "detenida" y se bloquea acá hasta que
+ * vuelva el permiso. */
+static void sensor_gate_wait(EventBits_t idle_bit) {
+    if (sensor_gate == NULL) {
+        return;
+    }
+
+    while ((xEventGroupGetBits(sensor_gate) & GATE_RUN) == 0) {
+        xEventGroupSetBits(sensor_gate, idle_bit);
+        xEventGroupWaitBits(sensor_gate, GATE_RUN, pdFALSE, pdTRUE, portMAX_DELAY);
+        xEventGroupClearBits(sensor_gate, idle_bit);
+    }
+}
+
+/* Reemplaza a vTaskDelay() para ritmar la producción. Si llega una petición de
+ * pausa mientras la task duerme, despierta de inmediato en vez de dejar
+ * esperando el intervalo entero: con env_interval_s en 10 s o más, pausar
+ * tardaría eso en completarse. */
+static void sensor_gate_sleep(uint32_t ms) {
+    TickType_t ticks = pdMS_TO_TICKS(ms) + 1;
+
+    if (sensor_gate == NULL) {
+        vTaskDelay(ticks);
+        return;
+    }
+
+    xEventGroupWaitBits(sensor_gate, GATE_PAUSE_REQ, pdFALSE, pdTRUE, ticks);
+}
+
+/* Pide a las dos productoras que se detengan y espera a que lleguen al punto
+ * seguro. Reemplaza al antiguo vTaskSuspend() sobre las productoras.
+ *
+ * El drenado de la cola se hace acá adentro, y dos veces. Antes estaba afuera
+ * y solo una vez, ANTES de detener las tasks: cualquier paquete producido
+ * entre el drenado y la detención se colaba al protocolo siguiente. Ahora el
+ * segundo drenado, ya con las dos detenidas, cierra esa ventana.
+ *
+ * El primero tampoco sobra: si la cola está llena y la task consumidora ya fue
+ * suspendida, la productora está bloqueada en xQueueSend(portMAX_DELAY) y
+ * nunca llegaría a la compuerta. Vaciar la cola es justo lo que la desbloquea. */
+static void pause_collect_tasks(void) {
+    if (sensor_gate == NULL) {
+        return;
+    }
+
+    xEventGroupClearBits(sensor_gate, GATE_RUN);
+    xEventGroupSetBits(sensor_gate, GATE_PAUSE_REQ);
+
+    drain_and_free_data_queue();
+
+    EventBits_t expected = 0;
+    if (xHandleCollectInertial)      expected |= GATE_INERTIAL_IDLE;
+    if (xHandleCollectEnvironmental) expected |= GATE_ENV_IDLE;
+
+    // Todavía no existen: no hay nada a qué esperar.
+    if (expected == 0) {
+        return;
+    }
+
+    EventBits_t got = xEventGroupWaitBits(sensor_gate, expected, pdFALSE, pdTRUE,
+                                          pdMS_TO_TICKS(GATE_PAUSE_TIMEOUT_MS));
+    if ((got & expected) == expected) {
+        ESP_LOGI(TAG, "Tasks de sensores detenidas en punto seguro");
+    }
+    else {
+        ESP_LOGW(TAG, "Timeout esperando que las tasks de sensores se detengan (bits=0x%02X)",
+                 (unsigned)got);
+    }
+
+    // Segundo drenado: lo que alcanzaron a encolar antes de detenerse.
+    drain_and_free_data_queue();
+}
+
+/* Devuelve el permiso de producir. Limpia también los bits de "detenida" para
+ * que la próxima pausa no los lea de la vuelta anterior. */
+static void resume_collect_tasks(void) {
+    if (sensor_gate == NULL) {
+        return;
+    }
+
+    xEventGroupClearBits(sensor_gate, GATE_PAUSE_REQ | GATE_INERTIAL_IDLE | GATE_ENV_IDLE);
+    xEventGroupSetBits(sensor_gate, GATE_RUN);
 }
 
 /* Ajusta la hora del sistema con epoch UNIX recibido en configuración. */
@@ -300,9 +372,9 @@ static void deep_sleep_if_needed(void) {
     // Acá se tiene condición de ventana completa, ya se puede entrar en deep sleep
     uint64_t sleep_us = (uint64_t)current_config->sleep_time_s * 1000000ULL;
     
-    // Suspende recogida de datos
-    ESP_LOGI(TAG, "Suspendiendo tasks de sensores");
-    suspend_collect_tasks_when_i2c_idle();
+    // Detiene recogida de datos antes de dormir
+    ESP_LOGI(TAG, "Deteniendo tasks de sensores");
+    pause_collect_tasks();
     
     // En MQTT
     if (current_config->protocol_conf == 0) {
@@ -556,6 +628,9 @@ static uint32_t environmental_interval_s(void) {
 // GEN_DATA (rápido): BMI270 + BMM350 -> paquete Inertial, cada send_interval_s.
 void vTaskCollectInertial(void *pvParameters) {
     for (;;) {
+        // Punto seguro: acá no hay memoria reservada ni bus tomado.
+        sensor_gate_wait(GATE_INERTIAL_IDLE);
+
         Inertial inertial = INERTIAL__INIT;
         inertial.id_device = this_device_id;
         inertial.config_version_applied = current_config ? current_config->config_version : 0;
@@ -571,7 +646,7 @@ void vTaskCollectInertial(void *pvParameters) {
          * tres ejes en cero y el resto del paquete sigue siendo válido. */
         bmi270_reading_t imu;
         if (bmi270_read(&imu) != ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(interval_inertial_s() * 1000U) + 1);
+            sensor_gate_sleep(interval_inertial_s() * 1000U);
             continue;
         }
         inertial.acc_x = imu.acc_x_ms2;
@@ -603,14 +678,17 @@ void vTaskCollectInertial(void *pvParameters) {
 
         enqueue_packet(&packet, TAG_COLLECT_INERTIAL);
 
-        // Ritma la producción
-        vTaskDelay(pdMS_TO_TICKS(interval_inertial_s() * 1000U) + 1);
+        // Ritma la producción. Despierta antes si se pide una pausa.
+        sensor_gate_sleep(interval_inertial_s() * 1000U);
     }
 }
 
 // GEN_DATA (lento): BME688 -> paquete Environmental, cada env_interval_s.
 void vTaskCollectEnvironmental(void *pvParameters) {
     for (;;) {
+        // Punto seguro: acá no hay memoria reservada ni bus tomado.
+        sensor_gate_wait(GATE_ENV_IDLE);
+
         Environmental env = ENVIRONMENTAL__INIT;
         env.id_device = this_device_id;
         env.config_version_applied = current_config ? current_config->config_version : 0;
@@ -625,7 +703,7 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         bme688_reading_t ambient;
         if (bme688_read(&ambient) != ESP_OK) {
             ESP_LOGW(TAG_COLLECT_ENV, "Lectura del BME688 falló, se omite el paquete");
-            vTaskDelay(pdMS_TO_TICKS(environmental_interval_s() * 1000U) + 1);
+            sensor_gate_sleep(environmental_interval_s() * 1000U);
             continue;
         }
         env.temperature = ambient.temperature_c;
@@ -648,8 +726,8 @@ void vTaskCollectEnvironmental(void *pvParameters) {
 
         enqueue_packet(&packet, TAG_COLLECT_ENV);
 
-        // Ritma la producción
-        vTaskDelay(pdMS_TO_TICKS(environmental_interval_s() * 1000U) + 1);
+        // Ritma la producción. Despierta antes si se pide una pausa.
+        sensor_gate_sleep(environmental_interval_s() * 1000U);
     }
 }
 
@@ -728,10 +806,10 @@ void vTaskGetResponseMQTT(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskSendMQTT");
             }
 
-            // Se resetea queue para que quede vacía
-            drain_and_free_data_queue();
-            ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspenden tasks de sensores");
-            suspend_collect_tasks_when_i2c_idle();
+            /* Detiene las productoras y vacía la cola: los paquetes del protocolo
+             * anterior no deben colarse al siguiente. */
+            ESP_LOGI(TAG_GET_RSP_MQTT, "Se detienen tasks de sensores");
+            pause_collect_tasks();
 
             send_config_ack_mqtt(current_config, true);
             vTaskDelay(4000 / portTICK_PERIOD_MS);
@@ -825,10 +903,10 @@ void vTaskGetResponseBLE(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskSendBLE");
                 vTaskSuspend(xHandleSendBLE);
             }
-            // Se resetea queue para que quede vacía
-            drain_and_free_data_queue();
-            ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo tasks de sensores");
-            suspend_collect_tasks_when_i2c_idle();
+            /* Detiene las productoras y vacía la cola: los paquetes del protocolo
+             * anterior no deben colarse al siguiente. */
+            ESP_LOGI(TAG_GET_RSP_BLE, "Se detienen tasks de sensores");
+            pause_collect_tasks();
 
             // Señala a app_main que debe cambiar de protocolo
             if (xSemaphoreGive(semaphore)) {
@@ -905,10 +983,10 @@ void vTaskGetResponseUDP(void *pvParameters) {
                 vTaskSuspend(xHandleSendUDP);
             }
 
-            // Se resetea queue para que quede vacía
-            drain_and_free_data_queue();
-            ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo tasks de sensores");
-            suspend_collect_tasks_when_i2c_idle();
+            /* Detiene las productoras y vacía la cola: los paquetes del protocolo
+             * anterior no deben colarse al siguiente. */
+            ESP_LOGI(TAG_GET_RSP_UDP, "Se detienen tasks de sensores");
+            pause_collect_tasks();
 
             send_config_ack_udp(current_config, true);
             vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -993,10 +1071,10 @@ void vTaskGetResponseTCP(void *pvParameters) {
                 ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskSendTCP");
                 vTaskSuspend(xHandleSendTCP);
             }
-            // Se resetea queue para que quede vacía
-            drain_and_free_data_queue();
-            ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo tasks de sensores");
-            suspend_collect_tasks_when_i2c_idle();
+            /* Detiene las productoras y vacía la cola: los paquetes del protocolo
+             * anterior no deben colarse al siguiente. */
+            ESP_LOGI(TAG_GET_RSP_TCP, "Se detienen tasks de sensores");
+            pause_collect_tasks();
 
             send_config_ack_tcp(current_config, true);
             vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -1034,6 +1112,16 @@ void app_main() {
     // Inicializa semáforos binario. Inician cerrados.
     semaphore = xSemaphoreCreateBinary();
     semaphore_ble = xSemaphoreCreateBinary();
+
+    /* Compuerta de las tasks de sensores. Arranca con el permiso dado, para que
+     * una productora recién creada produzca sin esperar a nadie. */
+    sensor_gate = xEventGroupCreate();
+    if (sensor_gate == NULL) {
+        ESP_LOGE(TAG, "No se pudo crear el event group de las tasks de sensores");
+    }
+    else {
+        xEventGroupSetBits(sensor_gate, GATE_RUN);
+    }
 
     // Crea queues para pasar datos entre tasks
     xQueueData = xQueueCreate(100, sizeof(packet_t));

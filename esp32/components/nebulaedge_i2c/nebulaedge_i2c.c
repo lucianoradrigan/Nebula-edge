@@ -6,8 +6,8 @@
 #include "esp_task.h"
 #include "freertos/semphr.h"
 
-/* Aclaración: las funciones i2c de por sí son thread safe. Se implementa mutex para que cuando
- * se suspenda una task desde afuera de sí misma no esté realizando ninguna operación i2c. */
+/* Ver la nota del header: el driver de ESP-IDF ya serializa cada transacción;
+ * este mutex hace atómica la secuencia completa de device_read/device_write. */
 SemaphoreHandle_t i2c_bus_mutex;
 
 /* Velocidad por defecto del bus, la que pasó la aplicación en i2c_master_init.
