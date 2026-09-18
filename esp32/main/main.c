@@ -2,7 +2,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
-#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -77,6 +76,17 @@ const char *TAG_GET_RSP_TCP = "task_get_rsp_tcp";
 const char *TAG_GET_RSP_UDP = "task_get_rsp_udp";
 
 static uint32_t data_window_count = 0;
+
+/* Protocolos que puede tomar `protocol_conf` del Config. Los números son parte
+ * del formato de cable (los fija schema.proto), así que el enum no los
+ * renumera: les pone nombre para que los switch dejen de comparar contra 0..3
+ * sueltos. */
+typedef enum {
+    PROTOCOL_MQTT = 0,
+    PROTOCOL_UDP  = 1,
+    PROTOCOL_TCP  = 2,
+    PROTOCOL_BLE  = 3,
+} protocol_t;
 
 /* Los paquetes de control (ACK de config, aviso de deep sleep) no esperan respuesta:
  * se mandan varias veces seguidas para bajar la probabilidad de que se pierdan, en
@@ -247,7 +257,7 @@ static void deep_sleep_if_needed(void) {
     pause_collect_tasks();
     
     // En MQTT
-    if (current_config->protocol_conf == 0) {
+    if (current_config->protocol_conf == PROTOCOL_MQTT) {
         // Suspende porque envío de flag cierra socket
         if (xHandleGetResponseMQTT) {
             vTaskSuspend(xHandleGetResponseMQTT);
@@ -264,7 +274,7 @@ static void deep_sleep_if_needed(void) {
     }
 
     // En UDP
-    else if (current_config->protocol_conf == 1) {
+    else if (current_config->protocol_conf == PROTOCOL_UDP) {
         // Suspende porque envío de flag cierra socket
         if (xHandleGetResponseUDP) {
             vTaskSuspend(xHandleGetResponseUDP);
@@ -278,7 +288,7 @@ static void deep_sleep_if_needed(void) {
     }
 
     // En TCP
-    else if (current_config->protocol_conf == 2) {
+    else if (current_config->protocol_conf == PROTOCOL_TCP) {
         // Suspende para luego cerrar socket
         if (xHandleGetResponseTCP) {
             vTaskSuspend(xHandleGetResponseTCP);
@@ -292,11 +302,11 @@ static void deep_sleep_if_needed(void) {
     }
 
     // En BLE
-    else if (current_config->protocol_conf == 3) {
+    else if (current_config->protocol_conf == PROTOCOL_BLE) {
         if (xHandleGetResponseBLE) {
             vTaskSuspend(xHandleGetResponseBLE);
         }
-        /* Una sola vez: ver el comentario en send_config_ack_ble(). Acá importa
+        /* Una sola vez: ver el comentario del caso BLE en send_config_ack(). Acá importa
          * más todavía, porque cada reenvío son milisegundos despierto antes de
          * dormir. */
         set_char_with_notify(IDX_CHAR_VAL_B_BLE, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
@@ -334,122 +344,85 @@ bool config_has_changed(Config *old, Config *new) {
     return false;
 }
 
-/* Envía ACK en protocolo MQTT después de recibir una nueva configuración del servidor. */
-static void send_config_ack_mqtt(const Config *cfg, bool applied) {
+/* Envía el ACK de una configuración recibida, por el protocolo `over`.
+ *
+ * OJO con por qué `over` es un parámetro en vez de leerse de
+ * current_config->protocol_conf: cuando el ACK confirma un cambio DE
+ * protocolo, current_config ya es la configuración nueva, pero el transporte
+ * que sigue abierto es el viejo. El ACK tiene que salir por el viejo — es lo
+ * último que se manda antes de cerrarlo. Cada task de respuesta pasa su propio
+ * protocolo, que es justamente el que tiene abierto.
+ *
+ * Antes eran cuatro funciones casi idénticas (send_config_ack_mqtt/udp/tcp/ble),
+ * de las cuales ~20 de 24 líneas eran la misma: armar el ConfigAck, empaquetarlo
+ * y reservar el buffer. Lo único propio de cada protocolo es cómo sale. */
+static void send_config_ack(protocol_t over, const Config *cfg, bool applied) {
     if (!cfg || !cfg->id_device) return;
+
     ConfigAck ack = CONFIG_ACK__INIT;
-    time_t now_s = 0;
-    time(&now_s);
     ack.id_device = cfg->id_device;
     ack.config_version = cfg->config_version;
     ack.applied = applied;
-    ack.time_client = now_s > 0 ? (uint32_t)now_s : 0;
+    ack.time_client = device_clock_now_s();
 
     size_t size = config_ack__get_packed_size(&ack);
     uint8_t *buf = malloc(size);
     if (!buf) {
-        ESP_LOGE(TAG, "No hay memoria para ACK MQTT");
+        ESP_LOGE(TAG, "No hay memoria para el ACK de config");
         return;
     }
     config_ack__pack(&ack, buf);
 
-    char topic_ack[128];
-    snprintf(topic_ack, sizeof(topic_ack), "/topic/nebulaedge/%s/config/ack", cfg->id_device);
-    // Envío redundante: no se espera respuesta, así que se manda varias veces
-    // en vez de esperar una confirmación (que agregaría otro flanco de pérdida).
-    for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-        mqtt_publish(topic_ack, buf, size, 0);
-        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+    /* Envío redundante en los tres protocolos de socket: no se espera respuesta,
+     * así que se manda varias veces en vez de pedir una confirmación (que
+     * agregaría otro flanco de pérdida en vez de reducir el riesgo). */
+    switch (over) {
+        case PROTOCOL_MQTT: {
+            char topic_ack[128];
+            snprintf(topic_ack, sizeof(topic_ack), "/topic/nebulaedge/%s/config/ack", cfg->id_device);
+            for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+                mqtt_publish(topic_ack, buf, size, 0);
+                vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+            }
+            ESP_LOGI(TAG, "MQTT: ACK de config enviado.");
+            break;
+        }
+
+        case PROTOCOL_UDP:
+            for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+                nebulaedge_udp_send(buf, size);
+                vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+            }
+            ESP_LOGI(TAG, "UDP: ACK de config enviado.");
+            break;
+
+        case PROTOCOL_TCP:
+            for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
+                tcp_send(buf, size);
+                vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+            }
+            ESP_LOGI(TAG, "TCP: ACK de config enviado.");
+            break;
+
+        case PROTOCOL_BLE: {
+            /* Una sola vez, a diferencia de los otros tres: en BLE el link layer
+             * ya retransmite lo que se encoló, y set_char_with_notify() reintenta
+             * por su cuenta si el stack rechaza el envío por congestión. Además
+             * el ACK queda legible en char D, así que si se cae la conexión el
+             * servidor lo reconcilia leyéndolo (BleTransport.confirm_config_applied). */
+            esp_err_t ack_ret = set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
+            if (ack_ret == ESP_OK) {
+                ESP_LOGI(TAG, "BLE: ACK de config enviado.");
+            }
+            else {
+                ESP_LOGW(TAG, "BLE: ACK no se pudo notificar (%s); queda legible en char D.",
+                         esp_err_to_name(ack_ret));
+            }
+            break;
+        }
     }
+
     free(buf);
-    ESP_LOGI(TAG, "MQTT: ACK de config enviado.");
-}
-
-/* Envía ACK en protocolo BLE después de recibir una nueva configuración del servidor. */
-static void send_config_ack_ble(const Config *cfg, bool applied) {
-    if (!cfg || !cfg->id_device) return;
-    ConfigAck ack = CONFIG_ACK__INIT;
-    time_t now_s = 0;
-    time(&now_s);
-    ack.id_device = cfg->id_device;
-    ack.config_version = cfg->config_version;
-    ack.applied = applied;
-    ack.time_client = now_s > 0 ? (uint32_t)now_s : 0;
-
-    size_t size = config_ack__get_packed_size(&ack);
-    uint8_t *buf = malloc(size);
-    if (!buf) {
-        ESP_LOGE(TAG, "No hay memoria para ACK BLE");
-        return;
-    }
-    config_ack__pack(&ack, buf);
-
-    /* Una sola vez, a diferencia de UDP: en BLE el link layer ya retransmite
-     * lo que se encoló, y set_char_with_notify() reintenta por su cuenta si el
-     * stack rechaza el envío por congestión. Además el ACK queda legible en
-     * char D, así que si se cae la conexión el servidor lo reconcilia
-     * leyéndolo (BleTransport.confirm_config_applied). */
-    esp_err_t ack_ret = set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
-    free(buf);
-
-    if (ack_ret == ESP_OK) {
-        ESP_LOGI(TAG, "BLE: ACK de config enviado.");
-    } else {
-        ESP_LOGW(TAG, "BLE: ACK no se pudo notificar (%s); queda legible en char D.",
-                 esp_err_to_name(ack_ret));
-    }
-}
-
-/* Envía ACK en protocolo UDP después de recibir una nueva configuración del servidor. */
-static void send_config_ack_udp(const Config *cfg, bool applied) {
-    if (!cfg || !cfg->id_device) return;
-    ConfigAck ack = CONFIG_ACK__INIT;
-    time_t now_s = 0;
-    time(&now_s);
-    ack.id_device = cfg->id_device;
-    ack.config_version = cfg->config_version;
-    ack.applied = applied;
-    ack.time_client = now_s > 0 ? (uint32_t)now_s : 0;
-
-    size_t size = config_ack__get_packed_size(&ack);
-    uint8_t *buf = malloc(size);
-    if (!buf) {
-        ESP_LOGE(TAG, "No hay memoria para ACK UDP");
-        return;
-    }
-    config_ack__pack(&ack, buf);
-    for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-        nebulaedge_udp_send(buf, size);
-        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-    }
-    free(buf);
-    ESP_LOGI(TAG, "UDP: ACK de config enviado.");
-}
-
-/* Envía ACK en protocolo TCP después de recibir una nueva configuración del servidor. */
-static void send_config_ack_tcp(const Config *cfg, bool applied) {
-    if (!cfg || !cfg->id_device) return;
-    ConfigAck ack = CONFIG_ACK__INIT;
-    time_t now_s = 0;
-    time(&now_s);
-    ack.id_device = cfg->id_device;
-    ack.config_version = cfg->config_version;
-    ack.applied = applied;
-    ack.time_client = now_s > 0 ? (uint32_t)now_s : 0;
-
-    size_t size = config_ack__get_packed_size(&ack);
-    uint8_t *buf = malloc(size);
-    if (!buf) {
-        ESP_LOGE(TAG, "No hay memoria para ACK TCP");
-        return;
-    }
-    config_ack__pack(&ack, buf);
-    for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-        tcp_send(buf, size);
-        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-    }
-    free(buf);
-    ESP_LOGI(TAG, "TCP: ACK de config enviado.");
 }
 
 /* Encola un paquete ya serializado, liberando su memoria si la cola lo rechaza.
@@ -652,7 +625,7 @@ void vTaskGetResponseMQTT(void *pvParameters) {
 
         if (current_config && new_config->config_version < current_config->config_version) {
             ESP_LOGW(TAG_GET_RSP_MQTT, "Config MQTT antigua: %ld < %ld", (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack_mqtt(new_config, false);
+            send_config_ack(PROTOCOL_MQTT, new_config, false);
             config__free_unpacked(new_config, NULL);
             continue;
         }
@@ -674,7 +647,7 @@ void vTaskGetResponseMQTT(void *pvParameters) {
             ESP_LOGI(TAG_GET_RSP_MQTT, "Se detienen tasks de sensores");
             pause_collect_tasks();
 
-            send_config_ack_mqtt(current_config, true);
+            send_config_ack(PROTOCOL_MQTT, current_config, true);
             vTaskDelay(4000 / portTICK_PERIOD_MS);
 
             mqtt_finish();
@@ -689,7 +662,7 @@ void vTaskGetResponseMQTT(void *pvParameters) {
         } 
         else {
             ESP_LOGI(TAG_GET_RSP_MQTT, "La configuración recibida es la misma");
-            send_config_ack_mqtt(new_config, true);
+            send_config_ack(PROTOCOL_MQTT, new_config, true);
             config__free_unpacked(new_config, NULL);
         }
     }
@@ -747,7 +720,7 @@ void vTaskGetResponseBLE(void *pvParameters) {
 
         if (current_config && new_config->config_version < current_config->config_version) {
             ESP_LOGW(TAG_GET_RSP_BLE, "Config BLE antigua: %ld < %ld", (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack_ble(new_config, false);
+            send_config_ack(PROTOCOL_BLE, new_config, false);
             config__free_unpacked(new_config, NULL);
             continue;
         }
@@ -760,7 +733,7 @@ void vTaskGetResponseBLE(void *pvParameters) {
             current_config = new_config;
             data_window_count = 0;
 
-            send_config_ack_ble(current_config, true);
+            send_config_ack(PROTOCOL_BLE, current_config, true);
 
             if (xHandleSendBLE) {
                 ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskSendBLE");
@@ -781,7 +754,7 @@ void vTaskGetResponseBLE(void *pvParameters) {
         } 
         else {
             ESP_LOGI(TAG_GET_RSP_BLE, "La configuración recibida es la misma");
-            send_config_ack_ble(new_config, true);
+            send_config_ack(PROTOCOL_BLE, new_config, true);
             config__free_unpacked(new_config, NULL);
         }
     }
@@ -829,7 +802,7 @@ void vTaskGetResponseUDP(void *pvParameters) {
         // Compara configuración actual versus recibida
         if (current_config && new_config->config_version < current_config->config_version) {
             ESP_LOGW(TAG_GET_RSP_UDP, "Config UDP antigua: %ld < %ld", (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack_udp(new_config, false);
+            send_config_ack(PROTOCOL_UDP, new_config, false);
             config__free_unpacked(new_config, NULL);
             continue;
         }
@@ -851,7 +824,7 @@ void vTaskGetResponseUDP(void *pvParameters) {
             ESP_LOGI(TAG_GET_RSP_UDP, "Se detienen tasks de sensores");
             pause_collect_tasks();
 
-            send_config_ack_udp(current_config, true);
+            send_config_ack(PROTOCOL_UDP, current_config, true);
             vTaskDelay(2000 / portTICK_PERIOD_MS);
 
             // Se cierra el socket UDP
@@ -867,7 +840,7 @@ void vTaskGetResponseUDP(void *pvParameters) {
         } 
         else {
             ESP_LOGI(TAG_GET_RSP_UDP, "UDP: Config igual, se descarta");
-            send_config_ack_udp(new_config, true);
+            send_config_ack(PROTOCOL_UDP, new_config, true);
             config__free_unpacked(new_config, NULL);
         }
     }
@@ -915,7 +888,7 @@ void vTaskGetResponseTCP(void *pvParameters) {
 
         if (current_config && new_config->config_version < current_config->config_version) {
             ESP_LOGW(TAG_GET_RSP_TCP, "Config TCP antigua: %ld < %ld", (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack_tcp(new_config, false);
+            send_config_ack(PROTOCOL_TCP, new_config, false);
             config__free_unpacked(new_config, NULL);
             continue;
         }
@@ -939,7 +912,7 @@ void vTaskGetResponseTCP(void *pvParameters) {
             ESP_LOGI(TAG_GET_RSP_TCP, "Se detienen tasks de sensores");
             pause_collect_tasks();
 
-            send_config_ack_tcp(current_config, true);
+            send_config_ack(PROTOCOL_TCP, current_config, true);
             vTaskDelay(2000 / portTICK_PERIOD_MS);
 
             // Cierra el socket
@@ -954,7 +927,7 @@ void vTaskGetResponseTCP(void *pvParameters) {
         }
         else {
             ESP_LOGI(TAG_GET_RSP_TCP, "TCP: Config igual, se descarta");
-            send_config_ack_tcp(new_config, true);
+            send_config_ack(PROTOCOL_TCP, new_config, true);
             config__free_unpacked(new_config, NULL);
         }    
     }
@@ -1080,7 +1053,7 @@ void app_main() {
             /****************************************************************/
             /**************************  MQTT *******************************/
             /****************************************************************/
-            case 0: {
+            case PROTOCOL_MQTT: {
                 // Estructura de configuración de wifi
                 global_wifi_config wifi_config = {
                     .ssid = current_config->ssid,
@@ -1140,7 +1113,7 @@ void app_main() {
             /****************************************************************/
             /**************************  UDP  *******************************/
             /****************************************************************/
-            case 1: {
+            case PROTOCOL_UDP: {
                 // Estructura de configuración de wifi
                 global_wifi_config wifi_config = {
                     .ssid = current_config->ssid,
@@ -1188,7 +1161,7 @@ void app_main() {
             /****************************************************************/
             /**************************  TCP  *******************************/
             /****************************************************************/
-            case 2: {
+            case PROTOCOL_TCP: {
                 // Estructura de configuración de wifi
                 global_wifi_config wifi_config = {
                     .ssid = current_config->ssid,
@@ -1245,7 +1218,7 @@ void app_main() {
             /****************************************************************/
             /**************************  BLE  *******************************/
             /****************************************************************/
-            case 3: {
+            case PROTOCOL_BLE: {
                 
                 ESP_LOGI(TAG, "esperando conexión BLE para iniciar tasks...");
 
