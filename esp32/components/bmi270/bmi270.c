@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 #include "esp_task.h"
 #include "esp_log.h"
 
@@ -21,6 +22,17 @@ static i2c_master_dev_handle_t s_dev = NULL;
 static const char *TAG = "bmi270";
 static esp_err_t ret;
 static bool is_bmi270_active = false;
+
+/* Fondos de escala configurados, que bmi270_read necesita para convertir.
+ *
+ * El chip entrega cada eje como un int16 que representa ±fondo de escala, así
+ * que el factor de conversión DEPENDE del rango: no es una constante. Los
+ * fijan acc_conf() y gyr_conf() con lo que pidió la aplicación.
+ *
+ * Los valores iniciales son los del último init; si alguien leyera antes de
+ * inicializar, is_bmi270_active lo corta primero. */
+static int s_acc_range_g   = ACC_RANGE;
+static int s_gyr_range_dps = GYR_RANGE;
 
 /*! @name  Global array that stores the configuration file of BMI270 */
 static const uint8_t bmi270_config_file[] = {
@@ -699,6 +711,9 @@ static void acc_conf(int odr_set, int avg_set, int range_set) {
             return;
     }
 
+    // bmi270_read lo necesita: la escala del dato crudo depende del rango.
+    s_acc_range_g = range_set;
+
     // 0x08 activa el filtro en modo performance (por defecto)
     val_acc_conf = ((0x08 | avg) << 4) | odr;
     val_acc_range = range;
@@ -783,6 +798,9 @@ static void gyr_conf(int odr_set, int range_set) {
             return;
     }
 
+    // bmi270_read lo necesita: la escala del dato crudo depende del rango.
+    s_gyr_range_dps = range_set;
+
     // 0xA0 ajusta los modos de performance y filtro (default conf)
     val_gyr_conf = 0xA0 | odr;
     val_gyr_range = range;
@@ -866,20 +884,30 @@ esp_err_t bmi270_read(bmi270_reading_t *out) {
         gyr_y = ((uint16_t) sensor_data_buffer[9] << 8) | (uint16_t) sensor_data_buffer[8];
         gyr_z = ((uint16_t) sensor_data_buffer[11] << 8) | (uint16_t) sensor_data_buffer[10];
 
-        // Aceleración en m/s2
-        acc_x_ms2 = (int16_t)acc_x*(78.4532/32768);
-        acc_y_ms2 = (int16_t)acc_y*(78.4532/32768);
-        acc_z_ms2 = (int16_t)acc_z*(78.4532/32768);
+        /* Escalas derivadas del rango configurado. El int16 crudo cubre
+         * ±fondo de escala, así que el factor NO es constante.
+         *
+         * Antes lo era: el giroscopio dividía siempre por 34.90659 rad/s, que
+         * es ±2000 °/s. Con el rango que manda el servidor (500 °/s) eso daba
+         * lecturas 4x más grandes de lo real, y así quedaron guardadas en la
+         * base. El acelerómetro tenía el mismo defecto latente: 78.4532 es
+         * ±8 g, correcto solo mientras nadie cambiara el rango. */
+        const float acc_scale_g   = (float)s_acc_range_g / 32768.0f;
+        const float gyr_scale_rad = (float)s_gyr_range_dps * ((float)M_PI / 180.0f) / 32768.0f;
 
-        // Aceleración en g
-        acc_x_g = (int16_t)acc_x*(8.000/32768);
-        acc_y_g = (int16_t)acc_y*(8.000/32768);
-        acc_z_g = (int16_t)acc_z*(8.000/32768);
+        // Aceleración en g y en m/s2
+        acc_x_g = (int16_t)acc_x * acc_scale_g;
+        acc_y_g = (int16_t)acc_y * acc_scale_g;
+        acc_z_g = (int16_t)acc_z * acc_scale_g;
+
+        acc_x_ms2 = acc_x_g * 9.80665f;
+        acc_y_ms2 = acc_y_g * 9.80665f;
+        acc_z_ms2 = acc_z_g * 9.80665f;
 
         // Giroscopio en rad/s
-        gyr_x_rads = (int16_t)gyr_x*(34.90659/32768);
-        gyr_y_rads = (int16_t)gyr_y*(34.90659/32768);
-        gyr_z_rads = (int16_t)gyr_z*(34.90659/32768);
+        gyr_x_rads = (int16_t)gyr_x * gyr_scale_rad;
+        gyr_y_rads = (int16_t)gyr_y * gyr_scale_rad;
+        gyr_z_rads = (int16_t)gyr_z * gyr_scale_rad;
         
         ESP_LOGI(TAG, "acc_x: %f m/s2     acc_y: %f m/s2     acc_z: %f m/s2", acc_x_ms2, acc_y_ms2, acc_z_ms2);
         ESP_LOGI(TAG, "acc_x: %f g     acc_y: %f g     acc_z: %f g", acc_x_g, acc_y_g, acc_z_g);

@@ -543,13 +543,22 @@ static void deep_sleep_if_needed(void) {
 
 // Recibe dos configuraciones y retorna un booleano si son diferentes o iguales
 bool config_has_changed(Config *old, Config *new) {
+    /* Sin config previa, cualquiera es nueva. El caller de más arriba ya
+     * pregunta por NULL antes de comparar versiones, así que acá faltaba la
+     * misma guarda: sin ella esto desreferencia old y revienta. */
+    if (!old) {
+        return new != NULL;
+    }
+    if (!new) {
+        return false;
+    }
+
     if (new->config_version > old->config_version) {
         ESP_LOGI(TAG, "Nueva configuración recibida. Versión %ld.", new->config_version);
         return true;
     }
-    if (new->config_version < old->config_version) {
-        return false;
-    }
+
+    // Igual o más vieja: no hay nada que aplicar.
     return false;
 }
 
