@@ -116,7 +116,7 @@ Componentes, por rol:
 
 | Rol | Componentes |
 |---|---|
-| Drivers de sensor | `bme688` (ambiental), `bmi270` (IMU), `bmm350` (magnetómetro) |
+| Drivers de sensor | `bme688` (ambiental), `bmi270` (IMU), `bmm350` (magnetómetro). Portables: solo dependen de `nebulaedge_i2c`. |
 | Buses | `nebulaedge_i2c` (sensores), `nebulaedge_spi` (genérico, hoy sin uso) |
 | Protocolos de salida | `nebulaedge_mqtt`, `nebulaedge_udp`, `nebulaedge_tcp`, `nebulaedge_ble` |
 | Red | `nebulaedge_wifi` |
@@ -126,6 +126,16 @@ Componentes, por rol:
 
 Notas:
 
+- **Los drivers de sensor son copiables a otro proyecto.** No conocen protobuf
+  ni el formato de cable: cada uno devuelve su propio tipo en unidades físicas
+  (`bme688_reading_t`, `bmi270_reading_t`, `bmm350_reading_t`) y `main.c` lo
+  traduce al mensaje. Su única dependencia del proyecto es `nebulaedge_i2c`, así
+  que copiar esas dos carpetas alcanza. Las constantes del chip (dirección I2C,
+  ODR) viven en el header del driver, no en `nebulaedge_defs`.
+- Los tres `*_read()` devuelven `esp_err_t`. Si el sensor está caído o todavía
+  no hay muestra nueva, NO tocan la estructura de salida: así el caller
+  distingue un fallo de una medición legítima de cero, cosa que antes era
+  imposible.
 - `nebulaedge_ble` cumple doble rol: es el canal por el que llega la
   configuración inicial (siempre), y además uno de los cuatro protocolos de
   telemetría (cuando `protocol_conf = 3`).

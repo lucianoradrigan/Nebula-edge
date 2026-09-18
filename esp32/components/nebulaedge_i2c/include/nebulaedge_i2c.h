@@ -2,6 +2,10 @@
 #define NEBULAEDGE_I2C
 
 #include "driver/i2c_master.h"
+/* FreeRTOS.h ANTES que semphr.h: semphr.h aborta con un #error si no está.
+ * Este header lo incluye él mismo para ser autosuficiente, y no depender de
+ * que el .c que lo use lo haya incluido antes. */
+#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 extern i2c_master_bus_handle_t bus_handle;

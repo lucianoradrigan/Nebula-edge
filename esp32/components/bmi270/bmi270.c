@@ -2,15 +2,14 @@
 #include "esp_task.h"
 #include "esp_log.h"
 
-#include "nebulaedge_defs.h"
 #include "nebulaedge_i2c.h"
 #include "bmi270.h"
 
 /* Settings que solo funcionan en este script, y no en main. */
-#define ACC_ODR                 ODR_400
+#define ACC_ODR                 BMI270_ODR_400
 #define ACC_AVG                 4
 #define ACC_RANGE               8
-#define GYR_ODR                 ODR_400
+#define GYR_ODR                 BMI270_ODR_400
 #define GYR_RANGE               500
 #define BMI270_INIT_RETRIES     3
 
@@ -618,28 +617,28 @@ static void acc_conf(int odr_set, int avg_set, int range_set) {
     uint8_t odr, avg, range; 
 
     switch (odr_set) {
-        case ODR_12_5:
+        case BMI270_ODR_12_5:
             odr = 0x05;
             break;
-        case ODR_25:
+        case BMI270_ODR_25:
             odr = 0x06;
             break;
-        case ODR_50:
+        case BMI270_ODR_50:
             odr = 0x07;
             break;
-        case ODR_100:
+        case BMI270_ODR_100:
             odr = 0x08;
             break;
-        case ODR_200:
+        case BMI270_ODR_200:
             odr = 0x09;
             break;
-        case ODR_400:
+        case BMI270_ODR_400:
             odr = 0x0A;
             break;
-        case ODR_800:
+        case BMI270_ODR_800:
             odr = 0x0B;
             break;
-        case ODR_1600:
+        case BMI270_ODR_1600:
             odr = 0x0C;
             break;
         default:
@@ -726,31 +725,31 @@ static void gyr_conf(int odr_set, int range_set) {
     uint8_t odr, range; 
 
     switch (odr_set) {
-        case ODR_12_5:
+        case BMI270_ODR_12_5:
             odr = 0x05;
             break;
-        case ODR_25:
+        case BMI270_ODR_25:
             odr = 0x06;
             break;
-        case ODR_50:
+        case BMI270_ODR_50:
             odr = 0x07;
             break;
-        case ODR_100:
+        case BMI270_ODR_100:
             odr = 0x08;
             break;
-        case ODR_200:
+        case BMI270_ODR_200:
             odr = 0x09;
             break;
-        case ODR_400:
+        case BMI270_ODR_400:
             odr = 0x0A;
             break;
-        case ODR_800:
+        case BMI270_ODR_800:
             odr = 0x0B;
             break;
-        case ODR_1600:
+        case BMI270_ODR_1600:
             odr = 0x0C;
             break;
-        case ODR_3200:
+        case BMI270_ODR_3200:
             odr = 0x0D;
             break;
         default:
@@ -813,11 +812,15 @@ void power_config(void) {
 
 /* Extrae datos de aceleración y giroscopio del sensor BMI270, los procesa 
  * e imprime en la salida estándar. Se puede implementar lectura de temperatura. */
-void readout_data_bmi270(Inertial *data) {
+esp_err_t bmi270_read(bmi270_reading_t *out) {
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     // No lee nada si el sensor está inactivo
     if (!is_bmi270_active) {
         ESP_LOGW(TAG, "Sensor BMI270 inactivo. Omitiendo lectura.");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     uint8_t reg_intstatus = 0x03, tmp;
@@ -834,15 +837,20 @@ void readout_data_bmi270(Inertial *data) {
     ret = device_read(device_bmi270, &reg_intstatus, &tmp, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error leyendo intstatus: %s", esp_err_to_name(ret));
-        return;
+        return ret;
     }
 
     // Data ready condition
-    if ((tmp & 0b10000000) == 0x80) { 
+    if ((tmp & 0b10000000) != 0x80) {
+        // Todavía no hay muestra nueva; no es un fallo, pero tampoco hay dato.
+        return ESP_ERR_NOT_FINISHED;
+    }
+
+    {
         ret = device_read(device_bmi270, &reg_data, (uint8_t*) sensor_data_buffer, bytes_data8, TAG);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Error leyendo datos de acelerómetro y giroscopio: %s", esp_err_to_name(ret));
-            return;
+            return ret;
         }
 
         // Valores brutos aceleración y giroscopio
@@ -872,21 +880,15 @@ void readout_data_bmi270(Inertial *data) {
         ESP_LOGI(TAG, "acc_x: %f g     acc_y: %f g     acc_z: %f g", acc_x_g, acc_y_g, acc_z_g);
         ESP_LOGI(TAG, "gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s", gyr_x_rads, gyr_y_rads, gyr_z_rads);
 
-        if (ret != ESP_OK){
-            ESP_LOGE(TAG, "Error lectura: %s", esp_err_to_name(ret));
-        }
-
-        if (data != NULL) {
-            // Guarda las medidas en protobuf. Se guardan datos
-            // magnéticos y no de temperatura.
-            data->acc_x = acc_x_ms2;
-            data->acc_y = acc_y_ms2;
-            data->acc_z = acc_z_ms2;
-            data->gyr_x = gyr_x_rads;
-            data->gyr_y = gyr_y_rads;
-            data->gyr_z = gyr_z_rads;
-        }
+        out->acc_x_ms2  = acc_x_ms2;
+        out->acc_y_ms2  = acc_y_ms2;
+        out->acc_z_ms2  = acc_z_ms2;
+        out->gyr_x_rads = gyr_x_rads;
+        out->gyr_y_rads = gyr_y_rads;
+        out->gyr_z_rads = gyr_z_rads;
     }
+
+    return ESP_OK;
 }
 
 /* Función para ser llamada desde script main. */

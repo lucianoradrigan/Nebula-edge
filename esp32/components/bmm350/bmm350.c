@@ -1,9 +1,8 @@
 // Código basado en la API oficial de Bosch
 // https://github.com/boschsensortec/BMM350_SensorAPI
 
-#include "nebulaedge_defs.h"
+#include "bmm350.h"
 #include "nebulaedge_i2c.h"
-#include "schema.pb-c.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -20,7 +19,7 @@
 /* -------------------- Variables ------------------------ */
 /* Frecuencia de toma de datos. Puede tomar los valores: 400, 200, 100,
  * 50, 25, 12.5, 6.25, 3.125 y 1.5625. */
-#define ODR                                 ODR_400
+#define ODR                                 BMM350_ODR_400
 
 /* Promedio entre muestras. Puede ser 0, 2, 4 u 8. OJO: hay combinaciones 
  * de AVG y ODR NO VÁLIDAS (ver datasheet BMM350). */
@@ -298,31 +297,31 @@ static void odr_avg_config(int odr_set, int avg_set) {
     uint8_t odr, avg; 
     
     switch (odr_set) {
-        case ODR_1_5625:
+        case BMM350_ODR_1_5625:
             odr = 0x0A;
             break;
-        case ODR_3_125:
+        case BMM350_ODR_3_125:
             odr = 0x09;
             break;
-        case ODR_6_25:
+        case BMM350_ODR_6_25:
             odr = 0x08;
             break;
-        case ODR_12_5:
+        case BMM350_ODR_12_5:
             odr = 0x07;
             break;
-        case ODR_25:
+        case BMM350_ODR_25:
             odr = 0x06;
             break;
-        case ODR_50:
+        case BMM350_ODR_50:
             odr = 0x05;
             break;
-        case ODR_100:
+        case BMM350_ODR_100:
             odr = 0x04;
             break;
-        case ODR_200:
+        case BMM350_ODR_200:
             odr = 0x03;
             break;
-        case ODR_400:
+        case BMM350_ODR_400:
             odr = 0x02;
             break;
         default:
@@ -393,11 +392,15 @@ static void internal_status(void) {
 
 /* Extrae datos magnéticos y de temperatura del sensor BMM350, los procesa 
  * e imprime en la salida estándar. */           
-void readout_data_bmm350(Inertial *data) {
+esp_err_t bmm350_read(bmm350_reading_t *out) {
+
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     if (!is_bmm350_active) {
         ESP_LOGW(TAG, "BMM350 no activo, se omite lectura");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     // Registro inicial
@@ -462,18 +465,16 @@ void readout_data_bmm350(Inertial *data) {
         ESP_LOGI(TAG, "mag_x: %.6f uT    mag_y: %.6f uT    mag_z: %.6f uT", out_data[0], out_data[1], out_data[2]);
         ESP_LOGI(TAG, "temp: %.6f °C", out_data[3]);
 
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Error lectura: %s", esp_err_to_name(ret));
-        }
+        out->mag_x_ut      = out_data[0];
+        out->mag_y_ut      = out_data[1];
+        out->mag_z_ut      = out_data[2];
+        out->temperature_c = out_data[3];
 
-        if (data != NULL) {
-            // Guarda las medidas en protobuf. Se guardan datos
-            // magnéticos y no de temperatura.
-            data->mag_x = out_data[0];
-            data->mag_y = out_data[1];
-            data->mag_z = out_data[2];
-        }
+        return ESP_OK;
     }
+
+    // Todavía no hay muestra nueva; no es un fallo, pero tampoco hay dato.
+    return ESP_ERR_NOT_FINISHED;
 }
 
 /* Función para ser llamada desde el script main. Contiene llamados a todas las

@@ -520,6 +520,15 @@ static uint32_t now_unix_s(void) {
     return now_s > 0 ? (uint32_t)now_s : 0;
 }
 
+/* Intervalo del flujo rápido (Inertial). */
+static uint32_t interval_inertial_s(void) {
+    if (!current_config) {
+        return 1;
+    }
+    uint32_t s = current_config->send_interval_s;
+    return s > 0 ? s : 1;
+}
+
 /* Intervalo del flujo lento. env_interval_s = 0 significa "el mismo que el
  * rápido", para que una config antigua sin ese campo siga comportándose como
  * antes en vez de girar en vacío. */
@@ -542,9 +551,32 @@ void vTaskCollectInertial(void *pvParameters) {
         inertial.config_version_applied = current_config ? current_config->config_version : 0;
         inertial.time_client = now_unix_s();
 
-        // Recogida de datos de sensores inerciales
-        readout_data_bmi270(&inertial);
-        readout_data_bmm350(&inertial);
+        /* Recogida de datos inerciales. Cada driver devuelve su propio tipo en
+         * unidades físicas; traducirlo al mensaje protobuf es trabajo de acá,
+         * que es la única parte que conoce el formato de cable.
+         *
+         * El acelerómetro manda: si su lectura falla no se envía el paquete,
+         * porque antes se iba con ceros indistinguibles de reposo real. El
+         * magnetómetro es complementario, así que si falla solo quedan sus
+         * tres ejes en cero y el resto del paquete sigue siendo válido. */
+        bmi270_reading_t imu;
+        if (bmi270_read(&imu) != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(interval_inertial_s() * 1000U) + 1);
+            continue;
+        }
+        inertial.acc_x = imu.acc_x_ms2;
+        inertial.acc_y = imu.acc_y_ms2;
+        inertial.acc_z = imu.acc_z_ms2;
+        inertial.gyr_x = imu.gyr_x_rads;
+        inertial.gyr_y = imu.gyr_y_rads;
+        inertial.gyr_z = imu.gyr_z_rads;
+
+        bmm350_reading_t mag;
+        if (bmm350_read(&mag) == ESP_OK) {
+            inertial.mag_x = mag.mag_x_ut;
+            inertial.mag_y = mag.mag_y_ut;
+            inertial.mag_z = mag.mag_z_ut;
+        }
 
         // Serializa el mensaje protobuf, con el byte de tipo por delante
         packet_t packet;
@@ -562,8 +594,7 @@ void vTaskCollectInertial(void *pvParameters) {
         enqueue_packet(&packet, TAG_COLLECT_INERTIAL);
 
         // Ritma la producción
-        uint32_t interval_s = current_config ? current_config->send_interval_s : 1;
-        vTaskDelay(pdMS_TO_TICKS(interval_s * 1000U) + 1);
+        vTaskDelay(pdMS_TO_TICKS(interval_inertial_s() * 1000U) + 1);
     }
 }
 
@@ -575,8 +606,22 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         env.config_version_applied = current_config ? current_config->config_version : 0;
         env.time_client = now_unix_s();
 
-        // Recogida de datos ambientales
-        readout_data_bme688(&env);
+        /* Recogida de datos ambientales. El driver devuelve su propio tipo en
+         * unidades físicas; traducirlo al mensaje protobuf es trabajo de acá,
+         * que es la única parte que conoce el formato de cable.
+         *
+         * Si la lectura falla NO se manda el paquete: antes se enviaba con
+         * ceros, indistinguibles de una medición legítima de cero. */
+        bme688_reading_t ambient;
+        if (bme688_read(&ambient) != ESP_OK) {
+            ESP_LOGW(TAG_COLLECT_ENV, "Lectura del BME688 falló, se omite el paquete");
+            vTaskDelay(pdMS_TO_TICKS(environmental_interval_s() * 1000U) + 1);
+            continue;
+        }
+        env.temperature = ambient.temperature_c;
+        env.press       = ambient.pressure_pa;
+        env.hum         = ambient.humidity_pct;
+        env.co          = ambient.gas_resistance_ohm;
 
         // Serializa el mensaje protobuf, con el byte de tipo por delante
         packet_t packet;

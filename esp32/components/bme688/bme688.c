@@ -1,6 +1,3 @@
-#include "nebulaedge_defs.h"
-#include "nebulaedge_microsd.h"
-#include "schema.pb-c.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -501,11 +498,15 @@ static void get_mode(void) {
 
 /* Extrae datos de temperatura, presión, humedad y resistencia de gas
  * del sensor BME688, los procesa e imprime en la salida estándar. */     
-void readout_data_bme688(Environmental *data) {
+esp_err_t bme688_read(bme688_reading_t *out) {
+
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     if (!is_bme688_active) {
         ESP_LOGW(TAG, "BME688 no activo, se omite lectura");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     // Datasheet[23:41]
@@ -573,13 +574,12 @@ void readout_data_bme688(Environmental *data) {
     ESP_LOGI(TAG, "hum: %f percent", hum / 1000);
     ESP_LOGI(TAG, "gas: %f Ohms", (float)gas);
 
-    if (data != NULL) {
-        // Guarda las medidas en protobuf.
-        data->temperature = (float)temp/100;
-        data->press = (int32_t)(press / 100);
-        data->hum = (int32_t)(hum / 1000);
-        data->co = (float)gas;
-    }
+    out->temperature_c      = (float)temp / 100;
+    out->pressure_pa        = (int32_t)(press / 100);
+    out->humidity_pct       = (int32_t)(hum / 1000);
+    out->gas_resistance_ohm = (float)gas;
+
+    return ESP_OK;
 }
 
 /* Función para ser llamada desde el script main. Contiene llamados a todas las

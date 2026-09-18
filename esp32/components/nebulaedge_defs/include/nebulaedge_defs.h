@@ -62,10 +62,9 @@ extern SemaphoreHandle_t semaphore_ble;
 #define I2C_MASTER_SCL_IO				GPIO_NUM_2			    // GPIO pin I2C master GPIO_NUM_47 imv1 GPIO_NUM_2 imv2
 #define I2C_MASTER_SDA_IO				GPIO_NUM_42				// GPIO pin I2C master GPIO_NUM_48 imv1 GPIO_NUM_42 imv2
 
-/* Direcciones slave de sensores (I2C) */
-#define BMM350_SLAVE_ADDR           0x14
-#define BMI270_SLAVE_ADDR           0x68
-#define BME688_SLAVE_ADDR           0x76
+/* Las direcciones I2C de los sensores viven ahora en el header de su driver
+ * (BME688_SLAVE_ADDR, BMI270_SLAVE_ADDR, BMM350_SLAVE_ADDR): son propiedad del
+ * integrado, no de la placa. */
 
 /* Pines SPI (microsd)*/
 #define PIN_NUM_CS                          GPIO_NUM_1         // GPIO pin GPIO_NUM_1 im-v1
@@ -76,24 +75,10 @@ extern SemaphoreHandle_t semaphore_ble;
 /* SD */
 #define FORMAT_IF_MOUNT_FAILED              true
 
-/* Data length de BMM350 */
-#define BMM350_OTP_DATA_LENGTH              32                 // No confundir con el largo del output
+/* Los Output Data Rate de cada sensor viven ahora en el header de su driver
+ * (BMI270_ODR_*, BMM350_ODR_*): son propiedad del chip, no de la placa, y
+ * tenerlos acá obligaba a cada driver a depender de este archivo. */
 
-/* Frecuencias */
-#define ODR_1_5625                          15625
-#define ODR_3_125                           3125
-#define ODR_6_25                            625
-#define ODR_12_5                            125
-#define ODR_25                              25
-#define ODR_50                              50
-#define ODR_100                             100
-#define ODR_200                             200
-#define ODR_400                             400
-#define ODR_800                             800
-#define ODR_1600                            1600
-#define ODR_3200                            3200
-
-/* Concatena bytes */
-#define CONCAT_BYTES(msb, lsb)      (((uint16_t)msb << 8) | (uint16_t)lsb)
+/* CONCAT_BYTES vive ahora en bme688.h, su único usuario. */
 
 #endif
