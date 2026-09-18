@@ -3,16 +3,13 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
-#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
-#include "esp_mac.h"
 #include "esp_sleep.h"
-#include "esp_attr.h"
 #include "nvs_flash.h"
 #include "freertos/semphr.h"
 
@@ -23,6 +20,7 @@
 #include "nebulaedge_ble.h"
 #include "nebulaedge_defs.h"
 #include "nebulaedge_config_store.h"
+#include "nebulaedge_device.h"
 #include "nebulaedge_i2c.h"
 #include "bmm350.h"
 #include "bme688.h"
@@ -79,8 +77,6 @@ const char *TAG_GET_RSP_TCP = "task_get_rsp_tcp";
 const char *TAG_GET_RSP_UDP = "task_get_rsp_udp";
 
 static uint32_t data_window_count = 0;
-RTC_DATA_ATTR static uint32_t rtc_unix_time_s = 0;
-static char this_device_id[18] = "00:00:00:00:00:00";
 
 /* Los paquetes de control (ACK de config, aviso de deep sleep) no esperan respuesta:
  * se mandan varias veces seguidas para bajar la probabilidad de que se pierdan, en
@@ -216,65 +212,6 @@ static void resume_collect_tasks(void) {
     xEventGroupSetBits(sensor_gate, GATE_RUN);
 }
 
-/* Ajusta la hora del sistema con epoch UNIX recibido en configuración. */
-static void set_device_time_from_unix_s(int64_t unix_time_s) {
-    if (unix_time_s <= 0) {
-        ESP_LOGW(TAG, "time_client inválido: %lld", (long long)unix_time_s);
-        return;
-    }
-
-    struct timeval tv = {
-        .tv_sec = (time_t)unix_time_s,
-        .tv_usec = 0,
-    };
-
-    if (settimeofday(&tv, NULL) != 0) {
-        ESP_LOGW(TAG, "No se pudo ajustar la hora del sistema a %lld", (long long)unix_time_s);
-        return;
-    }
-
-    time_t now = 0;
-    time(&now);
-    ESP_LOGI(TAG, "Hora del sistema ajustada a %lld", (long long)now);
-}
-
-/* Guarda la hora estimada de despertar para restaurarla tras deep sleep. */
-static void save_device_time_before_deep_sleep(uint64_t sleep_us) {
-    time_t now = 0;
-    time(&now);
-
-    // Redondea microsegundos a segundos y calcula epoch esperado al despertar.
-    uint32_t sleep_s = (uint32_t)((sleep_us + 999999ULL) / 1000000ULL);
-        rtc_unix_time_s = (uint32_t)((uint64_t)now + sleep_s);
-
-    ESP_LOGI(TAG, "Hora guardada para restaurar tras deep sleep: %lu", (unsigned long)rtc_unix_time_s);
-}
-
-/* Restaura la hora del sistema al volver desde deep sleep. */
-static void restore_device_time_after_deep_sleep(void) {
-    if (rtc_unix_time_s == 0) {
-        ESP_LOGW(TAG, "No hay hora RTC guardada para restaurar tras deep sleep");
-        return;
-    }
-
-    set_device_time_from_unix_s(rtc_unix_time_s);
-}
-
-/* Obtiene la MAC BT y la deja en formato string como ID del dispositivo. */
-static void get_bt_mac(void) {
-    uint8_t mac[6] = {0};
-
-    esp_err_t ret = esp_read_mac(mac, ESP_MAC_BT);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "No se pudo leer MAC BT: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    snprintf(this_device_id, sizeof(this_device_id), "%02X:%02X:%02X:%02X:%02X:%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    ESP_LOGI(TAG, "ID del device detectado: %s", this_device_id);
-}
-
 /* Deep sleep helper para modo discontinuo.
  * Se llama en la función de envío de cada protocolo. */
 static void deep_sleep_if_needed(void) {
@@ -379,7 +316,7 @@ static void deep_sleep_if_needed(void) {
     vTaskDelay(pdMS_TO_TICKS(3000));
     
     ESP_LOGI(TAG, "Entrando deep sleep por %lu s", (unsigned long)current_config->sleep_time_s);
-    save_device_time_before_deep_sleep(sleep_us);
+    device_clock_save_before_deep_sleep(sleep_us);
     
     esp_sleep_enable_timer_wakeup(sleep_us);
     esp_deep_sleep_start();
@@ -528,13 +465,6 @@ static void enqueue_packet(packet_t *pkt, const char *tag) {
     }
 }
 
-/* Epoch actual en segundos, o 0 si el reloj todavía no está puesto en hora. */
-static uint32_t now_unix_s(void) {
-    time_t now_s = 0;
-    time(&now_s);
-    return now_s > 0 ? (uint32_t)now_s : 0;
-}
-
 /* Intervalo del flujo rápido (Inertial). */
 static uint32_t interval_inertial_s(void) {
     if (!current_config) {
@@ -565,9 +495,9 @@ void vTaskCollectInertial(void *pvParameters) {
         sensor_gate_wait(GATE_INERTIAL_IDLE);
 
         Inertial inertial = INERTIAL__INIT;
-        inertial.id_device = this_device_id;
+        inertial.id_device = device_id();
         inertial.config_version_applied = current_config ? current_config->config_version : 0;
-        inertial.time_client = now_unix_s();
+        inertial.time_client = device_clock_now_s();
 
         /* Recogida de datos inerciales. Cada driver devuelve su propio tipo en
          * unidades físicas; traducirlo al mensaje protobuf es trabajo de acá,
@@ -623,9 +553,9 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         sensor_gate_wait(GATE_ENV_IDLE);
 
         Environmental env = ENVIRONMENTAL__INIT;
-        env.id_device = this_device_id;
+        env.id_device = device_id();
         env.config_version_applied = current_config ? current_config->config_version : 0;
-        env.time_client = now_unix_s();
+        env.time_client = device_clock_now_s();
 
         /* Recogida de datos ambientales. El driver devuelve su propio tipo en
          * unidades físicas; traducirlo al mensaje protobuf es trabajo de acá,
@@ -1040,7 +970,7 @@ void app_main() {
     ESP_ERROR_CHECK(nvs_flash_init());
 
     // Obtiene MAC BT del dispositivo
-    get_bt_mac();
+    device_id_init();
 
     // Inicializa semáforos binario. Inician cerrados.
     semaphore = xSemaphoreCreateBinary();
@@ -1072,7 +1002,7 @@ void app_main() {
         current_config = config_store_load();
         if (current_config) {
             ESP_LOGI(TAG, "Config cargada desde NVS (wake-up por deep sleep)");
-            restore_device_time_after_deep_sleep();
+            device_clock_restore_after_deep_sleep();
             data_window_count = 0;
         }
     }
@@ -1103,8 +1033,7 @@ void app_main() {
                 ESP_LOGI(TAG, "error al desempaquetar paquete de configuración. Reiniciando...");
                 esp_restart();
             }
-            set_device_time_from_unix_s(current_config->time_client);
-            rtc_unix_time_s = (uint32_t)current_config->time_client;
+            device_clock_set(current_config->time_client);
             data_window_count = 0;
             ESP_LOGI(TAG, "configuración leída correctamente");
         }
