@@ -278,6 +278,7 @@ typedef struct {
      * En BLE no hace nada: el enlace no se cierra desde acá. */
     void (*close)(void);
 
+    const char *send_tag;        // tag de log de la task de envío
     const char *rsp_tag;         // tag de log de la task de respuesta
 
     /* Veces que se repite un paquete de control. 3 en los de socket, donde
@@ -432,28 +433,28 @@ static const protocol_ops_t PROTOCOLS[] = {
     [PROTOCOL_MQTT] = {
         .name = "MQTT", .id = PROTOCOL_MQTT,
         .send_data = mqtt_send_data, .send_ack = mqtt_send_ack,
-        .rsp_tag = TAG_GET_RSP_MQTT,
+        .send_tag = TAG_SEND_MQTT, .rsp_tag = TAG_GET_RSP_MQTT,
         .recv_config = mqtt_recv_config, .close = mqtt_finish,
         .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
     [PROTOCOL_UDP] = {
         .name = "UDP", .id = PROTOCOL_UDP,
         .send_data = udp_send_data, .send_ack = udp_send_ack,
-        .rsp_tag = TAG_GET_RSP_UDP,
+        .send_tag = TAG_SEND_UDP, .rsp_tag = TAG_GET_RSP_UDP,
         .recv_config = udp_recv_config, .close = nebulaedge_udp_close_socket,
         .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
     [PROTOCOL_TCP] = {
         .name = "TCP", .id = PROTOCOL_TCP,
         .send_data = tcp_send_data, .send_ack = tcp_send_ack,
-        .rsp_tag = TAG_GET_RSP_TCP,
+        .send_tag = TAG_SEND_TCP, .rsp_tag = TAG_GET_RSP_TCP,
         .recv_config = tcp_recv_config, .close = tcp_close_socket,
         .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
     [PROTOCOL_BLE] = {
         .name = "BLE", .id = PROTOCOL_BLE,
         .send_data = ble_send_data, .send_ack = ble_send_ack,
-        .rsp_tag = TAG_GET_RSP_BLE,
+        .send_tag = TAG_SEND_BLE, .rsp_tag = TAG_GET_RSP_BLE,
         .recv_config = ble_recv_config, .close = ble_close,
         /* Una sola vez: el link layer de BLE ya retransmite lo que se encoló, y
          * set_char_with_notify() reintenta por su cuenta si el stack rechaza el
@@ -498,63 +499,29 @@ static void deep_sleep_if_needed(void) {
     ESP_LOGI(TAG, "Deteniendo tasks de sensores");
     pause_collect_tasks();
     
-    // En MQTT
-    if (current_config->protocol_conf == PROTOCOL_MQTT) {
-        // Suspende porque envío de flag cierra socket
-        if (response_task[PROTOCOL_MQTT]) {
-            vTaskSuspend(response_task[PROTOCOL_MQTT]);
-        }
-        // Avisa al server que se va a dormir, antes de cerrar. No se espera
-        // respuesta, así que se manda varias veces por si se pierde alguna.
-        char topic_data[128];
-        snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
-        for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-            mqtt_publish(topic_data, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN, 0);
-            vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-        }
-        mqtt_finish();
+    const protocol_ops_t *proto = &PROTOCOLS[current_config->protocol_conf];
+
+    /* Suspende la task de respuesta: el aviso de deep sleep cierra el
+     * transporte, y no tiene sentido que siga esperando config sobre él. */
+    if (response_task[proto->id]) {
+        vTaskSuspend(response_task[proto->id]);
     }
 
-    // En UDP
-    else if (current_config->protocol_conf == PROTOCOL_UDP) {
-        // Suspende porque envío de flag cierra socket
-        if (response_task[PROTOCOL_UDP]) {
-            vTaskSuspend(response_task[PROTOCOL_UDP]);
-        }
-        // Avisa al server que se va a dormir, antes de cerrar el socket.
-        for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-            nebulaedge_udp_send((uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
-            vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-        }
-        nebulaedge_udp_close_socket();
+    /* Avisa al server que se va a dormir, antes de cerrar. No se espera
+     * respuesta, así que se repite lo que diga la tabla: tres veces en los de
+     * socket, una sola en BLE — acá eso importa más todavía, porque cada
+     * reenvío son milisegundos despierto antes de dormir.
+     *
+     * Va por send_data() y no por send_ack(): el flag viaja por el mismo canal
+     * que la telemetría (tópico /data en MQTT, característica B en BLE), no por
+     * el de los ACKs. */
+    for (int i = 0; i < proto->control_repeats; i++) {
+        proto->send_data((const uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
     }
 
-    // En TCP
-    else if (current_config->protocol_conf == PROTOCOL_TCP) {
-        // Suspende para luego cerrar socket
-        if (response_task[PROTOCOL_TCP]) {
-            vTaskSuspend(response_task[PROTOCOL_TCP]);
-        }
-        // Avisa al server que se va a dormir, antes de cerrar el socket.
-        for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-            tcp_send((uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
-            vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-        }
-        tcp_close_socket();
-    }
+    proto->close();
 
-    // En BLE
-    else if (current_config->protocol_conf == PROTOCOL_BLE) {
-        if (response_task[PROTOCOL_BLE]) {
-            vTaskSuspend(response_task[PROTOCOL_BLE]);
-        }
-        /* Una sola vez: ver el comentario del caso BLE en send_config_ack(). Acá importa
-         * más todavía, porque cada reenvío son milisegundos despierto antes de
-         * dormir. */
-        set_char_with_notify(IDX_CHAR_VAL_B_BLE, (uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
-        // config_store_clear();
-    }
-    
     config_store_save(current_config);
     
     /* Cada driver se saca del bus solo. Tiene que ser ANTES del
@@ -910,6 +877,30 @@ void vTaskGetResponse(void *pvParameters) {
 
 
 
+/* Arranca las tasks que necesita un protocolo y las deja corriendo.
+ *
+ * Las dos productoras son de todos y se crean una sola vez en la vida del
+ * programa; el par envío/respuesta es propio de cada protocolo y se crea la
+ * primera vez que ese protocolo se usa. Después de eso, cambiar de protocolo
+ * solo suspende y reanuda: por eso los cuatro `if` preguntan antes de crear.
+ *
+ * Esto era el mismo bloque repetido en las cuatro ramas del switch de
+ * app_main. */
+static void start_protocol_tasks(const protocol_ops_t *proto) {
+    if (!xHandleCollectInertial)
+        xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
+    if (!xHandleCollectEnvironmental)
+        xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
+    if (!send_task[proto->id])
+        xTaskCreate(vTaskSendData, proto->send_tag, 4096, (void *)proto, 2, &send_task[proto->id]);
+    if (!response_task[proto->id])
+        xTaskCreate(vTaskGetResponse, proto->rsp_tag, 4096, (void *)proto, 3, &response_task[proto->id]);
+
+    resume_collect_tasks();
+    vTaskResume(send_task[proto->id]);
+    vTaskResume(response_task[proto->id]);
+}
+
 void app_main() {
 
     /****************************************************************/
@@ -1063,19 +1054,7 @@ void app_main() {
                 ESP_LOGI(TAG_SEND_MQTT, "topic_cfg: %s", topic_cfg);
                 mqtt_subscribe(topic_cfg, 0);
                 
-                // Crea una sola vez las tasks
-                if (!xHandleCollectInertial)
-                    xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
-                if (!xHandleCollectEnvironmental)
-                    xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
-                if (!send_task[PROTOCOL_MQTT])
-                    xTaskCreate(vTaskSendData, TAG_SEND_MQTT, 4096, (void *)&PROTOCOLS[PROTOCOL_MQTT], 2, &send_task[PROTOCOL_MQTT]);
-                if (!response_task[PROTOCOL_MQTT]) 
-                    xTaskCreate(vTaskGetResponse, TAG_GET_RSP_MQTT, 4096, (void *)&PROTOCOLS[PROTOCOL_MQTT], 3, &response_task[PROTOCOL_MQTT]);
-
-                resume_collect_tasks();
-                vTaskResume(send_task[PROTOCOL_MQTT]);
-                vTaskResume(response_task[PROTOCOL_MQTT]);
+                start_protocol_tasks(&PROTOCOLS[PROTOCOL_MQTT]);
 
                 // Punto de bloqueo
                 if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
@@ -1111,19 +1090,7 @@ void app_main() {
 
                 nebulaedge_udp_open_socket(&params);
 
-                // Crea una sola vez las tasks
-                if (!xHandleCollectInertial)
-                    xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
-                if (!xHandleCollectEnvironmental)
-                    xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
-                if (!send_task[PROTOCOL_UDP])
-                    xTaskCreate(vTaskSendData, TAG_SEND_UDP, 4096, (void *)&PROTOCOLS[PROTOCOL_UDP], 2, &send_task[PROTOCOL_UDP]);
-                if (!response_task[PROTOCOL_UDP]) 
-                    xTaskCreate(vTaskGetResponse, TAG_GET_RSP_UDP, 4096, (void *)&PROTOCOLS[PROTOCOL_UDP], 3, &response_task[PROTOCOL_UDP]);
-
-                resume_collect_tasks();
-                vTaskResume(send_task[PROTOCOL_UDP]);
-                vTaskResume(response_task[PROTOCOL_UDP]);
+                start_protocol_tasks(&PROTOCOLS[PROTOCOL_UDP]);
 
                 // Punto de bloqueo
                 if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
@@ -1168,19 +1135,7 @@ void app_main() {
                     continue;
                 }
 
-                // Crea una sola vez las tasks
-                if (!xHandleCollectInertial)
-                    xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
-                if (!xHandleCollectEnvironmental)
-                    xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
-                if (!send_task[PROTOCOL_TCP])
-                    xTaskCreate(vTaskSendData, TAG_SEND_TCP, 4096, (void *)&PROTOCOLS[PROTOCOL_TCP], 2, &send_task[PROTOCOL_TCP]);
-                if (!response_task[PROTOCOL_TCP]) 
-                    xTaskCreate(vTaskGetResponse, TAG_GET_RSP_TCP, 4096, (void *)&PROTOCOLS[PROTOCOL_TCP], 3, &response_task[PROTOCOL_TCP]);
-
-                resume_collect_tasks();
-                vTaskResume(send_task[PROTOCOL_TCP]);
-                vTaskResume(response_task[PROTOCOL_TCP]);
+                start_protocol_tasks(&PROTOCOLS[PROTOCOL_TCP]);
 
                 // Punto de bloqueo
                 if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
@@ -1208,19 +1163,7 @@ void app_main() {
                 // Da tiempo a la Raspberry para estar lista
                 vTaskDelay(5000 / portTICK_PERIOD_MS);
 
-                // Crea una sola vez las tasks
-                if (!xHandleCollectInertial)
-                    xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
-                if (!xHandleCollectEnvironmental)
-                    xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
-                if (!send_task[PROTOCOL_BLE])
-                    xTaskCreate(vTaskSendData, TAG_SEND_BLE, 4096, (void *)&PROTOCOLS[PROTOCOL_BLE], 2, &send_task[PROTOCOL_BLE]);
-                if (!response_task[PROTOCOL_BLE]) 
-                    xTaskCreate(vTaskGetResponse, TAG_GET_RSP_BLE, 4096, (void *)&PROTOCOLS[PROTOCOL_BLE], 3, &response_task[PROTOCOL_BLE]);
-
-                resume_collect_tasks();
-                vTaskResume(send_task[PROTOCOL_BLE]);
-                vTaskResume(response_task[PROTOCOL_BLE]);
+                start_protocol_tasks(&PROTOCOLS[PROTOCOL_BLE]);
 
                 // Punto de bloqueo
                 if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
