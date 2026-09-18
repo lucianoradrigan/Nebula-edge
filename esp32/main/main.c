@@ -95,6 +95,13 @@ typedef enum {
 #define CONTROL_PKT_REDUNDANCY 3
 #define CONTROL_PKT_REDUNDANCY_DELAY_MS 50
 
+/* Cuánto se espera, tras mandar el ACK de un cambio de protocolo, antes de
+ * cerrar el transporte: si se cierra demasiado pronto el ACK no llega y el
+ * servidor da la sesión por perdida. Era 4000 en MQTT y 2000 en UDP/TCP;
+ * unificado al mayor, que es la dirección segura (el viaje al broker MQTT es
+ * el más lento). Solo se paga al cambiar de protocolo, no en régimen. */
+#define ACK_DRAIN_MS 4000
+
 /* Vacía xQueueData liberando la memoria de cada packet_t pendiente.
  *
  * xQueueReset() por sí solo descarta los elementos en cola SIN liberar
@@ -573,21 +580,18 @@ void vTaskSendMQTT(void *pvParameters) {
     packet_t packet;
     for (;;) {
 
-        int msg_id;
-
-        // Espera a que haya datos disponibles
-        int receive = xQueueReceive(xQueueData, &packet, portMAX_DELAY);
-
-        // Caso recepción correcta desde la cola
-        if (receive == pdTRUE) {
+        /* Con portMAX_DELAY esto solo retorna cuando hay un paquete: no existe
+         * el caso pdFALSE. Antes había una rama que lo logueaba, inalcanzable,
+         * y un vTaskDelay(1) al final de cada vuelta que tampoco hacía nada
+         * (la task ya cede la CPU bloqueándose acá). */
+        if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) == pdTRUE) {
 
             char topic_data[128];
             snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
-            msg_id = mqtt_publish(topic_data, packet.data, packet.size, 0);
-            // Logs
+            int msg_id = mqtt_publish(topic_data, packet.data, packet.size, 0);
             if (msg_id < 0) {
                 ESP_LOGE(TAG_SEND_MQTT, "Error al publicar por MQTT. msg_id=%d", msg_id);
-            } 
+            }
             else {
                 ESP_LOGI(TAG_SEND_MQTT, "Paquete publicado por MQTT. msg_id=%d", msg_id);
             }
@@ -601,12 +605,6 @@ void vTaskSendMQTT(void *pvParameters) {
             free(packet.data);
             deep_sleep_if_needed();
         }
-
-        // Caso en que haya error al recibir desde la cola
-        else if (receive == pdFALSE) {
-            ESP_LOGW(TAG_SEND_MQTT, "No se recibió ningún paquete de la xQueue");
-        }
-        vTaskDelay(1);
     }
 }
 
@@ -637,7 +635,20 @@ void vTaskGetResponseMQTT(void *pvParameters) {
             current_config = new_config;
             data_window_count = 0;
 
-            if (xHandleSendMQTT) {     
+            /* El ACK sale ANTES de suspender la task de envío, igual que en BLE.
+             * No es cosmético: vTaskSendXXX hace free(packet.data) en cada
+             * vuelta, así que vTaskSuspend() puede congelarla con el lock del
+             * heap tomado — el mismo deadlock que tenían las productoras. Si eso
+             * pasa, el drenado de pause_collect_tasks() (que llama free) y el
+             * malloc() de send_config_ack() se cuelgan ahí mismo. Mandando el
+             * ACK primero, al menos el ACK siempre sale.
+             *
+             * No cierra el agujero del todo: después del suspend siguen el
+             * cierre del transporte y todo app_main, que reservan memoria. El
+             * cierre real es meter estas tasks en la compuerta cooperativa. */
+            send_config_ack(PROTOCOL_MQTT, current_config, true);
+
+            if (xHandleSendMQTT) {
                 vTaskSuspend(xHandleSendMQTT);
                 ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskSendMQTT");
             }
@@ -647,8 +658,8 @@ void vTaskGetResponseMQTT(void *pvParameters) {
             ESP_LOGI(TAG_GET_RSP_MQTT, "Se detienen tasks de sensores");
             pause_collect_tasks();
 
-            send_config_ack(PROTOCOL_MQTT, current_config, true);
-            vTaskDelay(4000 / portTICK_PERIOD_MS);
+            // Le da tiempo al ACK de llegar antes de cerrar el transporte.
+            vTaskDelay(pdMS_TO_TICKS(ACK_DRAIN_MS));
 
             mqtt_finish();
 
@@ -788,7 +799,7 @@ void vTaskGetResponseUDP(void *pvParameters) {
         size_t len_recv = nebulaedge_udp_receive(buffer, len);
 
         if (len_recv == 0) {
-            ESP_LOGI(TAG_GET_RSP_UDP, "no han llegado nuevos datos de configuración");
+            // sin datos/timeout
             vTaskDelay(1);
             continue;
         }
@@ -814,6 +825,19 @@ void vTaskGetResponseUDP(void *pvParameters) {
             current_config = new_config;
             data_window_count = 0;
 
+            /* El ACK sale ANTES de suspender la task de envío, igual que en BLE.
+             * No es cosmético: vTaskSendXXX hace free(packet.data) en cada
+             * vuelta, así que vTaskSuspend() puede congelarla con el lock del
+             * heap tomado — el mismo deadlock que tenían las productoras. Si eso
+             * pasa, el drenado de pause_collect_tasks() (que llama free) y el
+             * malloc() de send_config_ack() se cuelgan ahí mismo. Mandando el
+             * ACK primero, al menos el ACK siempre sale.
+             *
+             * No cierra el agujero del todo: después del suspend siguen el
+             * cierre del transporte y todo app_main, que reservan memoria. El
+             * cierre real es meter estas tasks en la compuerta cooperativa. */
+            send_config_ack(PROTOCOL_UDP, current_config, true);
+
             if (xHandleSendUDP) {
                 ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo vTaskSendUDP");
                 vTaskSuspend(xHandleSendUDP);
@@ -824,8 +848,8 @@ void vTaskGetResponseUDP(void *pvParameters) {
             ESP_LOGI(TAG_GET_RSP_UDP, "Se detienen tasks de sensores");
             pause_collect_tasks();
 
-            send_config_ack(PROTOCOL_UDP, current_config, true);
-            vTaskDelay(2000 / portTICK_PERIOD_MS);
+            // Le da tiempo al ACK de llegar antes de cerrar el socket.
+            vTaskDelay(pdMS_TO_TICKS(ACK_DRAIN_MS));
 
             // Se cierra el socket UDP
             nebulaedge_udp_close_socket();
@@ -903,17 +927,31 @@ void vTaskGetResponseTCP(void *pvParameters) {
             current_config = new_config;
             data_window_count = 0;
 
+            /* El ACK sale ANTES de suspender la task de envío, igual que en BLE.
+             * No es cosmético: vTaskSendXXX hace free(packet.data) en cada
+             * vuelta, así que vTaskSuspend() puede congelarla con el lock del
+             * heap tomado — el mismo deadlock que tenían las productoras. Si eso
+             * pasa, el drenado de pause_collect_tasks() (que llama free) y el
+             * malloc() de send_config_ack() se cuelgan ahí mismo. Mandando el
+             * ACK primero, al menos el ACK siempre sale.
+             *
+             * No cierra el agujero del todo: después del suspend siguen el
+             * cierre del transporte y todo app_main, que reservan memoria. El
+             * cierre real es meter estas tasks en la compuerta cooperativa. */
+            send_config_ack(PROTOCOL_TCP, current_config, true);
+
             if (xHandleSendTCP) {
                 ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskSendTCP");
                 vTaskSuspend(xHandleSendTCP);
             }
+
             /* Detiene las productoras y vacía la cola: los paquetes del protocolo
              * anterior no deben colarse al siguiente. */
             ESP_LOGI(TAG_GET_RSP_TCP, "Se detienen tasks de sensores");
             pause_collect_tasks();
 
-            send_config_ack(PROTOCOL_TCP, current_config, true);
-            vTaskDelay(2000 / portTICK_PERIOD_MS);
+            // Le da tiempo al ACK de llegar antes de cerrar el socket.
+            vTaskDelay(pdMS_TO_TICKS(ACK_DRAIN_MS));
 
             // Cierra el socket
             tcp_close_socket();
