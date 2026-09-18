@@ -229,6 +229,231 @@ static void resume_collect_tasks(void) {
     xEventGroupSetBits(sensor_gate, GATE_RUN);
 }
 
+/*******************************************************************/
+/*************** TABLA DE PROTOCOLOS (protocol_ops_t) **************/
+/*******************************************************************/
+
+/* Los cuatro protocolos hacen lo mismo con piezas distintas: mandar
+ * telemetría, mandar un ACK, esperar una config, cerrar el transporte. Eso
+ * estaba escrito cuatro veces —una task de envío y una de respuesta por
+ * protocolo— y las copias fueron divergiendo: órdenes distintos, delays
+ * distintos, logs que estaban en una y no en otra.
+ *
+ * Acá cada protocolo describe SOLO sus piezas propias. Las tasks son una sola
+ * función instanciada cuatro veces: xTaskCreate() recibe la tabla por
+ * pvParameters, que hasta ahora estaba declarado y sin usar en las ocho.
+ *
+ * Es el equivalente en C de lo que el servidor ya tiene con la clase Transport:
+ * agregar un protocolo es una entrada más en la tabla, no cuatro funciones
+ * nuevas repartidas por el archivo. */
+
+/* Tamaño del buffer donde se recibe una config cruda en UDP y TCP. Vive en la
+ * pila de la task de respuesta (4096 B), así que hay espacio de sobra. */
+#define CONFIG_RECV_BUF_BYTES 256
+
+typedef struct {
+    const char *name;            // para los logs: "MQTT", "UDP", "TCP", "BLE"
+    protocol_t  id;              // el mismo valor que protocol_conf del Config
+
+    /* Manda un paquete de telemetría ya serializado. En MQTT va al tópico
+     * /data; en BLE, a la característica B. */
+    void (*send_data)(const uint8_t *data, size_t size);
+
+    /* Manda UN ACK de config ya serializado. El caller repite la llamada
+     * `control_repeats` veces. En MQTT va al tópico /config/ack; en BLE, a la
+     * característica D, que es distinta de la de telemetría. */
+    void (*send_ack)(const Config *cfg, const uint8_t *buf, size_t size);
+
+    /* Bloquea hasta que llegue una config nueva y la devuelve desempaquetada,
+     * o NULL si lo que llegó no servía. El caller la libera.
+     *
+     * Esta es la firma que hace que todo lo demás encaje. Los cuatro reciben
+     * en formas incompatibles: MQTT saca un Config* ya desempaquetado de una
+     * cola, BLE saca un packet_t crudo de otra, UDP y TCP bloquean en recv()
+     * sobre un buffer. Devolver Config* absorbe las tres diferencias, y todo
+     * lo que viene después pasa a existir una sola vez. */
+    Config *(*recv_config)(void);
+
+    /* Cierra el transporte antes de cambiar de protocolo o de dormir.
+     * En BLE no hace nada: el enlace no se cierra desde acá. */
+    void (*close)(void);
+
+    /* Veces que se repite un paquete de control. 3 en los de socket, donde
+     * nadie confirma; 1 en BLE, donde el link layer ya retransmite. */
+    uint8_t control_repeats;
+
+    /* Delays propios de BLE, acá como datos en vez de escondidos en el cuerpo
+     * de su task. 0 en los otros tres. */
+    uint32_t pre_send_delay_ms;      // aire al enlace antes de mandar, en modo discontinuo
+    uint32_t last_packet_delay_ms;   // respiro antes del último paquete de la ventana
+} protocol_ops_t;
+
+/* ------------------------------------------------------------------- MQTT */
+
+static void mqtt_send_data(const uint8_t *data, size_t size) {
+    char topic_data[128];
+    snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
+
+    int msg_id = mqtt_publish(topic_data, data, size, 0);
+    if (msg_id < 0) {
+        ESP_LOGE(TAG_SEND_MQTT, "Error al publicar por MQTT. msg_id=%d", msg_id);
+    }
+    else {
+        ESP_LOGI(TAG_SEND_MQTT, "Paquete publicado por MQTT. msg_id=%d", msg_id);
+    }
+}
+
+static void mqtt_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
+    char topic_ack[128];
+    snprintf(topic_ack, sizeof(topic_ack), "/topic/nebulaedge/%s/config/ack", cfg->id_device);
+    mqtt_publish(topic_ack, buf, size, 0);
+}
+
+/* El componente MQTT desempaqueta la config y deja el Config* en la cola. */
+static Config *mqtt_recv_config(void) {
+    Config *cfg = NULL;
+    xQueueReceive(xQueueConfig, &cfg, portMAX_DELAY);
+    return cfg;
+}
+
+/* -------------------------------------------------------------------- UDP */
+
+static void udp_send_data(const uint8_t *data, size_t size) {
+    nebulaedge_udp_send(data, size);
+}
+
+static void udp_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
+    (void)cfg;    // UDP no direcciona dentro de la conexión
+    nebulaedge_udp_send(buf, size);
+}
+
+static Config *udp_recv_config(void) {
+    uint8_t buffer[CONFIG_RECV_BUF_BYTES];
+
+    // Bloquea acá (y cede la CPU) hasta recibir algo o hasta el timeout.
+    size_t len_recv = nebulaedge_udp_receive(buffer, sizeof(buffer));
+    if (len_recv == 0) {
+        vTaskDelay(1);
+        return NULL;
+    }
+
+    Config *cfg = config__unpack(NULL, len_recv, buffer);
+    if (!cfg) {
+        ESP_LOGI(TAG_GET_RSP_UDP, "UDP: error al desempaquetar");
+    }
+    return cfg;
+}
+
+/* -------------------------------------------------------------------- TCP */
+
+static void tcp_send_data(const uint8_t *data, size_t size) {
+    tcp_send((uint8_t *)data, size);
+}
+
+static void tcp_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
+    (void)cfg;
+    tcp_send((uint8_t *)buf, size);
+}
+
+static Config *tcp_recv_config(void) {
+    uint8_t buffer[CONFIG_RECV_BUF_BYTES];
+
+    size_t len_recv = tcp_receive(buffer, sizeof(buffer));
+    if (len_recv == 0) {
+        vTaskDelay(1);
+        return NULL;
+    }
+
+    Config *cfg = config__unpack(NULL, len_recv, buffer);
+    if (!cfg) {
+        ESP_LOGI(TAG_GET_RSP_TCP, "TCP: error al desempaquetar");
+    }
+    return cfg;
+}
+
+/* -------------------------------------------------------------------- BLE */
+
+static void ble_send_data(const uint8_t *data, size_t size) {
+    set_char_with_notify(IDX_CHAR_VAL_B_BLE, data, size);
+}
+
+static void ble_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
+    (void)cfg;
+
+    /* Char D, distinta de la de telemetría: el ACK queda ahí legible, así que
+     * si se pierde la notificación el servidor lo reconcilia leyéndolo
+     * (BleTransport.confirm_config_applied). */
+    esp_err_t ret = set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG_GET_RSP_BLE, "BLE: ACK no se pudo notificar (%s); queda legible en char D.",
+                 esp_err_to_name(ret));
+    }
+}
+
+/* En BLE la config llega cruda por la cola y hay que desempaquetarla acá. */
+static Config *ble_recv_config(void) {
+    packet_t pkt;
+
+    if (xQueueReceive(xQueueConfigBle, &pkt, portMAX_DELAY) != pdTRUE) {
+        return NULL;
+    }
+
+    if (pkt.data == NULL || pkt.size == 0) {
+        /* free() incondicional: antes este camino hacía `continue` sin liberar,
+         * así que un paquete con data != NULL y size 0 perdía la memoria. */
+        free(pkt.data);
+        return NULL;
+    }
+
+    Config *cfg = config__unpack(NULL, pkt.size, pkt.data);
+    free(pkt.data);
+
+    if (cfg == NULL) {
+        ESP_LOGW(TAG_GET_RSP_BLE, "Error al desempaquetar el mensaje protobuf de configuración");
+    }
+    else {
+        ESP_LOGI(TAG_GET_RSP_BLE, "BLE: Se recibió información de configuración!");
+    }
+    return cfg;
+}
+
+/* El enlace BLE no se cierra al cambiar de protocolo: queda activo siempre. */
+static void ble_close(void) { }
+
+/* ----------------------------------------------------------- LA TABLA */
+
+static const protocol_ops_t PROTOCOLS[] = {
+    [PROTOCOL_MQTT] = {
+        .name = "MQTT", .id = PROTOCOL_MQTT,
+        .send_data = mqtt_send_data, .send_ack = mqtt_send_ack,
+        .recv_config = mqtt_recv_config, .close = mqtt_finish,
+        .control_repeats = CONTROL_PKT_REDUNDANCY,
+    },
+    [PROTOCOL_UDP] = {
+        .name = "UDP", .id = PROTOCOL_UDP,
+        .send_data = udp_send_data, .send_ack = udp_send_ack,
+        .recv_config = udp_recv_config, .close = nebulaedge_udp_close_socket,
+        .control_repeats = CONTROL_PKT_REDUNDANCY,
+    },
+    [PROTOCOL_TCP] = {
+        .name = "TCP", .id = PROTOCOL_TCP,
+        .send_data = tcp_send_data, .send_ack = tcp_send_ack,
+        .recv_config = tcp_recv_config, .close = tcp_close_socket,
+        .control_repeats = CONTROL_PKT_REDUNDANCY,
+    },
+    [PROTOCOL_BLE] = {
+        .name = "BLE", .id = PROTOCOL_BLE,
+        .send_data = ble_send_data, .send_ack = ble_send_ack,
+        .recv_config = ble_recv_config, .close = ble_close,
+        /* Una sola vez: el link layer de BLE ya retransmite lo que se encoló, y
+         * set_char_with_notify() reintenta por su cuenta si el stack rechaza el
+         * envío por congestión. */
+        .control_repeats = 1,
+        .pre_send_delay_ms = 1000,
+        .last_packet_delay_ms = 3000,
+    },
+};
+
 /* Deep sleep helper para modo discontinuo.
  * Se llama en la función de envío de cada protocolo. */
 static void deep_sleep_if_needed(void) {
@@ -360,11 +585,13 @@ bool config_has_changed(Config *old, Config *new) {
  * último que se manda antes de cerrarlo. Cada task de respuesta pasa su propio
  * protocolo, que es justamente el que tiene abierto.
  *
- * Antes eran cuatro funciones casi idénticas (send_config_ack_mqtt/udp/tcp/ble),
- * de las cuales ~20 de 24 líneas eran la misma: armar el ConfigAck, empaquetarlo
- * y reservar el buffer. Lo único propio de cada protocolo es cómo sale. */
+ * Envío redundante: no se espera respuesta, así que se manda varias veces en
+ * vez de pedir una confirmación (que agregaría otro flanco de pérdida en vez
+ * de reducir el riesgo). Cuántas, lo dice la tabla de cada protocolo. */
 static void send_config_ack(protocol_t over, const Config *cfg, bool applied) {
     if (!cfg || !cfg->id_device) return;
+
+    const protocol_ops_t *proto = &PROTOCOLS[over];
 
     ConfigAck ack = CONFIG_ACK__INIT;
     ack.id_device = cfg->id_device;
@@ -380,56 +607,13 @@ static void send_config_ack(protocol_t over, const Config *cfg, bool applied) {
     }
     config_ack__pack(&ack, buf);
 
-    /* Envío redundante en los tres protocolos de socket: no se espera respuesta,
-     * así que se manda varias veces en vez de pedir una confirmación (que
-     * agregaría otro flanco de pérdida en vez de reducir el riesgo). */
-    switch (over) {
-        case PROTOCOL_MQTT: {
-            char topic_ack[128];
-            snprintf(topic_ack, sizeof(topic_ack), "/topic/nebulaedge/%s/config/ack", cfg->id_device);
-            for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-                mqtt_publish(topic_ack, buf, size, 0);
-                vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-            }
-            ESP_LOGI(TAG, "MQTT: ACK de config enviado.");
-            break;
-        }
-
-        case PROTOCOL_UDP:
-            for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-                nebulaedge_udp_send(buf, size);
-                vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-            }
-            ESP_LOGI(TAG, "UDP: ACK de config enviado.");
-            break;
-
-        case PROTOCOL_TCP:
-            for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
-                tcp_send(buf, size);
-                vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
-            }
-            ESP_LOGI(TAG, "TCP: ACK de config enviado.");
-            break;
-
-        case PROTOCOL_BLE: {
-            /* Una sola vez, a diferencia de los otros tres: en BLE el link layer
-             * ya retransmite lo que se encoló, y set_char_with_notify() reintenta
-             * por su cuenta si el stack rechaza el envío por congestión. Además
-             * el ACK queda legible en char D, así que si se cae la conexión el
-             * servidor lo reconcilia leyéndolo (BleTransport.confirm_config_applied). */
-            esp_err_t ack_ret = set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
-            if (ack_ret == ESP_OK) {
-                ESP_LOGI(TAG, "BLE: ACK de config enviado.");
-            }
-            else {
-                ESP_LOGW(TAG, "BLE: ACK no se pudo notificar (%s); queda legible en char D.",
-                         esp_err_to_name(ack_ret));
-            }
-            break;
-        }
+    for (int i = 0; i < proto->control_repeats; i++) {
+        proto->send_ack(cfg, buf, size);
+        vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
     }
 
     free(buf);
+    ESP_LOGI(TAG, "%s: ACK de config enviado.", proto->name);
 }
 
 /* Encola un paquete ya serializado, liberando su memoria si la cola lo rechaza.
@@ -574,37 +758,45 @@ void vTaskCollectEnvironmental(void *pvParameters) {
     }
 }
 
-// MQTT: Si aún no hay datos, send espera a gen_rand_data para
-// recibir datos.
-void vTaskSendMQTT(void *pvParameters) {
+/* Task de envío de telemetría. UNA sola función, instanciada cuatro veces —
+ * una por protocolo— pasándole su tabla por pvParameters.
+ *
+ * Los cuatro cuerpos eran casi idénticos (12 de 14 líneas entre UDP y TCP):
+ * sacar de la cola, mandar, respaldar en SD si hay deep sleep, liberar, y
+ * evaluar si toca dormir. Lo único propio de cada uno es la línea que manda,
+ * que ahora la pone la tabla. */
+void vTaskSendData(void *pvParameters) {
+    const protocol_ops_t *proto = pvParameters;
     packet_t packet;
+
     for (;;) {
-
-        /* Con portMAX_DELAY esto solo retorna cuando hay un paquete: no existe
-         * el caso pdFALSE. Antes había una rama que lo logueaba, inalcanzable,
-         * y un vTaskDelay(1) al final de cada vuelta que tampoco hacía nada
-         * (la task ya cede la CPU bloqueándose acá). */
-        if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) == pdTRUE) {
-
-            char topic_data[128];
-            snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
-            int msg_id = mqtt_publish(topic_data, packet.data, packet.size, 0);
-            if (msg_id < 0) {
-                ESP_LOGE(TAG_SEND_MQTT, "Error al publicar por MQTT. msg_id=%d", msg_id);
-            }
-            else {
-                ESP_LOGI(TAG_SEND_MQTT, "Paquete publicado por MQTT. msg_id=%d", msg_id);
-            }
-
-            // Escribe en SD si está en modo deep sleep
-            if (current_config->sleep_time_s > 0) {
-                data_to_sd(packet.data, packet.size);
-            }
-
-            // Libera memoria de paquete
-            free(packet.data);
-            deep_sleep_if_needed();
+        // Con portMAX_DELAY solo retorna cuando hay un paquete.
+        if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) != pdTRUE) {
+            continue;
         }
+
+        // Delay de precaución en modo discontinuo. Solo BLE lo declara.
+        if (current_config->sleep_time_s > 0 && proto->pre_send_delay_ms > 0) {
+            vTaskDelay(pdMS_TO_TICKS(proto->pre_send_delay_ms));
+        }
+
+        proto->send_data(packet.data, packet.size);
+
+        // Respaldo local, solo en modo deep sleep.
+        if (current_config->sleep_time_s > 0) {
+            data_to_sd(packet.data, packet.size);
+        }
+
+        free(packet.data);
+
+        /* Respiro antes del último paquete de la ventana, para que no se pierda
+         * al cortarse el enlace por el deep sleep. Solo BLE lo declara. */
+        if (proto->last_packet_delay_ms > 0 &&
+            data_window_count + 1 == (uint32_t)current_config->sleep_window_size) {
+            vTaskDelay(pdMS_TO_TICKS(proto->last_packet_delay_ms));
+        }
+
+        deep_sleep_if_needed();
     }
 }
 
@@ -679,32 +871,6 @@ void vTaskGetResponseMQTT(void *pvParameters) {
     }
 }
 
-// BLE
-void vTaskSendBLE(void *pvParameters) {
-    packet_t packet;
-    for (;;) {
-
-        int receive = xQueueReceive(xQueueData, &packet, portMAX_DELAY);
-        if (receive == pdTRUE) {
-
-            // Delay de precaución en caso de modo discontinuo
-            // Escribe en SD si está en modo deep sleep
-            if (current_config->sleep_time_s > 0) {
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                data_to_sd(packet.data, packet.size);
-            }
-
-            set_char_with_notify(IDX_CHAR_VAL_B_BLE, packet.data, packet.size);
-            free(packet.data);
-
-            // Para evitar que se pierda el último paquete
-            if (data_window_count + 1 == (uint32_t)current_config->sleep_window_size) {
-                vTaskDelay(pdMS_TO_TICKS(3000));
-            }
-            deep_sleep_if_needed();
-        }
-    }
-}
 
 // BLE response
 void vTaskGetResponseBLE(void *pvParameters) {
@@ -771,22 +937,6 @@ void vTaskGetResponseBLE(void *pvParameters) {
     }
 }
 
-// UDP: Si aún no hay datos, send espera a gen_rand_data para
-// recibir datos.
-void vTaskSendUDP(void *pvParameters) {
-    packet_t packet;
-    for (;;) {
-        if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) == pdTRUE) {
-            nebulaedge_udp_send(packet.data, packet.size);
-            // Escribe en SD si está en modo deep sleep
-            if (current_config->sleep_time_s > 0) {
-                data_to_sd(packet.data, packet.size);
-            }
-            free(packet.data);
-            deep_sleep_if_needed();
-        }
-    }
-}
 
 // UDP: Pide configuración a la Raspberry por UDP. Hay que liberar el puntero Config *!!
 void vTaskGetResponseUDP(void *pvParameters) {
@@ -870,22 +1020,6 @@ void vTaskGetResponseUDP(void *pvParameters) {
     }
 }
 
-// TCP: Si aún no hay datos, send espera a gen_rand_data para
-// recibir datos.
-void vTaskSendTCP(void *pvParameters) {
-    packet_t packet;
-    for (;;) {
-        if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) == pdTRUE) {
-            tcp_send(packet.data, packet.size);
-            // Escribe en SD si está en modo deep sleep
-            if (current_config->sleep_time_s > 0) {
-                data_to_sd(packet.data, packet.size);
-            }
-            free(packet.data);
-            deep_sleep_if_needed();
-        }
-    }
-}
 
 // TCP: Pide configuración a la Raspberry por TCP. Hay que liberar el puntero Config *!!
 void vTaskGetResponseTCP(void *pvParameters) {
@@ -1130,7 +1264,7 @@ void app_main() {
                 if (!xHandleCollectEnvironmental)
                     xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
                 if (!xHandleSendMQTT)
-                    xTaskCreate(vTaskSendMQTT, TAG_SEND_MQTT, 4096, NULL, 2, &xHandleSendMQTT);
+                    xTaskCreate(vTaskSendData, TAG_SEND_MQTT, 4096, (void *)&PROTOCOLS[PROTOCOL_MQTT], 2, &xHandleSendMQTT);
                 if (!xHandleGetResponseMQTT) 
                     xTaskCreate(vTaskGetResponseMQTT, TAG_GET_RSP_MQTT, 4096, NULL, 3, &xHandleGetResponseMQTT);
 
@@ -1178,7 +1312,7 @@ void app_main() {
                 if (!xHandleCollectEnvironmental)
                     xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
                 if (!xHandleSendUDP)
-                    xTaskCreate(vTaskSendUDP, TAG_SEND_UDP, 4096, NULL, 2, &xHandleSendUDP);
+                    xTaskCreate(vTaskSendData, TAG_SEND_UDP, 4096, (void *)&PROTOCOLS[PROTOCOL_UDP], 2, &xHandleSendUDP);
                 if (!xHandleGetResponseUDP) 
                     xTaskCreate(vTaskGetResponseUDP, TAG_GET_RSP_UDP, 4096, NULL, 3, &xHandleGetResponseUDP);
 
@@ -1235,7 +1369,7 @@ void app_main() {
                 if (!xHandleCollectEnvironmental)
                     xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
                 if (!xHandleSendTCP)
-                    xTaskCreate(vTaskSendTCP, TAG_SEND_TCP, 4096, NULL, 2, &xHandleSendTCP);
+                    xTaskCreate(vTaskSendData, TAG_SEND_TCP, 4096, (void *)&PROTOCOLS[PROTOCOL_TCP], 2, &xHandleSendTCP);
                 if (!xHandleGetResponseTCP) 
                     xTaskCreate(vTaskGetResponseTCP, TAG_GET_RSP_TCP, 4096, NULL, 3, &xHandleGetResponseTCP);
 
@@ -1275,7 +1409,7 @@ void app_main() {
                 if (!xHandleCollectEnvironmental)
                     xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
                 if (!xHandleSendBLE)
-                    xTaskCreate(vTaskSendBLE, TAG_SEND_BLE, 4096, NULL, 2, &xHandleSendBLE);
+                    xTaskCreate(vTaskSendData, TAG_SEND_BLE, 4096, (void *)&PROTOCOLS[PROTOCOL_BLE], 2, &xHandleSendBLE);
                 if (!xHandleGetResponseBLE) 
                     xTaskCreate(vTaskGetResponseBLE, TAG_GET_RSP_BLE, 4096, NULL, 3, &xHandleGetResponseBLE);
 
