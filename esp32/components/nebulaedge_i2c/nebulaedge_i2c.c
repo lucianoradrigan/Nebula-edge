@@ -1,20 +1,19 @@
 #include <string.h>
 #include "driver/gpio.h"
-#include "driver/rtc_io.h"
 #include "driver/i2c_master.h"
-#include "nebulaedge_defs.h"
+#include "nebulaedge_i2c.h"
 #include "esp_log.h"
 #include "esp_task.h"
 #include "freertos/semphr.h"
 
-i2c_master_bus_handle_t bus_handle;
-i2c_master_dev_handle_t device_bmm350;
-i2c_master_dev_handle_t device_bmi270;
-i2c_master_dev_handle_t device_bme688;
-
 /* Aclaración: las funciones i2c de por sí son thread safe. Se implementa mutex para que cuando
  * se suspenda una task desde afuera de sí misma no esté realizando ninguna operación i2c. */
 SemaphoreHandle_t i2c_bus_mutex;
+
+/* Velocidad por defecto del bus, la que pasó la aplicación en i2c_master_init.
+ * i2c_slave_init la usa cuando el caller pide freq_hz = 0, así un driver no
+ * necesita conocer la configuración de la placa. */
+static uint32_t s_default_freq_hz = 100000;
 
 static esp_err_t i2c_mutex_init_if_needed(void) {
     if (i2c_bus_mutex == NULL) {
@@ -47,18 +46,26 @@ static void i2c_mutex_give(void) {
     }
 }
 
-/* Inicializa master I2C. */
-esp_err_t i2c_master_init(i2c_master_bus_handle_t *bus_handle) {
+/* Inicializa master I2C con el pinout que entrega la aplicación. */
+esp_err_t i2c_master_init(i2c_master_bus_handle_t *bus_handle, const i2c_bus_config_t *config) {
+    if (bus_handle == NULL || config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     esp_err_t ret = i2c_mutex_take(pdMS_TO_TICKS(2000));
     if (ret != ESP_OK) {
         return ret;
     }
 
+    if (config->freq_hz > 0) {
+        s_default_freq_hz = config->freq_hz;
+    }
+
     // Master initialization
     i2c_master_bus_config_t i2c_mst_config = {
         .i2c_port = I2C_NUM_0,
-        .sda_io_num = I2C_MASTER_SDA_IO,
-        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_io_num = config->sda_io,
+        .scl_io_num = config->scl_io,
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
@@ -72,7 +79,7 @@ esp_err_t i2c_master_init(i2c_master_bus_handle_t *bus_handle) {
 }
 
 /* Inicializa slave I2C*/
-esp_err_t i2c_slave_init(i2c_master_bus_handle_t *bus_handle, i2c_master_dev_handle_t *device, int slave_addr, int i2c_master_freq) {
+esp_err_t i2c_slave_init(i2c_master_bus_handle_t *bus_handle, i2c_master_dev_handle_t *device, int slave_addr, uint32_t freq_hz) {
     esp_err_t ret = i2c_mutex_take(pdMS_TO_TICKS(2000));
     if (ret != ESP_OK) {
         return ret;
@@ -88,7 +95,7 @@ esp_err_t i2c_slave_init(i2c_master_bus_handle_t *bus_handle, i2c_master_dev_han
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = slave_addr,
-        .scl_speed_hz = i2c_master_freq,
+        .scl_speed_hz = (freq_hz > 0) ? freq_hz : s_default_freq_hz,
     };
 
     ret = i2c_master_bus_add_device(*bus_handle, &dev_cfg, device);
@@ -130,7 +137,12 @@ esp_err_t i2c_slave_deinit(i2c_master_dev_handle_t *device) {
     return ESP_OK;
 }
 
-/* Deinicializa un bus I2C genérico. */
+/* Deinicializa un bus I2C genérico.
+ *
+ * ORDEN IMPORTANTE: borrar el bus invalida los handles de todos sus slaves.
+ * Hay que deinicializar los drivers ANTES de llamar acá; este componente ya no
+ * conoce a los sensores que cuelgan del bus, así que no puede limpiarlos por
+ * ellos. Cada driver anula su handle en su propio *_deinit(). */
 esp_err_t i2c_master_deinit(i2c_master_bus_handle_t *bus_handle) {
     esp_err_t lock_ret = i2c_mutex_take(pdMS_TO_TICKS(2000));
     if (lock_ret != ESP_OK) {
@@ -139,9 +151,6 @@ esp_err_t i2c_master_deinit(i2c_master_bus_handle_t *bus_handle) {
 
     if (bus_handle == NULL || *bus_handle == NULL) {
         ESP_LOGI("nebulaedge_i2c", "Bus I2C ya estaba deinicializado");
-        device_bmm350 = NULL;
-        device_bme688 = NULL;
-        device_bmi270 = NULL;
         i2c_mutex_give();
         return ESP_OK;
     }
@@ -154,21 +163,18 @@ esp_err_t i2c_master_deinit(i2c_master_bus_handle_t *bus_handle) {
     }
 
     *bus_handle = NULL;
-    device_bmm350 = NULL;
-    device_bme688 = NULL;
-    device_bmi270 = NULL;
 
     ESP_LOGI("nebulaedge_i2c", "Bus I2C deinicializado correctamente");
     i2c_mutex_give();
     return ESP_OK;
 }
 
-esp_err_t force_sda_low(void) {
+esp_err_t force_sda_low(int sda_io) {
     // Tras liberar el driver I2C, forzar SDA en LOW con GPIO open-drain.
-    gpio_reset_pin((gpio_num_t)I2C_MASTER_SDA_IO);
-    gpio_set_direction((gpio_num_t)I2C_MASTER_SDA_IO, GPIO_MODE_OUTPUT_OD);
-    gpio_set_pull_mode((gpio_num_t)I2C_MASTER_SDA_IO, GPIO_FLOATING);
-    gpio_set_level((gpio_num_t)I2C_MASTER_SDA_IO, 0);
+    gpio_reset_pin((gpio_num_t)sda_io);
+    gpio_set_direction((gpio_num_t)sda_io, GPIO_MODE_OUTPUT_OD);
+    gpio_set_pull_mode((gpio_num_t)sda_io, GPIO_FLOATING);
+    gpio_set_level((gpio_num_t)sda_io, 0);
     return ESP_OK;
 }
 

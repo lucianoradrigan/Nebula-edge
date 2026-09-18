@@ -7,6 +7,11 @@
 #include "esp_log.h"
 #include "bme688.h"
 
+/* Handle del slave en el bus I2C. Es del driver, no del componente del bus:
+ * así bme688 no obliga a nadie a declarar handles de sensores que no tiene. */
+static i2c_master_dev_handle_t s_dev = NULL;
+
+
 static int32_t t_fine;
 static int temp_ovs_global, press_ovs_global, hum_ovs_global;
 
@@ -45,22 +50,22 @@ static uint8_t calc_res_heat(uint16_t temp) {
     uint8_t reg_par_g1 = 0xED;
     uint8_t par_g1_u8;
     int8_t par_g1;
-    device_read(device_bme688, &reg_par_g1, &par_g1_u8, 1, TAG);
+    device_read(s_dev, &reg_par_g1, &par_g1_u8, 1, TAG);
     par_g1 = (int8_t)par_g1_u8;
 
     uint8_t reg_par_g2_lsb = 0xEB;
     uint8_t par_g2_lsb;
-    device_read(device_bme688, &reg_par_g2_lsb, &par_g2_lsb, 1, TAG);
+    device_read(s_dev, &reg_par_g2_lsb, &par_g2_lsb, 1, TAG);
 
     uint8_t reg_par_g2_msb = 0xEC;
     uint8_t par_g2_msb;
-    device_read(device_bme688, &reg_par_g2_msb, &par_g2_msb, 1, TAG);
+    device_read(s_dev, &reg_par_g2_msb, &par_g2_msb, 1, TAG);
 
     int16_t par_g2 = (int16_t)(CONCAT_BYTES(par_g2_msb, par_g2_lsb));
     uint8_t reg_par_g3 = 0xEE;
     uint8_t par_g3_u8;
     int8_t par_g3;
-    device_read(device_bme688, &reg_par_g3, &par_g3_u8, 1, TAG);
+    device_read(s_dev, &reg_par_g3, &par_g3_u8, 1, TAG);
     par_g3 = (int8_t)par_g3_u8;
 
     uint8_t reg_res_heat_range = 0x02;
@@ -83,8 +88,8 @@ static uint8_t calc_res_heat(uint16_t temp) {
         temp = 400;
     }
 
-    device_read(device_bme688, &reg_res_heat_range, &tmp_res_heat_range, 1, TAG);
-    device_read(device_bme688, &reg_res_heat_val, &res_heat_val_u8, 1, TAG);
+    device_read(s_dev, &reg_res_heat_range, &tmp_res_heat_range, 1, TAG);
+    device_read(s_dev, &reg_res_heat_val, &res_heat_val_u8, 1, TAG);
     res_heat_val = (int8_t)res_heat_val_u8;
     res_heat_range = (mask_res_heat_range & tmp_res_heat_range) >> 4;
 
@@ -105,7 +110,7 @@ static esp_err_t chipid(void) {
     uint8_t tmp;
 
     for (int attempt = 1; attempt <= BME688_INIT_RETRIES; ++attempt) {
-        ret = device_read(device_bme688, &reg_id, &tmp, 1, TAG);
+        ret = device_read(s_dev, &reg_id, &tmp, 1, TAG);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Intento %d/%d de lectura CHIPID falló: %s", attempt, BME688_INIT_RETRIES, esp_err_to_name(ret));
             vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -134,7 +139,7 @@ static esp_err_t softreset(void) {
     uint8_t val_softreset = 0xB6;
 
     for (int attempt = 1; attempt <= BME688_INIT_RETRIES; ++attempt) {
-        ret = device_write(device_bme688, &reg_softreset, &val_softreset, 1, TAG);
+        ret = device_write(s_dev, &reg_softreset, &val_softreset, 1, TAG);
         vTaskDelay(100 / portTICK_PERIOD_MS);
 
         if (ret != ESP_OK) {
@@ -246,39 +251,39 @@ static void set_oversampling_tph(void) {
     }
 
     // Set oversampling humedad. Se lee 0x72 para obtener valor spi_3w_int_en.
-    device_read(device_bme688, &ctrl_hum_reg, &tmp, 1, TAG);
+    device_read(s_dev, &ctrl_hum_reg, &tmp, 1, TAG);
     osrs_h = (0xF8 & tmp) | osrs_h;
-    device_write(device_bme688, &ctrl_hum_reg, &osrs_h, 1, TAG);
+    device_write(s_dev, &ctrl_hum_reg, &osrs_h, 1, TAG);
 
     // Set oversampling temperatura y presión
     osrs_t_p = (osrs_t << 5) | (osrs_p << 2);
-    device_write(device_bme688, &ctrl_meas_reg, &osrs_t_p, 1, TAG);
+    device_write(s_dev, &ctrl_meas_reg, &osrs_t_p, 1, TAG);
 
     // Set IIR filter para temperatura. Se lee 0x75 para obtener valor spi_3w_en.
-    device_read(device_bme688, &config_reg, &tmp, 1, TAG);
+    device_read(s_dev, &config_reg, &tmp, 1, TAG);
     iir_filter = 0x01;
     config_val = (iir_filter << 3) | (0x03 & tmp);
-    device_write(device_bme688, &config_reg, &config_val, 1, TAG);
+    device_write(s_dev, &config_reg, &config_val, 1, TAG);
 
     // Set gas conversion
     run_gas_val = 0x20;
-    device_write(device_bme688, &run_gas_reg, &run_gas_val, 1, TAG);
+    device_write(s_dev, &run_gas_reg, &run_gas_val, 1, TAG);
     
     // Seteamos gas_wait_0_reg a 100ms
     gas_duration = calc_gas_wait(100);
-    device_write(device_bme688, &gas_wait_0_reg, &gas_duration, 1, TAG);
+    device_write(s_dev, &gas_wait_0_reg, &gas_duration, 1, TAG);
 
     // Seteamos res_heat_0_reg a 300C
     heater_step = calc_res_heat(300);
-    device_write(device_bme688, &res_heat_0_reg, &heater_step, 1, TAG);
+    device_write(s_dev, &res_heat_0_reg, &heater_step, 1, TAG);
 
     // Seteamos el sensor en forced mode
     ctrl_meas_val = osrs_t_p | 0x01;
-    device_write(device_bme688, &ctrl_meas_reg, &ctrl_meas_val, 1, TAG);
+    device_write(s_dev, &ctrl_meas_reg, &ctrl_meas_val, 1, TAG);
 
     // Seteamos el sensor en forced mode
     ctrl_meas_val = osrs_t_p | 0x01;
-    device_write(device_bme688, &ctrl_meas_reg, &ctrl_meas_val, 1, TAG);
+    device_write(s_dev, &ctrl_meas_reg, &ctrl_meas_val, 1, TAG);
 }
 
 /* This internal API is used to calculate the temperature value. */
@@ -295,11 +300,11 @@ static int16_t temp_celsius(uint32_t temp_adc) {
     int8_t par_t3;
 
     uint8_t par[5];
-    device_read(device_bme688, &addr_par_t1_lsb, par, 1, TAG);
-    device_read(device_bme688, &addr_par_t1_msb, par + 1, 1, TAG);
-    device_read(device_bme688, &addr_par_t2_lsb, par + 2, 1, TAG);
-    device_read(device_bme688, &addr_par_t2_msb, par + 3, 1, TAG);
-    device_read(device_bme688, &addr_par_t3_lsb, par + 4, 1, TAG);
+    device_read(s_dev, &addr_par_t1_lsb, par, 1, TAG);
+    device_read(s_dev, &addr_par_t1_msb, par + 1, 1, TAG);
+    device_read(s_dev, &addr_par_t2_lsb, par + 2, 1, TAG);
+    device_read(s_dev, &addr_par_t2_msb, par + 3, 1, TAG);
+    device_read(s_dev, &addr_par_t3_lsb, par + 4, 1, TAG);
 
     par_t1 = (par[1] << 8) | par[0];
     par_t2 = (par[3] << 8) | par[2];
@@ -346,22 +351,22 @@ static uint32_t press_pascal(uint32_t press_adc) {
 
     uint8_t par_p[16];
 
-    device_read(device_bme688, &addr_par_p1_lsb, par_p, 1, TAG);
-    device_read(device_bme688, &addr_par_p1_msb, par_p + 1, 1, TAG);
-    device_read(device_bme688, &addr_par_p2_lsb, par_p + 2, 1, TAG);
-    device_read(device_bme688, &addr_par_p2_msb, par_p + 3, 1, TAG);
-    device_read(device_bme688, &addr_par_p3_lsb, par_p + 4, 1, TAG);
-    device_read(device_bme688, &addr_par_p4_lsb, par_p + 5, 1, TAG);
-    device_read(device_bme688, &addr_par_p4_msb, par_p + 6, 1, TAG);
-    device_read(device_bme688, &addr_par_p5_lsb, par_p + 7, 1, TAG);
-    device_read(device_bme688, &addr_par_p5_msb, par_p + 8, 1, TAG);
-    device_read(device_bme688, &addr_par_p6_lsb, par_p + 9, 1, TAG);
-    device_read(device_bme688, &addr_par_p7_lsb, par_p + 10, 1, TAG);
-    device_read(device_bme688, &addr_par_p8_lsb, par_p + 11, 1, TAG);
-    device_read(device_bme688, &addr_par_p8_msb, par_p + 12, 1, TAG);
-    device_read(device_bme688, &addr_par_p9_lsb, par_p + 13, 1, TAG);
-    device_read(device_bme688, &addr_par_p9_msb, par_p + 14, 1, TAG);
-    device_read(device_bme688, &addr_par_p10_lsb, par_p + 15, 1, TAG);
+    device_read(s_dev, &addr_par_p1_lsb, par_p, 1, TAG);
+    device_read(s_dev, &addr_par_p1_msb, par_p + 1, 1, TAG);
+    device_read(s_dev, &addr_par_p2_lsb, par_p + 2, 1, TAG);
+    device_read(s_dev, &addr_par_p2_msb, par_p + 3, 1, TAG);
+    device_read(s_dev, &addr_par_p3_lsb, par_p + 4, 1, TAG);
+    device_read(s_dev, &addr_par_p4_lsb, par_p + 5, 1, TAG);
+    device_read(s_dev, &addr_par_p4_msb, par_p + 6, 1, TAG);
+    device_read(s_dev, &addr_par_p5_lsb, par_p + 7, 1, TAG);
+    device_read(s_dev, &addr_par_p5_msb, par_p + 8, 1, TAG);
+    device_read(s_dev, &addr_par_p6_lsb, par_p + 9, 1, TAG);
+    device_read(s_dev, &addr_par_p7_lsb, par_p + 10, 1, TAG);
+    device_read(s_dev, &addr_par_p8_lsb, par_p + 11, 1, TAG);
+    device_read(s_dev, &addr_par_p8_msb, par_p + 12, 1, TAG);
+    device_read(s_dev, &addr_par_p9_lsb, par_p + 13, 1, TAG);
+    device_read(s_dev, &addr_par_p9_msb, par_p + 14, 1, TAG);
+    device_read(s_dev, &addr_par_p10_lsb, par_p + 15, 1, TAG);
 
     par_p1 = (par_p[1] << 8) | par_p[0];
     par_p2 = (int16_t)((par_p[3] << 8) | par_p[2]);
@@ -417,15 +422,15 @@ static uint32_t hum_percent(uint16_t hum_adc) {
     uint8_t par_h6;
     uint8_t par_h[9];
 
-    device_read(device_bme688, &addr_par_h1_lsb, par_h, 1, TAG);
-    device_read(device_bme688, &addr_par_h1_msb, par_h + 1, 1, TAG);
-    device_read(device_bme688, &addr_par_h2_lsb, par_h + 2, 1, TAG);
-    device_read(device_bme688, &addr_par_h2_msb, par_h + 3, 1, TAG);
-    device_read(device_bme688, &addr_par_h3_lsb, par_h + 4, 1, TAG);
-    device_read(device_bme688, &addr_par_h4_lsb, par_h + 5, 1, TAG);
-    device_read(device_bme688, &addr_par_h5_lsb, par_h + 6, 1, TAG);
-    device_read(device_bme688, &addr_par_h6_lsb, par_h + 7, 1, TAG);
-    device_read(device_bme688, &addr_par_h7_lsb, par_h + 8, 1, TAG);
+    device_read(s_dev, &addr_par_h1_lsb, par_h, 1, TAG);
+    device_read(s_dev, &addr_par_h1_msb, par_h + 1, 1, TAG);
+    device_read(s_dev, &addr_par_h2_lsb, par_h + 2, 1, TAG);
+    device_read(s_dev, &addr_par_h2_msb, par_h + 3, 1, TAG);
+    device_read(s_dev, &addr_par_h3_lsb, par_h + 4, 1, TAG);
+    device_read(s_dev, &addr_par_h4_lsb, par_h + 5, 1, TAG);
+    device_read(s_dev, &addr_par_h5_lsb, par_h + 6, 1, TAG);
+    device_read(s_dev, &addr_par_h6_lsb, par_h + 7, 1, TAG);
+    device_read(s_dev, &addr_par_h7_lsb, par_h + 8, 1, TAG);
 
     // 11110000 = 0xf0
     // 1111 = 0x0f
@@ -488,7 +493,7 @@ static void get_mode(void) {
     uint8_t reg_mode = 0x74;
     uint8_t tmp;
 
-    ret = device_read(device_bme688, &reg_mode, &tmp, 1, TAG);
+    ret = device_read(s_dev, &reg_mode, &tmp, 1, TAG);
 
     tmp = tmp & 0x3;
 
@@ -533,35 +538,35 @@ esp_err_t bme688_read(bme688_reading_t *out) {
     set_oversampling_tph();
 
     // Temperature read
-    device_read(device_bme688, &forced_temp_reg[0], &tmp, 1, TAG);
+    device_read(s_dev, &forced_temp_reg[0], &tmp, 1, TAG);
     temp_adc = temp_adc | tmp << 12;
-    device_read(device_bme688, &forced_temp_reg[1], &tmp, 1, TAG);
+    device_read(s_dev, &forced_temp_reg[1], &tmp, 1, TAG);
     temp_adc = temp_adc | tmp << 4;
-    device_read(device_bme688, &forced_temp_reg[2], &tmp, 1, TAG);
+    device_read(s_dev, &forced_temp_reg[2], &tmp, 1, TAG);
     temp_adc = temp_adc | (tmp & 0xF0) >> 4;
 
     // Pressure read
-    device_read(device_bme688, &forced_press_reg[0], &tmp, 1, TAG);
+    device_read(s_dev, &forced_press_reg[0], &tmp, 1, TAG);
     press_adc = press_adc | tmp << 12;
-    device_read(device_bme688, &forced_press_reg[1], &tmp, 1, TAG);
+    device_read(s_dev, &forced_press_reg[1], &tmp, 1, TAG);
     press_adc = press_adc | tmp << 4;
-    device_read(device_bme688, &forced_press_reg[2], &tmp, 1, TAG);
+    device_read(s_dev, &forced_press_reg[2], &tmp, 1, TAG);
     press_adc = press_adc | (tmp & 0xF0) >> 4;
 
     // Humidity read
-    device_read(device_bme688, &forced_hum_reg[0], &tmp, 1, TAG);
+    device_read(s_dev, &forced_hum_reg[0], &tmp, 1, TAG);
     hum_adc = hum_adc | tmp << 8;
-    device_read(device_bme688, &forced_hum_reg[1], &tmp, 1, TAG);
+    device_read(s_dev, &forced_hum_reg[1], &tmp, 1, TAG);
     hum_adc = hum_adc | tmp;
 
     // Gas read
-    device_read(device_bme688, &forced_gas_reg[0], &tmp, 1, TAG);
+    device_read(s_dev, &forced_gas_reg[0], &tmp, 1, TAG);
     gas_adc = gas_adc | tmp << 2;
-    device_read(device_bme688, &forced_gas_reg[1], &tmp, 1, TAG);
+    device_read(s_dev, &forced_gas_reg[1], &tmp, 1, TAG);
     gas_adc = gas_adc | tmp >> 6;
 
     // Gas range read
-    device_read(device_bme688, &forced_gas_range_reg[0], &tmp, 1, TAG);
+    device_read(s_dev, &forced_gas_range_reg[0], &tmp, 1, TAG);
     gas_range = tmp & 0x0F;
 
     int16_t temp = temp_celsius(temp_adc);
@@ -584,7 +589,15 @@ esp_err_t bme688_read(bme688_reading_t *out) {
 
 /* Función para ser llamada desde el script main. Contiene llamados a todas las
  * funciones que se encargan de inicializar el sensor. */
-void bme688_init(int temp_ovs, int press_ovs, int hum_ovs) {
+esp_err_t bme688_init(i2c_master_bus_handle_t bus, int temp_ovs, int press_ovs, int hum_ovs) {
+    /* Se agrega al bus que entrega la aplicación. freq_hz = 0 -> usa la
+     * velocidad por defecto configurada en i2c_master_init. */
+    esp_err_t add_ret = i2c_slave_init(&bus, &s_dev, BME688_SLAVE_ADDR, 0);
+    if (add_ret != ESP_OK) {
+        ESP_LOGE(TAG, "No se pudo agregar el slave al bus I2C: %s", esp_err_to_name(add_ret));
+        return add_ret;
+    }
+
     temp_ovs_global = temp_ovs;
     press_ovs_global = press_ovs;
     hum_ovs_global = hum_ovs;
@@ -593,22 +606,24 @@ void bme688_init(int temp_ovs, int press_ovs, int hum_ovs) {
     ret = chipid();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Init abortada: CHIPID inválido (%s)", esp_err_to_name(ret));
-        return;
+        return ret;
     }
 
     ret = softreset();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Init abortada: softreset falló (%s)", esp_err_to_name(ret));
-        return;
+        return ret;
     }
 
     get_mode();
     set_oversampling_tph();
+
+    return ESP_OK;
 }
 
 // void app_main(void) {
 //     ESP_ERROR_CHECK(i2c_master_init(&bus_handle));
-//     ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bme688, BME688_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+//     ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &s_dev, BME688_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
 //     chipid();
 //     softreset();
 //     get_mode();
@@ -616,3 +631,9 @@ void bme688_init(int temp_ovs, int press_ovs, int hum_ovs) {
 //     printf("Comienza lectura\n\n");
 //     readout_data_bme688(NULL, true, true, true, true, true);
 // }
+
+/* Saca el sensor del bus y anula su handle. */
+esp_err_t bme688_deinit(void) {
+    is_bme688_active = false;
+    return i2c_slave_deinit(&s_dev);
+}

@@ -5,6 +5,11 @@
 #include "nebulaedge_i2c.h"
 #include "bmi270.h"
 
+/* Handle del slave en el bus I2C. Es del driver, no del componente del bus:
+ * así bmi270 no obliga a nadie a declarar handles de sensores que no tiene. */
+static i2c_master_dev_handle_t s_dev = NULL;
+
+
 /* Settings que solo funcionan en este script, y no en main. */
 #define ACC_ODR                 BMI270_ODR_400
 #define ACC_AVG                 4
@@ -460,7 +465,7 @@ static esp_err_t chipid(void) {
     uint8_t tmp;
 
     for (int attempt = 1; attempt <= BMI270_INIT_RETRIES; ++attempt) {
-        ret = device_read(device_bmi270, &reg_id, &tmp, 1, TAG);
+        ret = device_read(s_dev, &reg_id, &tmp, 1, TAG);
 
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "[%d/%d] Lectura CHIPID falló: %s", attempt, BMI270_INIT_RETRIES, esp_err_to_name(ret));
@@ -489,7 +494,7 @@ static esp_err_t softreset(void) {
     uint8_t val_softreset = 0xB6;
 
     for (int attempt = 1; attempt <= BMI270_INIT_RETRIES; ++attempt) {
-        ret = device_write(device_bmi270, &reg_softreset, &val_softreset, 1, TAG);
+        ret = device_write(s_dev, &reg_softreset, &val_softreset, 1, TAG);
 
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Intento %d/%d softreset BMI270 falló: %s", attempt, BMI270_INIT_RETRIES, esp_err_to_name(ret));
@@ -517,21 +522,21 @@ static void initialization(void) {
 
     ESP_LOGI(TAG, "Inicializando BMI270...");
 
-    ret = device_write(device_bmi270, &reg_pwr_conf_advpowersave, &val_pwr_conf_advpowersave, 1, TAG);
+    ret = device_write(s_dev, &reg_pwr_conf_advpowersave, &val_pwr_conf_advpowersave, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo pwr_conf_advpowersave: %s", esp_err_to_name(ret));
         return;
     }
     vTaskDelay(500 /portTICK_PERIOD_MS);    // se puede reducir
     
-    ret = device_write(device_bmi270, &reg_init_ctrl, &val_init_ctrl, 1, TAG);
+    ret = device_write(s_dev, &reg_init_ctrl, &val_init_ctrl, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo init_ctrl=0: %s", esp_err_to_name(ret));
         return;
     }
 
     int config_size = sizeof(bmi270_config_file);
-    ret = device_write(device_bmi270, &reg_init_data, (uint8_t*)bmi270_config_file, config_size, TAG);
+    ret = device_write(s_dev, &reg_init_data, (uint8_t*)bmi270_config_file, config_size, TAG);
 
     if(ret != ESP_OK) {
         ESP_LOGE(TAG, "Error cargando config_file");
@@ -541,7 +546,7 @@ static void initialization(void) {
     }
 
     vTaskDelay(500 /portTICK_PERIOD_MS);
-    ret = device_write(device_bmi270, &reg_init_ctrl, &val_init_ctrl2, 1, TAG);
+    ret = device_write(s_dev, &reg_init_ctrl, &val_init_ctrl2, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo init_ctrl=1: %s", esp_err_to_name(ret));
         return;
@@ -557,7 +562,7 @@ static void check_initialization(void){
     
     vTaskDelay(500 /portTICK_PERIOD_MS);
 
-    ret = device_read(device_bmi270,  &reg_internalstatus, &tmp, 1, TAG);
+    ret = device_read(s_dev,  &reg_internalstatus, &tmp, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error leyendo internal status para check_initialization: %s", esp_err_to_name(ret));
         return;
@@ -579,7 +584,7 @@ static void internal_status(void) {
     uint8_t reg_internalstatus=0x21;
     uint8_t tmp;
 
-    ret = device_read(device_bmi270,  &reg_internalstatus, &tmp, 1, TAG);
+    ret = device_read(s_dev,  &reg_internalstatus, &tmp, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error leyendo internal status: %s", esp_err_to_name(ret));
         return;
@@ -601,7 +606,7 @@ static void toggle_sensors(int aux, int gyr, int acc, int temp) {
 
     val_pwr_ctrl = (temp << 3) | (acc << 2) | (gyr << 1) | aux;
 
-    ret = device_write(device_bmi270, &reg_pwr_ctrl, &val_pwr_ctrl, 1, TAG);
+    ret = device_write(s_dev, &reg_pwr_ctrl, &val_pwr_ctrl, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo pwr_ctrl: %s", esp_err_to_name(ret));
     }
@@ -699,14 +704,14 @@ static void acc_conf(int odr_set, int avg_set, int range_set) {
     val_acc_range = range;
 
     // Configuración general del acc
-    ret = device_write(device_bmi270, &reg_acc_conf, &val_acc_conf, 1, TAG);
+    ret = device_write(s_dev, &reg_acc_conf, &val_acc_conf, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo acc_conf: %s", esp_err_to_name(ret));
         return;
     }
     
     // Set range
-    ret = device_write(device_bmi270, &reg_acc_range, &val_acc_range, 1, TAG);
+    ret = device_write(s_dev, &reg_acc_range, &val_acc_range, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo acc_range: %s", esp_err_to_name(ret));
         return;
@@ -783,14 +788,14 @@ static void gyr_conf(int odr_set, int range_set) {
     val_gyr_range = range;
 
     // Configuración general del gyr
-    ret = device_write(device_bmi270, &reg_gyr_conf, &val_gyr_conf, 1, TAG);
+    ret = device_write(s_dev, &reg_gyr_conf, &val_gyr_conf, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo gyr_conf: %s", esp_err_to_name(ret));
         return;
     }
 
     // Set range
-    ret = device_write(device_bmi270, &reg_gyr_range, &val_gyr_range, 1, TAG);
+    ret = device_write(s_dev, &reg_gyr_range, &val_gyr_range, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo gyr_range: %s", esp_err_to_name(ret));
         return;
@@ -804,7 +809,7 @@ void power_config(void) {
     uint8_t reg_pwr_conf = 0x7C;
     uint8_t val_pwr_conf = 0x00;
 
-    ret = device_write(device_bmi270, &reg_pwr_conf, &val_pwr_conf, 1, TAG);
+    ret = device_write(s_dev, &reg_pwr_conf, &val_pwr_conf, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo power_config: %s", esp_err_to_name(ret));
     }
@@ -834,7 +839,7 @@ esp_err_t bmi270_read(bmi270_reading_t *out) {
     float acc_x_g, acc_y_g, acc_z_g;
     float gyr_x_rads, gyr_y_rads, gyr_z_rads;
 
-    ret = device_read(device_bmi270, &reg_intstatus, &tmp, 1, TAG);
+    ret = device_read(s_dev, &reg_intstatus, &tmp, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error leyendo intstatus: %s", esp_err_to_name(ret));
         return ret;
@@ -847,7 +852,7 @@ esp_err_t bmi270_read(bmi270_reading_t *out) {
     }
 
     {
-        ret = device_read(device_bmi270, &reg_data, (uint8_t*) sensor_data_buffer, bytes_data8, TAG);
+        ret = device_read(s_dev, &reg_data, (uint8_t*) sensor_data_buffer, bytes_data8, TAG);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Error leyendo datos de acelerómetro y giroscopio: %s", esp_err_to_name(ret));
             return ret;
@@ -892,18 +897,26 @@ esp_err_t bmi270_read(bmi270_reading_t *out) {
 }
 
 /* Función para ser llamada desde script main. */
-void bmi270_init(int acc_odr, int acc_avg, int acc_range, int gyr_odr, int gyr_range) {
+esp_err_t bmi270_init(i2c_master_bus_handle_t bus, int acc_odr, int acc_avg, int acc_range, int gyr_odr, int gyr_range) {
+    /* Se agrega al bus que entrega la aplicación. freq_hz = 0 -> usa la
+     * velocidad por defecto configurada en i2c_master_init. */
+    esp_err_t add_ret = i2c_slave_init(&bus, &s_dev, BMI270_SLAVE_ADDR, 0);
+    if (add_ret != ESP_OK) {
+        ESP_LOGE(TAG, "No se pudo agregar el slave al bus I2C: %s", esp_err_to_name(add_ret));
+        return add_ret;
+    }
+
     is_bmi270_active = false;
 
     ret = softreset();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Init abortada: softreset falló (%s)", esp_err_to_name(ret));
-        return;
+        return ret;
     }
 
     ret = chipid();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Init abortada: CHIPID inválido (%s)", esp_err_to_name(ret));        return;
+        ESP_LOGE(TAG, "Init abortada: CHIPID inválido (%s)", esp_err_to_name(ret));        return ret;
     }
 
     initialization();
@@ -913,11 +926,13 @@ void bmi270_init(int acc_odr, int acc_avg, int acc_range, int gyr_odr, int gyr_r
     gyr_conf(gyr_odr, gyr_range);
     power_config();
     internal_status();
+
+    return ESP_OK;
 }
 
 // void app_main(void) {
 //     ESP_ERROR_CHECK(i2c_master_init(&bus_handle));
-//     ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmi270, BMI270_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+//     ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &s_dev, BMI270_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
 //     softreset();
 //     chipid();
 //     initialization();
@@ -929,3 +944,9 @@ void bmi270_init(int acc_odr, int acc_avg, int acc_range, int gyr_odr, int gyr_r
 //     internal_status();
 //     readout_data_bmi270(NULL, true, true, true);
 // }
+
+/* Saca el sensor del bus y anula su handle. */
+esp_err_t bmi270_deinit(void) {
+    is_bmi270_active = false;
+    return i2c_slave_deinit(&s_dev);
+}

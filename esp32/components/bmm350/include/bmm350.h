@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "esp_err.h"
+#include "driver/i2c_master.h"
 
 /* Driver del BMM350 (magnetómetro de 3 ejes).
  *
@@ -46,6 +47,13 @@ typedef struct {
  * así el caller distingue un sensor caído de una medición legítima de cero. */
 esp_err_t bmm350_read(bmm350_reading_t *out);
 
-void bmm350_init(int odr, int avg);
+/* Agrega el sensor al bus I2C que entrega la aplicación y lo configura.
+ * El driver se queda con su propio handle de slave: quien lo use no necesita
+ * declarar handles de sensores ajenos. */
+esp_err_t bmm350_init(i2c_master_bus_handle_t bus, int odr, int avg);
+
+/* Saca el sensor del bus. Hay que llamarla ANTES de i2c_master_deinit(),
+ * porque borrar el bus invalida los handles de sus slaves. */
+esp_err_t bmm350_deinit(void);
 
 #endif

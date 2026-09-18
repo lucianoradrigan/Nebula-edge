@@ -37,6 +37,15 @@ QueueHandle_t xQueueConfigBle = NULL;
 
 Config *current_config = NULL;
 
+/* El bus I2C y su pinout son de la aplicación: es la única parte que sabe en
+ * qué placa corre. El componente nebulaedge_i2c ya no los compila adentro. */
+i2c_master_bus_handle_t bus_handle = NULL;
+static const i2c_bus_config_t board_i2c = {
+    .scl_io  = I2C_MASTER_SCL_IO,
+    .sda_io  = I2C_MASTER_SDA_IO,
+    .freq_hz = I2C_MASTER_FREQ_HZ,
+};
+
 /* Dos productoras de telemetría, una por ritmo. Los sensores tienen tiempos
  * naturales muy distintos: la temperatura cambia en minutos y el acelerómetro
  * en milisegundos. Con una sola task había que elegir un intervalo único, que
@@ -354,10 +363,11 @@ static void deep_sleep_if_needed(void) {
     
     nvs_save_config(current_config);
     
-    // Deinicializa slaves sensores BMM350, BME688, BMI270
-    i2c_slave_deinit(&device_bmm350);
-    i2c_slave_deinit(&device_bme688);
-    i2c_slave_deinit(&device_bmi270);
+    /* Cada driver se saca del bus solo. Tiene que ser ANTES del
+     * i2c_master_deinit: borrar el bus invalida los handles de sus slaves. */
+    bmm350_deinit();
+    bme688_deinit();
+    bmi270_deinit();
     i2c_master_deinit(&bus_handle);
     
     // Delay de precaución
@@ -1098,25 +1108,22 @@ void app_main() {
     /********** ITERACIÓN QUE MANEJA DE CAMBIOS DE PROTOCOLO ********/
     /****************************************************************/
     while (1) {
-        // Deinicializa master y slave al cambiar de protocolo (en la primera iteración no ocurre nada).
-        // Asegura transmisión i2c limpia.
-        i2c_slave_deinit(&device_bmi270);
-        i2c_slave_deinit(&device_bme688);
-        i2c_slave_deinit(&device_bmm350);
+        /* Al cambiar de protocolo se rehace el bus completo para asegurar una
+         * transmisión I2C limpia (en la primera iteración no hay nada que
+         * liberar). Cada driver se saca del bus solo, antes de borrarlo. */
+        bmi270_deinit();
+        bme688_deinit();
+        bmm350_deinit();
         i2c_master_deinit(&bus_handle);
-        
-        // Inicializa master bus
-        ESP_ERROR_CHECK(i2c_master_init(&bus_handle));
 
-        // Inicializa slaves sensores BMM350, BME688, BMI270
-        ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmm350, BMM350_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
-        ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bme688, BME688_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
-        ESP_ERROR_CHECK(i2c_slave_init(&bus_handle, &device_bmi270, BMI270_SLAVE_ADDR, I2C_MASTER_FREQ_HZ));
+        // Inicializa el bus con el pinout de esta placa
+        ESP_ERROR_CHECK(i2c_master_init(&bus_handle, &board_i2c));
 
-        // Inicializa sensores BME688, BMM350, BMI270 con respectivas configuraciones
-        bmm350_init(400, 4);
-        bme688_init(current_config->bme688_sampling, current_config->bme688_sampling, current_config->bme688_sampling);
-        bmi270_init(current_config->acc_sampling, 4, 8, 400, current_config->gyro_sensibility); 
+        /* Cada driver se agrega al bus y se configura. La dirección I2C la
+         * conoce cada uno; acá solo van los parámetros de medición. */
+        bmm350_init(bus_handle, 400, 4);
+        bme688_init(bus_handle, current_config->bme688_sampling, current_config->bme688_sampling, current_config->bme688_sampling);
+        bmi270_init(bus_handle, current_config->acc_sampling, 4, 8, 400, current_config->gyro_sensibility); 
     
         switch (current_config->protocol_conf) {
 

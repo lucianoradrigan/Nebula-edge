@@ -3,6 +3,7 @@
 
 #include "esp_err.h"
 #include <stdint.h>
+#include "driver/i2c_master.h"
 
 /* Driver del BME688 (ambiental: temperatura, presión, humedad y gas).
  *
@@ -37,6 +38,13 @@ typedef struct {
  * así el caller distingue un sensor caído de una medición legítima de cero. */
 esp_err_t bme688_read(bme688_reading_t *out);
 
-void bme688_init(int temp_ovs, int press_ovs, int hum_ovs);
+/* Agrega el sensor al bus I2C que entrega la aplicación y lo configura.
+ * El driver se queda con su propio handle de slave: quien lo use no necesita
+ * declarar handles de sensores ajenos. */
+esp_err_t bme688_init(i2c_master_bus_handle_t bus, int temp_ovs, int press_ovs, int hum_ovs);
+
+/* Saca el sensor del bus. Hay que llamarla ANTES de i2c_master_deinit(),
+ * porque borrar el bus invalida los handles de sus slaves. */
+esp_err_t bme688_deinit(void);
 
 #endif

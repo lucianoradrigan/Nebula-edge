@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "driver/i2c_master.h"
 
 /* Driver del BMI270 (acelerómetro + giroscopio).
  *
@@ -46,6 +47,13 @@ typedef struct {
  * una medición legítima de cero. */
 esp_err_t bmi270_read(bmi270_reading_t *out);
 
-void bmi270_init(int acc_odr, int acc_avg, int acc_range, int gyr_odr, int gyr_range);
+/* Agrega el sensor al bus I2C que entrega la aplicación y lo configura.
+ * El driver se queda con su propio handle de slave: quien lo use no necesita
+ * declarar handles de sensores ajenos. */
+esp_err_t bmi270_init(i2c_master_bus_handle_t bus, int acc_odr, int acc_avg, int acc_range, int gyr_odr, int gyr_range);
+
+/* Saca el sensor del bus. Hay que llamarla ANTES de i2c_master_deinit(),
+ * porque borrar el bus invalida los handles de sus slaves. */
+esp_err_t bmi270_deinit(void);
 
 #endif
