@@ -44,39 +44,6 @@ static const i2c_bus_config_t board_i2c = {
     .freq_hz = I2C_MASTER_FREQ_HZ,
 };
 
-/* Dos productoras de telemetría, una por ritmo. Los sensores tienen tiempos
- * naturales muy distintos: la temperatura cambia en minutos y el acelerómetro
- * en milisegundos. Con una sola task había que elegir un intervalo único, que
- * sobremuestreaba el ambiente o submuestreaba el movimiento. Ahora cada una
- * corre a lo suyo y ambas escriben en la misma xQueueData. */
-TaskHandle_t xHandleCollectInertial = NULL;       // cada send_interval_s
-TaskHandle_t xHandleCollectEnvironmental = NULL;  // cada env_interval_s
-
-TaskHandle_t xHandleSendUDP = NULL;
-TaskHandle_t xHandleGetResponseUDP = NULL;
-TaskHandle_t xHandleSendTCP = NULL;
-TaskHandle_t xHandleGetResponseTCP = NULL;
-TaskHandle_t xHandleSendMQTT = NULL;
-TaskHandle_t xHandleGetResponseMQTT = NULL;
-TaskHandle_t xHandleSendBLE = NULL;
-TaskHandle_t xHandleGetResponseBLE = NULL;
-
-const char *TAG = "main_task";
-const char *TAG_COLLECT_INERTIAL = "task_collect_inertial";
-const char *TAG_COLLECT_ENV = "task_collect_env";
-
-const char *TAG_SEND_MQTT = "task_send_mqtt";
-const char *TAG_SEND_UDP = "task_send_udp";
-const char *TAG_SEND_TCP = "task_send_tcp";
-const char *TAG_SEND_BLE = "task_send_ble";
-
-const char *TAG_GET_RSP_MQTT = "task_get_rsp_mqtt";
-const char *TAG_GET_RSP_BLE = "task_get_rsp_ble";
-const char *TAG_GET_RSP_TCP = "task_get_rsp_tcp";
-const char *TAG_GET_RSP_UDP = "task_get_rsp_udp";
-
-static uint32_t data_window_count = 0;
-
 /* Protocolos que puede tomar `protocol_conf` del Config. Los números son parte
  * del formato de cable (los fija schema.proto), así que el enum no los
  * renumera: les pone nombre para que los switch dejen de comparar contra 0..3
@@ -86,7 +53,40 @@ typedef enum {
     PROTOCOL_UDP  = 1,
     PROTOCOL_TCP  = 2,
     PROTOCOL_BLE  = 3,
+
+    PROTOCOL_COUNT   // cuántos hay; no es un protocolo
 } protocol_t;
+
+/* Dos productoras de telemetría, una por ritmo. Los sensores tienen tiempos
+ * naturales muy distintos: la temperatura cambia en minutos y el acelerómetro
+ * en milisegundos. Con una sola task había que elegir un intervalo único, que
+ * sobremuestreaba el ambiente o submuestreaba el movimiento. Ahora cada una
+ * corre a lo suyo y ambas escriben en la misma xQueueData. */
+TaskHandle_t xHandleCollectInertial = NULL;       // cada send_interval_s
+TaskHandle_t xHandleCollectEnvironmental = NULL;  // cada env_interval_s
+
+/* Un par de tasks por protocolo, indexadas por protocol_t. Antes eran ocho
+ * globales sueltas con el protocolo metido en el nombre, que es lo que obligaba
+ * a escribir cuatro veces cada cosa que las tocara. */
+TaskHandle_t send_task[PROTOCOL_COUNT] = {NULL};
+TaskHandle_t response_task[PROTOCOL_COUNT] = {NULL};
+
+#define TAG "main_task"
+#define TAG_COLLECT_INERTIAL "task_collect_inertial"
+#define TAG_COLLECT_ENV "task_collect_env"
+
+#define TAG_SEND_MQTT "task_send_mqtt"
+#define TAG_SEND_UDP "task_send_udp"
+#define TAG_SEND_TCP "task_send_tcp"
+#define TAG_SEND_BLE "task_send_ble"
+
+#define TAG_GET_RSP_MQTT "task_get_rsp_mqtt"
+#define TAG_GET_RSP_BLE "task_get_rsp_ble"
+#define TAG_GET_RSP_TCP "task_get_rsp_tcp"
+#define TAG_GET_RSP_UDP "task_get_rsp_udp"
+
+static uint32_t data_window_count = 0;
+
 
 /* Los paquetes de control (ACK de config, aviso de deep sleep) no esperan respuesta:
  * se mandan varias veces seguidas para bajar la probabilidad de que se pierdan, en
@@ -278,9 +278,15 @@ typedef struct {
      * En BLE no hace nada: el enlace no se cierra desde acá. */
     void (*close)(void);
 
+    const char *rsp_tag;         // tag de log de la task de respuesta
+
     /* Veces que se repite un paquete de control. 3 en los de socket, donde
      * nadie confirma; 1 en BLE, donde el link layer ya retransmite. */
     uint8_t control_repeats;
+
+    /* Espera entre el ACK y el cierre del transporte, para que el ACK alcance
+     * a salir. 0 en BLE: no cierra nada, así que no hay nada que drenar. */
+    uint32_t ack_drain_ms;
 
     /* Delays propios de BLE, acá como datos en vez de escondidos en el cuerpo
      * de su task. 0 en los otros tres. */
@@ -426,24 +432,28 @@ static const protocol_ops_t PROTOCOLS[] = {
     [PROTOCOL_MQTT] = {
         .name = "MQTT", .id = PROTOCOL_MQTT,
         .send_data = mqtt_send_data, .send_ack = mqtt_send_ack,
+        .rsp_tag = TAG_GET_RSP_MQTT,
         .recv_config = mqtt_recv_config, .close = mqtt_finish,
-        .control_repeats = CONTROL_PKT_REDUNDANCY,
+        .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
     [PROTOCOL_UDP] = {
         .name = "UDP", .id = PROTOCOL_UDP,
         .send_data = udp_send_data, .send_ack = udp_send_ack,
+        .rsp_tag = TAG_GET_RSP_UDP,
         .recv_config = udp_recv_config, .close = nebulaedge_udp_close_socket,
-        .control_repeats = CONTROL_PKT_REDUNDANCY,
+        .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
     [PROTOCOL_TCP] = {
         .name = "TCP", .id = PROTOCOL_TCP,
         .send_data = tcp_send_data, .send_ack = tcp_send_ack,
+        .rsp_tag = TAG_GET_RSP_TCP,
         .recv_config = tcp_recv_config, .close = tcp_close_socket,
-        .control_repeats = CONTROL_PKT_REDUNDANCY,
+        .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
     [PROTOCOL_BLE] = {
         .name = "BLE", .id = PROTOCOL_BLE,
         .send_data = ble_send_data, .send_ack = ble_send_ack,
+        .rsp_tag = TAG_GET_RSP_BLE,
         .recv_config = ble_recv_config, .close = ble_close,
         /* Una sola vez: el link layer de BLE ya retransmite lo que se encoló, y
          * set_char_with_notify() reintenta por su cuenta si el stack rechaza el
@@ -491,8 +501,8 @@ static void deep_sleep_if_needed(void) {
     // En MQTT
     if (current_config->protocol_conf == PROTOCOL_MQTT) {
         // Suspende porque envío de flag cierra socket
-        if (xHandleGetResponseMQTT) {
-            vTaskSuspend(xHandleGetResponseMQTT);
+        if (response_task[PROTOCOL_MQTT]) {
+            vTaskSuspend(response_task[PROTOCOL_MQTT]);
         }
         // Avisa al server que se va a dormir, antes de cerrar. No se espera
         // respuesta, así que se manda varias veces por si se pierde alguna.
@@ -508,8 +518,8 @@ static void deep_sleep_if_needed(void) {
     // En UDP
     else if (current_config->protocol_conf == PROTOCOL_UDP) {
         // Suspende porque envío de flag cierra socket
-        if (xHandleGetResponseUDP) {
-            vTaskSuspend(xHandleGetResponseUDP);
+        if (response_task[PROTOCOL_UDP]) {
+            vTaskSuspend(response_task[PROTOCOL_UDP]);
         }
         // Avisa al server que se va a dormir, antes de cerrar el socket.
         for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
@@ -522,8 +532,8 @@ static void deep_sleep_if_needed(void) {
     // En TCP
     else if (current_config->protocol_conf == PROTOCOL_TCP) {
         // Suspende para luego cerrar socket
-        if (xHandleGetResponseTCP) {
-            vTaskSuspend(xHandleGetResponseTCP);
+        if (response_task[PROTOCOL_TCP]) {
+            vTaskSuspend(response_task[PROTOCOL_TCP]);
         }
         // Avisa al server que se va a dormir, antes de cerrar el socket.
         for (int i = 0; i < CONTROL_PKT_REDUNDANCY; i++) {
@@ -535,8 +545,8 @@ static void deep_sleep_if_needed(void) {
 
     // En BLE
     else if (current_config->protocol_conf == PROTOCOL_BLE) {
-        if (xHandleGetResponseBLE) {
-            vTaskSuspend(xHandleGetResponseBLE);
+        if (response_task[PROTOCOL_BLE]) {
+            vTaskSuspend(response_task[PROTOCOL_BLE]);
         }
         /* Una sola vez: ver el comentario del caso BLE en send_config_ack(). Acá importa
          * más todavía, porque cada reenvío son milisegundos despierto antes de
@@ -800,310 +810,105 @@ void vTaskSendData(void *pvParameters) {
     }
 }
 
-// MQTT: Espera recepción de datos de comunicación.
-void vTaskGetResponseMQTT(void *pvParameters) {
+/* Task de respuesta: espera configuraciones nuevas y las aplica. UNA sola
+ * función, instanciada cuatro veces —una por protocolo— con su tabla por
+ * pvParameters.
+ *
+ * Es la lógica delicada del firmware: comparar versiones, mandar el ACK,
+ * reemplazar la config global, detener a todos, cerrar el transporte y avisarle
+ * a app_main que cambie de protocolo. Estaba escrita cuatro veces, y las copias
+ * ya habían divergido en el orden de las operaciones y en los delays.
+ *
+ * Lo único propio de cada protocolo es de dónde sale la config y cómo se cierra
+ * el transporte: las dos cosas las pone la tabla. */
+void vTaskGetResponse(void *pvParameters) {
+    const protocol_ops_t *proto = pvParameters;
 
-    Config *new_config;
     for (;;) {
-
-        // Con portMAX_DELAY espera a que haya un elemento en la cola
-        xQueueReceive(xQueueConfig, &new_config, portMAX_DELAY);
-
+        /* Bloquea hasta que llegue algo. Devuelve NULL si lo que llegó no era
+         * una config válida; cada protocolo ya logueó el motivo. */
+        Config *new_config = proto->recv_config();
         if (!new_config) {
             continue;
         }
 
+        /* Config más vieja que la aplicada: se rechaza con un ACK negativo, para
+         * que el servidor sepa que llegó y que NO se aplicó. */
         if (current_config && new_config->config_version < current_config->config_version) {
-            ESP_LOGW(TAG_GET_RSP_MQTT, "Config MQTT antigua: %ld < %ld", (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack(PROTOCOL_MQTT, new_config, false);
+            ESP_LOGW(proto->rsp_tag, "Config antigua: %ld < %ld",
+                     (long)new_config->config_version, (long)current_config->config_version);
+            send_config_ack(proto->id, new_config, false);
             config__free_unpacked(new_config, NULL);
             continue;
         }
 
-        if (config_has_changed(current_config, new_config)) {
-            ESP_LOGI(TAG_GET_RSP_MQTT, "Configuración cambiada!");
-
-            if (current_config) config__free_unpacked(current_config, NULL);
-            current_config = new_config;
-            data_window_count = 0;
-
-            /* El ACK sale ANTES de suspender la task de envío, igual que en BLE.
-             * No es cosmético: vTaskSendXXX hace free(packet.data) en cada
-             * vuelta, así que vTaskSuspend() puede congelarla con el lock del
-             * heap tomado — el mismo deadlock que tenían las productoras. Si eso
-             * pasa, el drenado de pause_collect_tasks() (que llama free) y el
-             * malloc() de send_config_ack() se cuelgan ahí mismo. Mandando el
-             * ACK primero, al menos el ACK siempre sale.
-             *
-             * No cierra el agujero del todo: después del suspend siguen el
-             * cierre del transporte y todo app_main, que reservan memoria. El
-             * cierre real es meter estas tasks en la compuerta cooperativa. */
-            send_config_ack(PROTOCOL_MQTT, current_config, true);
-
-            if (xHandleSendMQTT) {
-                vTaskSuspend(xHandleSendMQTT);
-                ESP_LOGI(TAG_GET_RSP_MQTT, "Se suspende vTaskSendMQTT");
-            }
-
-            /* Detiene las productoras y vacía la cola: los paquetes del protocolo
-             * anterior no deben colarse al siguiente. */
-            ESP_LOGI(TAG_GET_RSP_MQTT, "Se detienen tasks de sensores");
-            pause_collect_tasks();
-
-            // Le da tiempo al ACK de llegar antes de cerrar el transporte.
-            vTaskDelay(pdMS_TO_TICKS(ACK_DRAIN_MS));
-
-            mqtt_finish();
-
-            if (xSemaphoreGive(semaphore)) {
-                ESP_LOGI(TAG_GET_RSP_MQTT, "vTaskGetResponseMQTT libera semáforo para cambio de protocolo");
-            }
-
-            // Auto-suspende esta task hasta que el protocolo MQTT vuelva a activarse
-            ESP_LOGI(TAG_GET_RSP_MQTT, "Suspendiendo vTaskGetResponseMQTT");  
-            vTaskSuspend(NULL);
-        } 
-        else {
-            ESP_LOGI(TAG_GET_RSP_MQTT, "La configuración recibida es la misma");
-            send_config_ack(PROTOCOL_MQTT, new_config, true);
+        /* Misma versión: se confirma y se descarta. No hay nada que cambiar. */
+        if (!config_has_changed(current_config, new_config)) {
+            ESP_LOGI(proto->rsp_tag, "La configuración recibida es la misma");
+            send_config_ack(proto->id, new_config, true);
             config__free_unpacked(new_config, NULL);
+            continue;
         }
+
+        ESP_LOGI(proto->rsp_tag, "Configuración cambiada!");
+
+        // Reemplaza la configuración global y reinicia la ventana de deep sleep.
+        if (current_config) config__free_unpacked(current_config, NULL);
+        current_config = new_config;
+        data_window_count = 0;
+
+        /* El ACK sale ANTES de suspender la task de envío. No es cosmético:
+         * vTaskSendData hace free(packet.data) en cada vuelta, así que
+         * vTaskSuspend() puede congelarla con el lock del heap tomado — el
+         * mismo deadlock que tenían las productoras. Si eso pasa, el drenado de
+         * pause_collect_tasks() (que llama free) y el malloc() del ACK se
+         * cuelgan ahí mismo. Mandando el ACK primero, al menos el ACK sale.
+         *
+         * El ACK va por `proto->id` y no por el protocolo de la config nueva:
+         * el transporte abierto sigue siendo este, y es lo último que se manda
+         * antes de cerrarlo.
+         *
+         * No cierra el agujero del todo: después del suspend siguen el cierre
+         * del transporte y todo app_main, que reservan memoria. El cierre real
+         * es meter esta task y la de envío en la compuerta cooperativa, que
+         * ahora es un cambio en un solo lugar. */
+        send_config_ack(proto->id, current_config, true);
+
+        if (send_task[proto->id]) {
+            ESP_LOGI(proto->rsp_tag, "Se suspende la task de envío");
+            vTaskSuspend(send_task[proto->id]);
+        }
+
+        /* Detiene las productoras y vacía la cola: los paquetes del protocolo
+         * anterior no deben colarse al siguiente. */
+        ESP_LOGI(proto->rsp_tag, "Se detienen tasks de sensores");
+        pause_collect_tasks();
+
+        // Le da tiempo al ACK de llegar antes de cerrar. BLE no cierra: 0.
+        if (proto->ack_drain_ms > 0) {
+            vTaskDelay(pdMS_TO_TICKS(proto->ack_drain_ms));
+        }
+
+        proto->close();
+
+        // Señala a app_main que debe cambiar de protocolo.
+        if (xSemaphoreGive(semaphore)) {
+            ESP_LOGI(proto->rsp_tag, "Libera semáforo para cambio de protocolo");
+        }
+
+        /* Auto-suspensión hasta que este protocolo vuelva a activarse. Es
+         * segura, a diferencia de suspender a otra task: la víctima es esta
+         * misma, en un punto donde no tiene nada reservado ni tomado. */
+        ESP_LOGI(proto->rsp_tag, "Suspendiendo task de respuesta");
+        vTaskSuspend(NULL);
     }
 }
 
 
-// BLE response
-void vTaskGetResponseBLE(void *pvParameters) {
-    packet_t pkt;
-
-    for (;;) {
-        if (xQueueReceive(xQueueConfigBle, &pkt, portMAX_DELAY) != pdTRUE) {
-            continue;
-        }
-
-        if (pkt.data == NULL || pkt.size == 0) {
-            continue;
-        }
-
-        // Desempaqueta la configuración recibida
-        Config *new_config = config__unpack(NULL, pkt.size, pkt.data);
-        free(pkt.data);
-        if (new_config == NULL) {
-            ESP_LOGW(TAG_GET_RSP_BLE, "Error al desempaquetar el mensaje protobuf de configuración");
-            continue;
-        }
-
-        ESP_LOGI(TAG_GET_RSP_BLE, "BLE: Se recibió información de configuración!");
-
-        if (current_config && new_config->config_version < current_config->config_version) {
-            ESP_LOGW(TAG_GET_RSP_BLE, "Config BLE antigua: %ld < %ld", (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack(PROTOCOL_BLE, new_config, false);
-            config__free_unpacked(new_config, NULL);
-            continue;
-        }
-
-        if (config_has_changed(current_config, new_config)) {
-            ESP_LOGI(TAG_GET_RSP_BLE, "Configuración cambiada!");
-
-            // Reemplaza la configuración global
-            if (current_config) config__free_unpacked(current_config, NULL);
-            current_config = new_config;
-            data_window_count = 0;
-
-            send_config_ack(PROTOCOL_BLE, current_config, true);
-
-            if (xHandleSendBLE) {
-                ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskSendBLE");
-                vTaskSuspend(xHandleSendBLE);
-            }
-            /* Detiene las productoras y vacía la cola: los paquetes del protocolo
-             * anterior no deben colarse al siguiente. */
-            ESP_LOGI(TAG_GET_RSP_BLE, "Se detienen tasks de sensores");
-            pause_collect_tasks();
-
-            // Señala a app_main que debe cambiar de protocolo
-            if (xSemaphoreGive(semaphore)) {
-                ESP_LOGI(TAG_GET_RSP_BLE, "BLE libera semáforo para cambio de protocolo");
-            }
-
-            ESP_LOGI(TAG_GET_RSP_BLE, "Suspendiendo vTaskGetResponseBLE");
-            vTaskSuspend(NULL);
-        } 
-        else {
-            ESP_LOGI(TAG_GET_RSP_BLE, "La configuración recibida es la misma");
-            send_config_ack(PROTOCOL_BLE, new_config, true);
-            config__free_unpacked(new_config, NULL);
-        }
-    }
-}
 
 
-// UDP: Pide configuración a la Raspberry por UDP. Hay que liberar el puntero Config *!!
-void vTaskGetResponseUDP(void *pvParameters) {
-
-    size_t len = 256;
-    uint8_t buffer[len];
-
-    for (;;) {
-        // Se queda bloqueado en esta llamada (y cede la cpu) hasta recibir algo
-        size_t len_recv = nebulaedge_udp_receive(buffer, len);
-
-        if (len_recv == 0) {
-            // sin datos/timeout
-            vTaskDelay(1);
-            continue;
-        }
-
-        Config *new_config = config__unpack(NULL, len_recv, buffer);
-        if (!new_config) {
-            ESP_LOGI(TAG_GET_RSP_UDP, "error al desempaquetar");
-            continue;
-        }
-
-        // Compara configuración actual versus recibida
-        if (current_config && new_config->config_version < current_config->config_version) {
-            ESP_LOGW(TAG_GET_RSP_UDP, "Config UDP antigua: %ld < %ld", (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack(PROTOCOL_UDP, new_config, false);
-            config__free_unpacked(new_config, NULL);
-            continue;
-        }
-
-        if (config_has_changed(current_config, new_config)) {
-            ESP_LOGI(TAG_GET_RSP_UDP, "configuración cambiada!");
-
-            if (current_config) config__free_unpacked(current_config, NULL);
-            current_config = new_config;
-            data_window_count = 0;
-
-            /* El ACK sale ANTES de suspender la task de envío, igual que en BLE.
-             * No es cosmético: vTaskSendXXX hace free(packet.data) en cada
-             * vuelta, así que vTaskSuspend() puede congelarla con el lock del
-             * heap tomado — el mismo deadlock que tenían las productoras. Si eso
-             * pasa, el drenado de pause_collect_tasks() (que llama free) y el
-             * malloc() de send_config_ack() se cuelgan ahí mismo. Mandando el
-             * ACK primero, al menos el ACK siempre sale.
-             *
-             * No cierra el agujero del todo: después del suspend siguen el
-             * cierre del transporte y todo app_main, que reservan memoria. El
-             * cierre real es meter estas tasks en la compuerta cooperativa. */
-            send_config_ack(PROTOCOL_UDP, current_config, true);
-
-            if (xHandleSendUDP) {
-                ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo vTaskSendUDP");
-                vTaskSuspend(xHandleSendUDP);
-            }
-
-            /* Detiene las productoras y vacía la cola: los paquetes del protocolo
-             * anterior no deben colarse al siguiente. */
-            ESP_LOGI(TAG_GET_RSP_UDP, "Se detienen tasks de sensores");
-            pause_collect_tasks();
-
-            // Le da tiempo al ACK de llegar antes de cerrar el socket.
-            vTaskDelay(pdMS_TO_TICKS(ACK_DRAIN_MS));
-
-            // Se cierra el socket UDP
-            nebulaedge_udp_close_socket();
-
-            // Libera el semáforo para que main elimine las tareas UDP y cambie de protocolo
-            if (xSemaphoreGive(semaphore)) {
-                ESP_LOGI(TAG_GET_RSP_UDP, "UDP libera semáforo para cambio de protocolo");
-            }
-
-            ESP_LOGI(TAG_GET_RSP_UDP, "Suspendiendo vTaskGetResponseUDP");
-            vTaskSuspend(NULL);
-        } 
-        else {
-            ESP_LOGI(TAG_GET_RSP_UDP, "UDP: Config igual, se descarta");
-            send_config_ack(PROTOCOL_UDP, new_config, true);
-            config__free_unpacked(new_config, NULL);
-        }
-    }
-}
 
 
-// TCP: Pide configuración a la Raspberry por TCP. Hay que liberar el puntero Config *!!
-void vTaskGetResponseTCP(void *pvParameters) {
-
-    size_t len = 256;
-    uint8_t buffer[len];
-
-    for (;;) {
-
-        // Espera recepción de datos de configuración
-        size_t len_recv = tcp_receive(buffer, len);
-        if (len_recv == 0) {
-            // sin datos/timeout
-            vTaskDelay(1);
-            continue;
-        }
-
-        Config *new_config = config__unpack(NULL, len_recv, buffer);   // Esta memoria hay que liberarla!
-        
-        if (!new_config) {
-            ESP_LOGI(TAG_GET_RSP_TCP, "TCP: error al desempaquetar");
-            continue;
-        }
-
-        if (current_config && new_config->config_version < current_config->config_version) {
-            ESP_LOGW(TAG_GET_RSP_TCP, "Config TCP antigua: %ld < %ld", (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack(PROTOCOL_TCP, new_config, false);
-            config__free_unpacked(new_config, NULL);
-            continue;
-        }
-
-        if (config_has_changed(current_config, new_config)) {
-            ESP_LOGI(TAG_GET_RSP_TCP, "TCP: Configuración cambiada!");
-
-            // Libera la configuración anterior
-            if (current_config) config__free_unpacked(current_config, NULL);
-
-            // Actualiza la configuración global
-            current_config = new_config;
-            data_window_count = 0;
-
-            /* El ACK sale ANTES de suspender la task de envío, igual que en BLE.
-             * No es cosmético: vTaskSendXXX hace free(packet.data) en cada
-             * vuelta, así que vTaskSuspend() puede congelarla con el lock del
-             * heap tomado — el mismo deadlock que tenían las productoras. Si eso
-             * pasa, el drenado de pause_collect_tasks() (que llama free) y el
-             * malloc() de send_config_ack() se cuelgan ahí mismo. Mandando el
-             * ACK primero, al menos el ACK siempre sale.
-             *
-             * No cierra el agujero del todo: después del suspend siguen el
-             * cierre del transporte y todo app_main, que reservan memoria. El
-             * cierre real es meter estas tasks en la compuerta cooperativa. */
-            send_config_ack(PROTOCOL_TCP, current_config, true);
-
-            if (xHandleSendTCP) {
-                ESP_LOGI(TAG_GET_RSP_TCP, "Suspendiendo vTaskSendTCP");
-                vTaskSuspend(xHandleSendTCP);
-            }
-
-            /* Detiene las productoras y vacía la cola: los paquetes del protocolo
-             * anterior no deben colarse al siguiente. */
-            ESP_LOGI(TAG_GET_RSP_TCP, "Se detienen tasks de sensores");
-            pause_collect_tasks();
-
-            // Le da tiempo al ACK de llegar antes de cerrar el socket.
-            vTaskDelay(pdMS_TO_TICKS(ACK_DRAIN_MS));
-
-            // Cierra el socket
-            tcp_close_socket();
-
-            // Se libera semáforo para pasar a otro protocolo
-            if (xSemaphoreGive(semaphore)) {
-                ESP_LOGI(TAG_GET_RSP_TCP, "TCP libera semáforo para cambio de protocolo");
-            }
-
-            vTaskSuspend(NULL);
-        }
-        else {
-            ESP_LOGI(TAG_GET_RSP_TCP, "TCP: Config igual, se descarta");
-            send_config_ack(PROTOCOL_TCP, new_config, true);
-            config__free_unpacked(new_config, NULL);
-        }    
-    }
-}
 
 void app_main() {
 
@@ -1263,14 +1068,14 @@ void app_main() {
                     xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
                 if (!xHandleCollectEnvironmental)
                     xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
-                if (!xHandleSendMQTT)
-                    xTaskCreate(vTaskSendData, TAG_SEND_MQTT, 4096, (void *)&PROTOCOLS[PROTOCOL_MQTT], 2, &xHandleSendMQTT);
-                if (!xHandleGetResponseMQTT) 
-                    xTaskCreate(vTaskGetResponseMQTT, TAG_GET_RSP_MQTT, 4096, NULL, 3, &xHandleGetResponseMQTT);
+                if (!send_task[PROTOCOL_MQTT])
+                    xTaskCreate(vTaskSendData, TAG_SEND_MQTT, 4096, (void *)&PROTOCOLS[PROTOCOL_MQTT], 2, &send_task[PROTOCOL_MQTT]);
+                if (!response_task[PROTOCOL_MQTT]) 
+                    xTaskCreate(vTaskGetResponse, TAG_GET_RSP_MQTT, 4096, (void *)&PROTOCOLS[PROTOCOL_MQTT], 3, &response_task[PROTOCOL_MQTT]);
 
                 resume_collect_tasks();
-                vTaskResume(xHandleSendMQTT);
-                vTaskResume(xHandleGetResponseMQTT);
+                vTaskResume(send_task[PROTOCOL_MQTT]);
+                vTaskResume(response_task[PROTOCOL_MQTT]);
 
                 // Punto de bloqueo
                 if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
@@ -1311,14 +1116,14 @@ void app_main() {
                     xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
                 if (!xHandleCollectEnvironmental)
                     xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
-                if (!xHandleSendUDP)
-                    xTaskCreate(vTaskSendData, TAG_SEND_UDP, 4096, (void *)&PROTOCOLS[PROTOCOL_UDP], 2, &xHandleSendUDP);
-                if (!xHandleGetResponseUDP) 
-                    xTaskCreate(vTaskGetResponseUDP, TAG_GET_RSP_UDP, 4096, NULL, 3, &xHandleGetResponseUDP);
+                if (!send_task[PROTOCOL_UDP])
+                    xTaskCreate(vTaskSendData, TAG_SEND_UDP, 4096, (void *)&PROTOCOLS[PROTOCOL_UDP], 2, &send_task[PROTOCOL_UDP]);
+                if (!response_task[PROTOCOL_UDP]) 
+                    xTaskCreate(vTaskGetResponse, TAG_GET_RSP_UDP, 4096, (void *)&PROTOCOLS[PROTOCOL_UDP], 3, &response_task[PROTOCOL_UDP]);
 
                 resume_collect_tasks();
-                vTaskResume(xHandleSendUDP);
-                vTaskResume(xHandleGetResponseUDP);
+                vTaskResume(send_task[PROTOCOL_UDP]);
+                vTaskResume(response_task[PROTOCOL_UDP]);
 
                 // Punto de bloqueo
                 if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
@@ -1368,14 +1173,14 @@ void app_main() {
                     xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
                 if (!xHandleCollectEnvironmental)
                     xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
-                if (!xHandleSendTCP)
-                    xTaskCreate(vTaskSendData, TAG_SEND_TCP, 4096, (void *)&PROTOCOLS[PROTOCOL_TCP], 2, &xHandleSendTCP);
-                if (!xHandleGetResponseTCP) 
-                    xTaskCreate(vTaskGetResponseTCP, TAG_GET_RSP_TCP, 4096, NULL, 3, &xHandleGetResponseTCP);
+                if (!send_task[PROTOCOL_TCP])
+                    xTaskCreate(vTaskSendData, TAG_SEND_TCP, 4096, (void *)&PROTOCOLS[PROTOCOL_TCP], 2, &send_task[PROTOCOL_TCP]);
+                if (!response_task[PROTOCOL_TCP]) 
+                    xTaskCreate(vTaskGetResponse, TAG_GET_RSP_TCP, 4096, (void *)&PROTOCOLS[PROTOCOL_TCP], 3, &response_task[PROTOCOL_TCP]);
 
                 resume_collect_tasks();
-                vTaskResume(xHandleSendTCP);
-                vTaskResume(xHandleGetResponseTCP);
+                vTaskResume(send_task[PROTOCOL_TCP]);
+                vTaskResume(response_task[PROTOCOL_TCP]);
 
                 // Punto de bloqueo
                 if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
@@ -1408,14 +1213,14 @@ void app_main() {
                     xTaskCreate(vTaskCollectInertial, TAG_COLLECT_INERTIAL, 4096, NULL, 2, &xHandleCollectInertial);
                 if (!xHandleCollectEnvironmental)
                     xTaskCreate(vTaskCollectEnvironmental, TAG_COLLECT_ENV, 4096, NULL, 2, &xHandleCollectEnvironmental);
-                if (!xHandleSendBLE)
-                    xTaskCreate(vTaskSendData, TAG_SEND_BLE, 4096, (void *)&PROTOCOLS[PROTOCOL_BLE], 2, &xHandleSendBLE);
-                if (!xHandleGetResponseBLE) 
-                    xTaskCreate(vTaskGetResponseBLE, TAG_GET_RSP_BLE, 4096, NULL, 3, &xHandleGetResponseBLE);
+                if (!send_task[PROTOCOL_BLE])
+                    xTaskCreate(vTaskSendData, TAG_SEND_BLE, 4096, (void *)&PROTOCOLS[PROTOCOL_BLE], 2, &send_task[PROTOCOL_BLE]);
+                if (!response_task[PROTOCOL_BLE]) 
+                    xTaskCreate(vTaskGetResponse, TAG_GET_RSP_BLE, 4096, (void *)&PROTOCOLS[PROTOCOL_BLE], 3, &response_task[PROTOCOL_BLE]);
 
                 resume_collect_tasks();
-                vTaskResume(xHandleSendBLE);
-                vTaskResume(xHandleGetResponseBLE);
+                vTaskResume(send_task[PROTOCOL_BLE]);
+                vTaskResume(response_task[PROTOCOL_BLE]);
 
                 // Punto de bloqueo
                 if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
