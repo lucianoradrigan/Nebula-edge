@@ -116,14 +116,15 @@ static void drain_and_free_data_queue(void) {
     }
 }
 
-/* COMPUERTA DE LAS TASKS DE SENSORES
+/* COMPUERTA DEL CAMINO DE DATOS
  *
- * Antes las dos productoras se detenían con vTaskSuspend() desde afuera. Eso
- * congela a la víctima en la instrucción exacta en que iba: si justo estaba
- * dentro de malloc() o free(), se queda con el lock del heap tomado y la
- * siguiente reserva de CUALQUIER task del sistema se bloquea para siempre.
- * Las dos tasks hacen malloc() en cada paquete, así que la ventana existía de
- * verdad — es el cuelgue que se veía.
+ * Las cuatro tasks que tocan telemetría —las dos productoras, la de envío y la
+ * de respuesta— se detenían con vTaskSuspend() desde otra task. Eso congela a
+ * la víctima en la instrucción exacta en que iba: si justo estaba dentro de
+ * malloc() o free(), queda con el lock del heap tomado y la siguiente reserva
+ * de CUALQUIER task del sistema se bloquea para siempre. Las cuatro reservan o
+ * liberan memoria en cada vuelta, así que la ventana existía de verdad — es el
+ * cuelgue que se veía.
  *
  * El mutex I2C no tapaba ese hueco: solo cubría las transacciones del bus, no
  * el heap. Y para lo que decía proteger tampoco hacía falta, porque el driver
@@ -131,16 +132,30 @@ static void drain_and_free_data_queue(void) {
  * interno (bus_lock_mux).
  *
  * La solución es no interrumpirlas: se les PIDE que paren y ellas se detienen
- * solas en un punto donde no tienen nada tomado (el tope de su bucle). */
-#define GATE_RUN            (1 << 0)  // permiso para producir
+ * solas en un punto donde no tienen nada tomado (el tope de su bucle). La
+ * única suspensión que queda en el archivo es vTaskSuspend(NULL), en la task
+ * de respuesta: suspenderse a sí misma sí es seguro, porque ocurre en un punto
+ * que la propia task eligió. */
+#define GATE_RUN            (1 << 0)  // permiso para correr
 #define GATE_PAUSE_REQ      (1 << 1)  // hay una pausa pedida (despierta los sleeps)
 #define GATE_INERTIAL_IDLE  (1 << 2)  // la task Inertial ya está detenida
 #define GATE_ENV_IDLE       (1 << 3)  // la task Environmental ya está detenida
+#define GATE_SEND_IDLE      (1 << 4)  // la task de envío ya está detenida
+#define GATE_RSP_IDLE       (1 << 5)  // la task de respuesta ya está detenida
 
 /* Cuánto se espera a que lleguen a la compuerta. Una lectura de sensor a medio
  * hacer puede tardar lo suyo si el bus está lento; pasado esto se sigue igual,
  * porque ya nadie queda suspendido y lo peor que pasa es un paquete de más. */
 #define GATE_PAUSE_TIMEOUT_MS 5000
+
+/* Cada cuánto vuelven al punto seguro las tasks de envío y respuesta.
+ *
+ * Las dos se bloqueaban para siempre esperando (una la cola de datos, la otra
+ * el transporte). Con un bloqueo infinito no hay forma de pedirles que paren:
+ * por eso ahora esperan con timeout y, si no llegó nada, vuelven al tope del
+ * bucle y miran la compuerta. El costo es despertar unas pocas veces por
+ * segundo sin hacer nada; a cambio, nadie tiene que congelarlas desde afuera. */
+#define TASK_POLL_MS 250
 
 static EventGroupHandle_t sensor_gate = NULL;
 
@@ -174,18 +189,23 @@ static void sensor_gate_sleep(uint32_t ms) {
     xEventGroupWaitBits(sensor_gate, GATE_PAUSE_REQ, pdFALSE, pdTRUE, ticks);
 }
 
-/* Pide a las dos productoras que se detengan y espera a que lleguen al punto
- * seguro. Reemplaza al antiguo vTaskSuspend() sobre las productoras.
+/* Pide a las tasks del camino de datos que se detengan y espera a que lleguen
+ * al punto seguro. Reemplaza al antiguo vTaskSuspend() sobre ellas.
  *
- * El drenado de la cola se hace acá adentro, y dos veces. Antes estaba afuera
- * y solo una vez, ANTES de detener las tasks: cualquier paquete producido
- * entre el drenado y la detención se colaba al protocolo siguiente. Ahora el
- * segundo drenado, ya con las dos detenidas, cierra esa ventana.
+ * `expected` dice a CUÁLES esperar, porque el alcance no es el mismo siempre:
+ * al cambiar de protocolo hay que detener también la task de envío, pero al
+ * entrar en deep sleep esa misma task es la que está llamando acá y esperarla
+ * sería esperarse a sí misma. Los envoltorios de abajo arman cada caso.
  *
- * El primero tampoco sobra: si la cola está llena y la task consumidora ya fue
- * suspendida, la productora está bloqueada en xQueueSend(portMAX_DELAY) y
- * nunca llegaría a la compuerta. Vaciar la cola es justo lo que la desbloquea. */
-static void pause_collect_tasks(void) {
+ * El drenado de la cola se hace adentro, y dos veces. Antes estaba afuera y
+ * solo una vez, ANTES de detener las tasks: cualquier paquete producido entre
+ * el drenado y la detención se colaba al protocolo siguiente. El segundo
+ * drenado, ya con todas detenidas, cierra esa ventana.
+ *
+ * El primero tampoco sobra: si la cola está llena y la consumidora ya se
+ * detuvo, la productora está bloqueada en xQueueSend(portMAX_DELAY) y nunca
+ * llegaría a la compuerta. Vaciar la cola es justo lo que la desbloquea. */
+static void pause_data_tasks(EventBits_t expected) {
     if (sensor_gate == NULL) {
         return;
     }
@@ -195,11 +215,7 @@ static void pause_collect_tasks(void) {
 
     drain_and_free_data_queue();
 
-    EventBits_t expected = 0;
-    if (xHandleCollectInertial)      expected |= GATE_INERTIAL_IDLE;
-    if (xHandleCollectEnvironmental) expected |= GATE_ENV_IDLE;
-
-    // Todavía no existen: no hay nada a qué esperar.
+    // Todavía no existe ninguna: no hay nada a qué esperar.
     if (expected == 0) {
         return;
     }
@@ -207,15 +223,40 @@ static void pause_collect_tasks(void) {
     EventBits_t got = xEventGroupWaitBits(sensor_gate, expected, pdFALSE, pdTRUE,
                                           pdMS_TO_TICKS(GATE_PAUSE_TIMEOUT_MS));
     if ((got & expected) == expected) {
-        ESP_LOGI(TAG, "Tasks de sensores detenidas en punto seguro");
+        ESP_LOGI(TAG, "Tasks detenidas en punto seguro (bits=0x%02X)", (unsigned)expected);
     }
     else {
-        ESP_LOGW(TAG, "Timeout esperando que las tasks de sensores se detengan (bits=0x%02X)",
-                 (unsigned)got);
+        ESP_LOGW(TAG, "Timeout esperando que las tasks se detengan (esperado=0x%02X, got=0x%02X)",
+                 (unsigned)expected, (unsigned)got);
     }
 
     // Segundo drenado: lo que alcanzaron a encolar antes de detenerse.
     drain_and_free_data_queue();
+}
+
+/* Bits de las dos productoras, que hay que detener en todos los casos. */
+static EventBits_t collect_idle_bits(void) {
+    EventBits_t bits = 0;
+    if (xHandleCollectInertial)      bits |= GATE_INERTIAL_IDLE;
+    if (xHandleCollectEnvironmental) bits |= GATE_ENV_IDLE;
+    return bits;
+}
+
+/* Cambio de protocolo: lo llama la task de respuesta, así que detiene las
+ * productoras y la task de envío (a sí misma no: se auto-suspende después, que
+ * es seguro). */
+static void pause_for_protocol_change(protocol_t id) {
+    EventBits_t expected = collect_idle_bits();
+    if (send_task[id]) expected |= GATE_SEND_IDLE;
+    pause_data_tasks(expected);
+}
+
+/* Deep sleep: lo llama la task de ENVÍO, así que detiene las productoras y la
+ * task de respuesta. A la de envío no se la espera — es la que está acá. */
+static void pause_for_deep_sleep(protocol_t id) {
+    EventBits_t expected = collect_idle_bits();
+    if (response_task[id]) expected |= GATE_RSP_IDLE;
+    pause_data_tasks(expected);
 }
 
 /* Devuelve el permiso de producir. Limpia también los bits de "detenida" para
@@ -225,7 +266,8 @@ static void resume_collect_tasks(void) {
         return;
     }
 
-    xEventGroupClearBits(sensor_gate, GATE_PAUSE_REQ | GATE_INERTIAL_IDLE | GATE_ENV_IDLE);
+    xEventGroupClearBits(sensor_gate, GATE_PAUSE_REQ | GATE_INERTIAL_IDLE |
+                                  GATE_ENV_IDLE | GATE_SEND_IDLE | GATE_RSP_IDLE);
     xEventGroupSetBits(sensor_gate, GATE_RUN);
 }
 
@@ -319,7 +361,9 @@ static void mqtt_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
 /* El componente MQTT desempaqueta la config y deja el Config* en la cola. */
 static Config *mqtt_recv_config(void) {
     Config *cfg = NULL;
-    xQueueReceive(xQueueConfig, &cfg, portMAX_DELAY);
+    if (xQueueReceive(xQueueConfig, &cfg, pdMS_TO_TICKS(TASK_POLL_MS)) != pdTRUE) {
+        return NULL;    // nada todavía; la task vuelve a mirar la compuerta
+    }
     return cfg;
 }
 
@@ -341,7 +385,7 @@ static Config *udp_recv_config(void) {
     size_t len_recv = nebulaedge_udp_receive(buffer, sizeof(buffer));
     if (len_recv == 0) {
         vTaskDelay(1);
-        return NULL;
+        return NULL;    // timeout del socket; la task vuelve a mirar la compuerta
     }
 
     Config *cfg = config__unpack(NULL, len_recv, buffer);
@@ -368,7 +412,7 @@ static Config *tcp_recv_config(void) {
     size_t len_recv = tcp_receive(buffer, sizeof(buffer));
     if (len_recv == 0) {
         vTaskDelay(1);
-        return NULL;
+        return NULL;    // timeout del socket; la task vuelve a mirar la compuerta
     }
 
     Config *cfg = config__unpack(NULL, len_recv, buffer);
@@ -401,8 +445,8 @@ static void ble_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
 static Config *ble_recv_config(void) {
     packet_t pkt;
 
-    if (xQueueReceive(xQueueConfigBle, &pkt, portMAX_DELAY) != pdTRUE) {
-        return NULL;
+    if (xQueueReceive(xQueueConfigBle, &pkt, pdMS_TO_TICKS(TASK_POLL_MS)) != pdTRUE) {
+        return NULL;    // nada todavía; la task vuelve a mirar la compuerta
     }
 
     if (pkt.data == NULL || pkt.size == 0) {
@@ -495,17 +539,15 @@ static void deep_sleep_if_needed(void) {
     // Acá se tiene condición de ventana completa, ya se puede entrar en deep sleep
     uint64_t sleep_us = (uint64_t)current_config->sleep_time_s * 1000000ULL;
     
-    // Detiene recogida de datos antes de dormir
-    ESP_LOGI(TAG, "Deteniendo tasks de sensores");
-    pause_collect_tasks();
-    
     const protocol_ops_t *proto = &PROTOCOLS[current_config->protocol_conf];
 
-    /* Suspende la task de respuesta: el aviso de deep sleep cierra el
-     * transporte, y no tiene sentido que siga esperando config sobre él. */
-    if (response_task[proto->id]) {
-        vTaskSuspend(response_task[proto->id]);
-    }
+    /* Detiene las productoras y la task de respuesta antes de dormir. La de
+     * respuesta hay que pararla porque el aviso de deep sleep cierra el
+     * transporte y no tiene sentido que siga esperando config sobre él.
+     *
+     * A la task de ENVÍO no se la espera: es la que está ejecutando esto. */
+    ESP_LOGI(TAG, "Deteniendo tasks antes de dormir");
+    pause_for_deep_sleep(proto->id);
 
     /* Avisa al server que se va a dormir, antes de cerrar. No se espera
      * respuesta, así que se repite lo que diga la tabla: tres veces en los de
@@ -756,8 +798,11 @@ void vTaskSendData(void *pvParameters) {
     packet_t packet;
 
     for (;;) {
-        // Con portMAX_DELAY solo retorna cuando hay un paquete.
-        if (xQueueReceive(xQueueData, &packet, portMAX_DELAY) != pdTRUE) {
+        // Punto seguro: acá no hay memoria reservada ni transporte a medias.
+        sensor_gate_wait(GATE_SEND_IDLE);
+
+        // Con timeout, para poder volver acá arriba si se pide una pausa.
+        if (xQueueReceive(xQueueData, &packet, pdMS_TO_TICKS(TASK_POLL_MS)) != pdTRUE) {
             continue;
         }
 
@@ -801,8 +846,11 @@ void vTaskGetResponse(void *pvParameters) {
     const protocol_ops_t *proto = pvParameters;
 
     for (;;) {
-        /* Bloquea hasta que llegue algo. Devuelve NULL si lo que llegó no era
-         * una config válida; cada protocolo ya logueó el motivo. */
+        // Punto seguro: acá no hay config a medio desempaquetar ni memoria viva.
+        sensor_gate_wait(GATE_RSP_IDLE);
+
+        /* Espera una config, con timeout. Devuelve NULL si no llegó nada o si
+         * lo que llegó no servía; cada protocolo ya logueó el motivo. */
         Config *new_config = proto->recv_config();
         if (!new_config) {
             continue;
@@ -833,32 +881,15 @@ void vTaskGetResponse(void *pvParameters) {
         current_config = new_config;
         data_window_count = 0;
 
-        /* El ACK sale ANTES de suspender la task de envío. No es cosmético:
-         * vTaskSendData hace free(packet.data) en cada vuelta, así que
-         * vTaskSuspend() puede congelarla con el lock del heap tomado — el
-         * mismo deadlock que tenían las productoras. Si eso pasa, el drenado de
-         * pause_collect_tasks() (que llama free) y el malloc() del ACK se
-         * cuelgan ahí mismo. Mandando el ACK primero, al menos el ACK sale.
-         *
-         * El ACK va por `proto->id` y no por el protocolo de la config nueva:
-         * el transporte abierto sigue siendo este, y es lo último que se manda
-         * antes de cerrarlo.
-         *
-         * No cierra el agujero del todo: después del suspend siguen el cierre
-         * del transporte y todo app_main, que reservan memoria. El cierre real
-         * es meter esta task y la de envío en la compuerta cooperativa, que
-         * ahora es un cambio en un solo lugar. */
+        /* El ACK sale ANTES de detener nada, y por `proto->id` en vez de por el
+         * protocolo de la config nueva: el transporte abierto sigue siendo
+         * este, y el ACK es lo último que se manda antes de cerrarlo. */
         send_config_ack(proto->id, current_config, true);
 
-        if (send_task[proto->id]) {
-            ESP_LOGI(proto->rsp_tag, "Se suspende la task de envío");
-            vTaskSuspend(send_task[proto->id]);
-        }
-
-        /* Detiene las productoras y vacía la cola: los paquetes del protocolo
-         * anterior no deben colarse al siguiente. */
-        ESP_LOGI(proto->rsp_tag, "Se detienen tasks de sensores");
-        pause_collect_tasks();
+        /* Detiene la task de envío y las productoras, y vacía la cola: los
+         * paquetes del protocolo anterior no deben colarse al siguiente. */
+        ESP_LOGI(proto->rsp_tag, "Se detienen las tasks del camino de datos");
+        pause_for_protocol_change(proto->id);
 
         // Le da tiempo al ACK de llegar antes de cerrar. BLE no cierra: 0.
         if (proto->ack_drain_ms > 0) {
@@ -905,8 +936,11 @@ static void start_protocol_tasks(const protocol_ops_t *proto) {
     if (!response_task[proto->id])
         xTaskCreate(vTaskGetResponse, proto->rsp_tag, 4096, (void *)proto, 3, &response_task[proto->id]);
 
+    /* resume_collect_tasks() devuelve el permiso a todas las que esperan en la
+     * compuerta: las dos productoras y la de envío. La de respuesta además se
+     * auto-suspende al salir de su protocolo, así que a esa hay que reanudarla
+     * de verdad — auto-suspenderse es seguro, es suspender a OTRA lo que no. */
     resume_collect_tasks();
-    vTaskResume(send_task[proto->id]);
     vTaskResume(response_task[proto->id]);
 }
 
