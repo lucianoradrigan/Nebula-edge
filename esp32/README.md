@@ -117,11 +117,11 @@ Componentes, por rol:
 | Rol | Componentes |
 |---|---|
 | Drivers de sensor | `bme688` (ambiental), `bmi270` (IMU), `bmm350` (magnetómetro) |
-| Buses y expansión | `nebulaedge_i2c`, `nebulaedge_spi`, `fxl6408` (expansor de I/O) |
+| Buses | `nebulaedge_i2c` (sensores), `nebulaedge_spi` (genérico, hoy sin uso) |
 | Protocolos de salida | `nebulaedge_mqtt`, `nebulaedge_udp`, `nebulaedge_tcp`, `nebulaedge_ble` |
 | Red | `nebulaedge_wifi` |
-| Datos | `nebulaedge_proto_schema` (schema.proto + generado), `nebulaedge_datacodec` |
-| Almacenamiento local | `nebulaedge_microsd` (montar/desmontar), `nebulaedge_sdstorage` (escritura de paquetes) |
+| Datos | `nebulaedge_proto_schema` (schema.proto + código generado) |
+| Almacenamiento local | `nebulaedge_microsd` (montar/desmontar), `nebulaedge_sdstorage` (escritura de paquetes). **Desactivado**: ver la nota de abajo. |
 | Definiciones compartidas | `nebulaedge_defs` |
 
 Notas:
@@ -130,10 +130,18 @@ Notas:
   configuración inicial (siempre), y además uno de los cuatro protocolos de
   telemetría (cuando `protocol_conf = 3`).
 - Los UUIDs del servicio GATT deben coincidir con los declarados en
-  [raspberry/server/ble.py](../raspberry/server/ble.py).
+  [raspberry/server/gatt_uuids.py](../raspberry/server/gatt_uuids.py).
 - `schema.proto` está duplicado a propósito entre firmware y servidor: son dos
   copias del mismo contrato y se editan juntas. Para regenerar el código C, ver
   [components/nebulaedge_proto_schema/README.md](components/nebulaedge_proto_schema/README.md).
+- **La persistencia en microSD está desactivada**: el `mount_sd()` de `app_main`
+  está comentado porque en la IM-V2 ocupa el GPIO 1 y falla. Las tasks de envío
+  siguen llamando a `data_to_sd()`, pero esa función corta en `is_sd_mounted()`
+  y no escribe nada. O sea que el firmware parece guardar respaldo local y no lo
+  hace.
+- Las funciones públicas de `nebulaedge_tcp` llevan prefijo del componente
+  (`nebulaedge_tcp_connect`) porque lwIP ya exporta un `tcp_connect` global y el
+  enlace falla con símbolo duplicado.
 - El almacenamiento en microSD está en desarrollo (ver limitaciones en el
   README de la raíz).
 

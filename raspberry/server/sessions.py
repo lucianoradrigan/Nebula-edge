@@ -42,7 +42,7 @@ from models import Timeouts, ConfigData, Log
 from codec import DataCodec
 from system import utc_epoch_now
 from config_resolver import ConfigResolver, ConfigDecision
-from router import PacketRouter, PacketOutcome
+from packet_router import PacketRouter, PacketOutcome
 from repository import DatabaseRepository
 from transport import (
     Transport, TransportClosed,

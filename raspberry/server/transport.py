@@ -7,7 +7,7 @@ UTILIDAD PRINCIPAL
 
         UdpTransport    socket sin conexión; escucha en udp_port
         TcpTransport    socket de escucha que acepta una conexión y la reabre
-        MqttTransport   cliente compartido del proceso (mqtt.py), colas por device
+        MqttTransport   cliente compartido del proceso (mqtt_client.py), colas por device
         BleTransport    GATT sobre bleak; notificaciones en vez de sockets
 
     Todo lo demás -timeouts, sondeo de la BD, comparación de versiones de
@@ -41,10 +41,10 @@ import time
 
 from bleak import BleakClient
 
-from ble import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
+from gatt_uuids import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
 from codec import DataCodec
 from models import ConfigData
-from mqtt import mqtt_start, mqtt_publish, get_data_queue, get_ack_queue
+from mqtt_client import mqtt_start, mqtt_publish, get_data_queue, get_ack_queue
 
 
 class TransportClosed(Exception):
@@ -356,11 +356,11 @@ class TcpTransport(Transport):
 
 
 class MqttTransport(Transport):
-    """MQTT: el cliente es del proceso (ver mqtt.py), no de esta sesión.
+    """MQTT: el cliente es del proceso (ver mqtt_client.py), no de esta sesión.
 
     Dos diferencias con UDP/TCP:
 
-    - No hay socket propio: mqtt.py mantiene UN cliente compartido y enruta
+    - No hay socket propio: mqtt_client.py mantiene UN cliente compartido y enruta
       por device a colas separadas (tópicos wildcard). `open()` solo se
       asegura de que el cliente esté arriba -mqtt_start() es idempotente- y
       toma las colas de este device. `close()` NO apaga el cliente: otros

@@ -17,7 +17,7 @@ from unittest import mock
 
 import sessions
 import transport
-from ble import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
+from gatt_uuids import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
 from codec import DataCodec
 from models import Timeouts
 from tests.fakes import (

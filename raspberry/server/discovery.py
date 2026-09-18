@@ -34,7 +34,7 @@ from bleak import BleakScanner, BleakClient
 from bleak.exc import BleakDBusError
 from bleak.backends.device import BLEDevice
 
-from ble import UUID_CHAR_A
+from gatt_uuids import UUID_CHAR_A
 from models import Timeouts, ConfigData, Log
 from codec import DataCodec
 from system import utc_epoch_now, BLEAdapterResolver
@@ -42,7 +42,7 @@ from repository import DatabaseRepository
 from protocol_dispatch import handle_protocol, PROTOCOL_BLE
 
 
-class MasterConnection:
+class DeviceDiscovery:
     """Gestiona el descubrimiento BLE y crea sesiones por dispositivo.
 
     Flujo general:

@@ -26,7 +26,7 @@ POR QUÉ DOS MENSAJES DE TELEMETRÍA Y NO UNO
     proyecto: todos lo importan a él, y así no hay ciclos.
 
 AJUSTAR LOS TIEMPOS
-    `Timeouts` se construye una vez en `MasterConnection` y baja por toda la
+    `Timeouts` se construye una vez en `DeviceDiscovery` y baja por toda la
     cadena hasta los transportes. Cambiar un valor acá afecta a los cuatro
     protocolos; para tocar solo uno, el lugar es su Transport (transport.py).
 """
@@ -38,7 +38,7 @@ from dataclasses import dataclass
 class Timeouts:
     """Todos los tiempos del servidor, centralizados.
 
-    Se arma una vez en MasterConnection y baja por descubrimiento -> despacho
+    Se arma una vez en DeviceDiscovery y baja por descubrimiento -> despacho
     -> sesión -> transporte. Los tests construyen uno con valores chicos para
     que la suite corra en segundos en vez de minutos.
     """

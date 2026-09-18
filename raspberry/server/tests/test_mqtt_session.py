@@ -1,6 +1,6 @@
 """Tests de integración de la sesión MQTT (ProtocolSession + MqttTransport).
 
-No se conecta a ningún broker: se reemplazan las funciones de mqtt.py que usa
+No se conecta a ningún broker: se reemplazan las funciones de mqtt_client.py que usa
 el transporte (mqtt_start / get_data_queue / get_ack_queue / mqtt_publish) por
 dobles, y el "device" se simula poniendo bytes en las colas.
 

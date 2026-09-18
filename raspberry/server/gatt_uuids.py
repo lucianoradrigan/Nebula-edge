@@ -19,7 +19,7 @@ DEBE CALZAR CON EL FIRMWARE
     hay que cambiarlos del otro.
 
 QUIÉN LOS USA
-    BleTransport (transport.py) y MasterConnection (discovery.py).
+    BleTransport (transport.py) y DeviceDiscovery (discovery.py).
 """
 
 # UUIDs en formato de 128 bits (base BLE)

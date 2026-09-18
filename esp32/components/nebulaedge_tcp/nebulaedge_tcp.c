@@ -151,7 +151,7 @@ void tcp_open_socket(tcp_params_t *params) {
 
 /* Realiza conexión TCP con el host preconfigurado. Se debe haber abierto
  * el socket previamente. Retorna el número de socket */
-int nebula_tcp_connect(void) {
+int nebulaedge_tcp_connect(void) {
     // Conecta al server
     ESP_LOGI(TAG, "socket is %d\n", sock);
 

@@ -24,7 +24,7 @@ POOL DE CONEXIONES
     clase se instancia "al pasar" en varios puntos del código.
 
 ACOPLAMIENTO
-    `PacketRouter` (router.py) usa esta clase por duck typing, vía el Protocol
+    `PacketRouter` (packet_router.py) usa esta clase por duck typing, vía el Protocol
     `TelemetryRepository`: nunca la importa. Por eso los tests le pueden pasar
     un repositorio en memoria sin levantar Postgres.
 """

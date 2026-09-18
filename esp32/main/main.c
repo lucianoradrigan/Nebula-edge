@@ -1034,8 +1034,16 @@ void app_main() {
         }
     } 
 
-    // Monta la tarjeta SD en /sdcard y abre archivos para guardar data en deep sleep
-    // AL MONTAR OCUPANDO GPIO 1 (im-v2) FALLA BRUTALMENTE
+    /* PERSISTENCIA EN SD: DESACTIVADA.
+     *
+     * El montaje está comentado porque en la IM-V2 ocupa el GPIO 1 y falla.
+     * Consecuencia que NO es evidente leyendo el resto del código: las tasks
+     * de envío siguen llamando a data_to_sd() cuando sleep_time_s > 0, pero
+     * esa función corta de inmediato en is_sd_mounted() y no escribe nada.
+     * O sea que el firmware parece guardar respaldo local y no lo hace.
+     *
+     * Para reactivarlo hay que resolver antes el conflicto de pines en
+     * nebulaedge_defs.h (PIN_NUM_CS). */
     // esp_err_t sd_ret = mount_sd();
     // if (sd_ret != ESP_OK) {
     //     ESP_LOGW(TAG, "SD no disponible, se continúa sin persistencia local: %s", esp_err_to_name(sd_ret));
@@ -1200,7 +1208,7 @@ void app_main() {
                 // Abre socket TCP
                 tcp_open_socket(&params);
                 // Conecta
-                if (nebula_tcp_connect() != 0) {
+                if (nebulaedge_tcp_connect() != 0) {
                     // Cierra el socket
                     tcp_close_socket();
                     ESP_LOGI(TAG, "Retrying TCP connection...");

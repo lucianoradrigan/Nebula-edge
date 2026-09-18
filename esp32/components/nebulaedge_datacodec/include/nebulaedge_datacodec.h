@@ -1,5 +1,0 @@
-#ifndef NEBULAEDGE_DATACODEC
-#define NEBULAEDGE_DATACODEC
-
-
-#endif
