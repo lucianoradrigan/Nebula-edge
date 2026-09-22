@@ -44,21 +44,30 @@ class TelemetryRepository(Protocol):
     de esto. Sirve para poder testear PacketRouter con un stub en memoria,
     sin tocar Postgres.
     """
-    async def insert_environmental_async(self, environmental: Environmental) -> None: ...
-    async def insert_inertial_async(self, inertial: Inertial) -> None: ...
+    async def insert_environmental_async(self, environmental: Environmental) -> bool: ...
+    async def insert_inertial_async(self, inertial: Inertial) -> bool: ...
 
 
 class PacketOutcome(Enum):
-    TELEMETRY = auto()    # se decodificó e insertó un Environmental/Inertial
+    TELEMETRY = auto()    # se decodificó un Environmental/Inertial válido
     DEEP_SLEEP = auto()   # paquete de aviso de deep sleep (tipo 0x04)
     IGNORED = auto()      # paquete vacío, corrupto o de tipo desconocido
 
 
 @dataclass(frozen=True)
 class RoutedPacket:
+    """Qué resultó de un paquete entrante.
+
+    `outcome` habla de lo que LLEGÓ; `persisted`, de si se pudo guardar. Antes
+    eran lo mismo: TELEMETRY significaba "se decodificó e insertó", pero los
+    insert se tragaban cualquier error de base, así que decía "insertado" sin
+    que nadie lo hubiera verificado. Separarlos deja a la sesión saber que el
+    device sigue vivo aunque la base esté caída.
+    """
     outcome: PacketOutcome
     data: Environmental | Inertial | None = None
     data_type: int | None = None
+    persisted: bool = True
 
 
 class PacketRouter:
@@ -85,11 +94,15 @@ class PacketRouter:
 
         if data_type == self.codec.TYPE_ENVIRONMENTAL:
             print(f"{prefix}Paquete Environmental recibido de {device_id}")
-            await self.database_repo.insert_environmental_async(data)
+            persisted = await self.database_repo.insert_environmental_async(data)
         elif data_type == self.codec.TYPE_INERTIAL:
             print(f"{prefix}Paquete Inertial recibido de {device_id}")
-            await self.database_repo.insert_inertial_async(data)
+            persisted = await self.database_repo.insert_inertial_async(data)
         else:
             return RoutedPacket(PacketOutcome.IGNORED)
 
-        return RoutedPacket(PacketOutcome.TELEMETRY, data=data, data_type=data_type)
+        if not persisted:
+            print(f"{prefix}AVISO: la telemetría de {device_id} NO se guardó en la base")
+
+        return RoutedPacket(PacketOutcome.TELEMETRY, data=data,
+                            data_type=data_type, persisted=persisted)

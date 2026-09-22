@@ -126,14 +126,21 @@ class FakeRepo:
         return make_config(self.db_version, udp_port=self.udp_port,
                            tcp_port=self.tcp_port, device_id=device_id)
 
+    # Devuelven True como el repositorio real: "la fila quedó guardada".
+    # `insert_ok = False` simula una base caída sin tener que tener una.
+    insert_ok = True
+
     async def insert_environmental_async(self, d):
         self.environmental.append(d)
+        return self.insert_ok
 
     async def insert_inertial_async(self, d):
         self.inertial.append(d)
+        return self.insert_ok
 
     async def insert_log_async(self, log):
         self.logs.append(log)
+        return self.insert_ok
 
 
 class FakeBLEDevice:

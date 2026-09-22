@@ -150,8 +150,15 @@ class DatabaseRepository:
                 else:
                     return None
 
-    def insert_environmental(self, environmental: Environmental):
-        """Inserta telemetría ambiental (BME688) en la BD."""
+    def insert_environmental(self, environmental: Environmental) -> bool:
+        """Inserta telemetría ambiental (BME688). True si la fila quedó guardada.
+
+        No propaga: un fallo de base no debe cortar la sesión con un device que
+        sigue vivo y mandando. Pero sí lo REPORTA, que es lo que faltaba: antes
+        se tragaba cualquier excepción y PacketRouter informaba TELEMETRY -que
+        significa "insertado"- igual.
+        """
+        _ctx = "environmental"
         try:
             with self._connection() as db:
                 with db.cursor() as cursor:
@@ -170,13 +177,22 @@ class DatabaseRepository:
                         self._int_to_db_datetime(environmental.time_client)
                     ))
                     db.commit()
-        except AttributeError:
-            return
+            return True
+        except AttributeError as e:
+            # Un campo que no existe en la dataclass es un bug nuestro, no un
+            # fallo de base. Antes se hacía `return` en silencio y el error
+            # quedaba invisible para siempre.
+            print(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
+            return False
         except Exception as e:
-            print(e)
+            print(f"ERROR de base insertando {_ctx}: {e}")
+            return False
 
-    def insert_inertial(self, inertial: "Inertial"):
-        """Inserta telemetría inercial (BMI270 + BMM350) en la BD."""
+    def insert_inertial(self, inertial: "Inertial") -> bool:
+        """Inserta telemetría inercial. True si la fila quedó guardada. Ver
+        insert_environmental para por qué no propaga pero sí reporta.
+        """
+        _ctx = "inertial"
         try:
             with self._connection() as db:
                 with db.cursor() as cursor:
@@ -202,13 +218,20 @@ class DatabaseRepository:
                         self._int_to_db_datetime(inertial.time_client),
                     ))
                     db.commit()
-        except AttributeError:
-            return
+            return True
+        except AttributeError as e:
+            # Un campo que no existe en la dataclass es un bug nuestro, no un
+            # fallo de base. Antes se hacía `return` en silencio y el error
+            # quedaba invisible para siempre.
+            print(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
+            return False
         except Exception as e:
-            print(e)
+            print(f"ERROR de base insertando {_ctx}: {e}")
+            return False
 
-    def insert_log(self, log: "Log"):
-        """Inserta un evento de log en la BD."""
+    def insert_log(self, log: "Log") -> bool:
+        """Inserta un evento de log. True si la fila quedó guardada."""
+        _ctx = "log"
         try:
             with self._connection() as db:
                 with db.cursor() as cursor:
@@ -226,10 +249,16 @@ class DatabaseRepository:
                         self._int_to_db_datetime(log.time_server),
                     ))
                     db.commit()
-        except AttributeError:
-            return
+            return True
+        except AttributeError as e:
+            # Un campo que no existe en la dataclass es un bug nuestro, no un
+            # fallo de base. Antes se hacía `return` en silencio y el error
+            # quedaba invisible para siempre.
+            print(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
+            return False
         except Exception as e:
-            print(e)
+            print(f"ERROR de base insertando {_ctx}: {e}")
+            return False
 
     # psycopg2 es sincrónico/bloqueante: cada método de arriba abre su propia
     # conexión y espera la red. Llamado directo desde una corutina, congela
@@ -238,11 +267,11 @@ class DatabaseRepository:
     async def get_config_async(self, device_id: str) -> ConfigData | None:
         return await asyncio.to_thread(self.get_config, device_id)
 
-    async def insert_environmental_async(self, environmental: "Environmental") -> None:
-        await asyncio.to_thread(self.insert_environmental, environmental)
+    async def insert_environmental_async(self, environmental: "Environmental") -> bool:
+        return await asyncio.to_thread(self.insert_environmental, environmental)
 
-    async def insert_inertial_async(self, inertial: "Inertial") -> None:
-        await asyncio.to_thread(self.insert_inertial, inertial)
+    async def insert_inertial_async(self, inertial: "Inertial") -> bool:
+        return await asyncio.to_thread(self.insert_inertial, inertial)
 
-    async def insert_log_async(self, log: "Log") -> None:
-        await asyncio.to_thread(self.insert_log, log)
+    async def insert_log_async(self, log: "Log") -> bool:
+        return await asyncio.to_thread(self.insert_log, log)
