@@ -477,7 +477,7 @@ static esp_err_t chipid(void) {
     uint8_t tmp;
 
     for (int attempt = 1; attempt <= BMI270_INIT_RETRIES; ++attempt) {
-        ret = device_read(s_dev, &reg_id, &tmp, 1, TAG);
+        ret = i2c_device_read(s_dev, &reg_id, &tmp, 1, TAG);
 
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "[%d/%d] Lectura CHIPID falló: %s", attempt, BMI270_INIT_RETRIES, esp_err_to_name(ret));
@@ -506,7 +506,7 @@ static esp_err_t softreset(void) {
     uint8_t val_softreset = 0xB6;
 
     for (int attempt = 1; attempt <= BMI270_INIT_RETRIES; ++attempt) {
-        ret = device_write(s_dev, &reg_softreset, &val_softreset, 1, TAG);
+        ret = i2c_device_write(s_dev, &reg_softreset, &val_softreset, 1, TAG);
 
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Intento %d/%d softreset BMI270 falló: %s", attempt, BMI270_INIT_RETRIES, esp_err_to_name(ret));
@@ -534,21 +534,21 @@ static void initialization(void) {
 
     ESP_LOGI(TAG, "Inicializando BMI270...");
 
-    ret = device_write(s_dev, &reg_pwr_conf_advpowersave, &val_pwr_conf_advpowersave, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_pwr_conf_advpowersave, &val_pwr_conf_advpowersave, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo pwr_conf_advpowersave: %s", esp_err_to_name(ret));
         return;
     }
     vTaskDelay(500 /portTICK_PERIOD_MS);    // se puede reducir
     
-    ret = device_write(s_dev, &reg_init_ctrl, &val_init_ctrl, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_init_ctrl, &val_init_ctrl, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo init_ctrl=0: %s", esp_err_to_name(ret));
         return;
     }
 
     int config_size = sizeof(bmi270_config_file);
-    ret = device_write(s_dev, &reg_init_data, (uint8_t*)bmi270_config_file, config_size, TAG);
+    ret = i2c_device_write(s_dev, &reg_init_data, (uint8_t*)bmi270_config_file, config_size, TAG);
 
     if(ret != ESP_OK) {
         ESP_LOGE(TAG, "Error cargando config_file");
@@ -558,7 +558,7 @@ static void initialization(void) {
     }
 
     vTaskDelay(500 /portTICK_PERIOD_MS);
-    ret = device_write(s_dev, &reg_init_ctrl, &val_init_ctrl2, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_init_ctrl, &val_init_ctrl2, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo init_ctrl=1: %s", esp_err_to_name(ret));
         return;
@@ -574,7 +574,7 @@ static void check_initialization(void){
     
     vTaskDelay(500 /portTICK_PERIOD_MS);
 
-    ret = device_read(s_dev,  &reg_internalstatus, &tmp, 1, TAG);
+    ret = i2c_device_read(s_dev,  &reg_internalstatus, &tmp, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error leyendo internal status para check_initialization: %s", esp_err_to_name(ret));
         return;
@@ -596,7 +596,7 @@ static void internal_status(void) {
     uint8_t reg_internalstatus=0x21;
     uint8_t tmp;
 
-    ret = device_read(s_dev,  &reg_internalstatus, &tmp, 1, TAG);
+    ret = i2c_device_read(s_dev,  &reg_internalstatus, &tmp, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error leyendo internal status: %s", esp_err_to_name(ret));
         return;
@@ -618,7 +618,7 @@ static void toggle_sensors(int aux, int gyr, int acc, int temp) {
 
     val_pwr_ctrl = (temp << 3) | (acc << 2) | (gyr << 1) | aux;
 
-    ret = device_write(s_dev, &reg_pwr_ctrl, &val_pwr_ctrl, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_pwr_ctrl, &val_pwr_ctrl, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo pwr_ctrl: %s", esp_err_to_name(ret));
     }
@@ -719,14 +719,14 @@ static void acc_conf(int odr_set, int avg_set, int range_set) {
     val_acc_range = range;
 
     // Configuración general del acc
-    ret = device_write(s_dev, &reg_acc_conf, &val_acc_conf, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_acc_conf, &val_acc_conf, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo acc_conf: %s", esp_err_to_name(ret));
         return;
     }
     
     // Set range
-    ret = device_write(s_dev, &reg_acc_range, &val_acc_range, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_acc_range, &val_acc_range, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo acc_range: %s", esp_err_to_name(ret));
         return;
@@ -806,14 +806,14 @@ static void gyr_conf(int odr_set, int range_set) {
     val_gyr_range = range;
 
     // Configuración general del gyr
-    ret = device_write(s_dev, &reg_gyr_conf, &val_gyr_conf, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_gyr_conf, &val_gyr_conf, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo gyr_conf: %s", esp_err_to_name(ret));
         return;
     }
 
     // Set range
-    ret = device_write(s_dev, &reg_gyr_range, &val_gyr_range, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_gyr_range, &val_gyr_range, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo gyr_range: %s", esp_err_to_name(ret));
         return;
@@ -827,7 +827,7 @@ void power_config(void) {
     uint8_t reg_pwr_conf = 0x7C;
     uint8_t val_pwr_conf = 0x00;
 
-    ret = device_write(s_dev, &reg_pwr_conf, &val_pwr_conf, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_pwr_conf, &val_pwr_conf, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error escribiendo power_config: %s", esp_err_to_name(ret));
     }
@@ -857,7 +857,7 @@ esp_err_t bmi270_read(bmi270_reading_t *out) {
     float acc_x_g, acc_y_g, acc_z_g;
     float gyr_x_rads, gyr_y_rads, gyr_z_rads;
 
-    ret = device_read(s_dev, &reg_intstatus, &tmp, 1, TAG);
+    ret = i2c_device_read(s_dev, &reg_intstatus, &tmp, 1, TAG);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error leyendo intstatus: %s", esp_err_to_name(ret));
         return ret;
@@ -870,7 +870,7 @@ esp_err_t bmi270_read(bmi270_reading_t *out) {
     }
 
     {
-        ret = device_read(s_dev, &reg_data, (uint8_t*) sensor_data_buffer, bytes_data8, TAG);
+        ret = i2c_device_read(s_dev, &reg_data, (uint8_t*) sensor_data_buffer, bytes_data8, TAG);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Error leyendo datos de acelerómetro y giroscopio: %s", esp_err_to_name(ret));
             return ret;

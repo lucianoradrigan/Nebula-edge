@@ -32,12 +32,12 @@ static bool s_sd_mounted = false;
 static const char *TAG = "nebulaedge_microsd";
 
 /* Responde si la sd está montada o no. */
-bool is_sd_mounted(void) {
+bool sd_is_mounted(void) {
     return s_sd_mounted;
 }
 
 /* Monta la tarjeta SD en /sdcard asignando recursos correspondientes. */
-esp_err_t mount_sd(void) {
+esp_err_t sd_mount(void) {
     esp_err_t ret;
 
     if (s_sd_mounted) {
@@ -92,11 +92,11 @@ esp_err_t mount_sd(void) {
 }
 
 /* Formatea la tarjeta SD montada en /sdcard. */
-esp_err_t format_sd(void) {
+esp_err_t sd_format(void) {
     esp_err_t ret;
 
     if (!s_sd_mounted) {
-        ret = mount_sd();
+        ret = sd_mount();
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Cannot format SD: mount failed: %s", esp_err_to_name(ret));
             return ret;
@@ -114,7 +114,7 @@ esp_err_t format_sd(void) {
 }
 
 /* Verifica espacio libre y formatea preventivamente si queda muy poco. */
-esp_err_t format_sd_if_no_space(void) {
+esp_err_t sd_format_if_no_space(void) {
     uint64_t total_bytes = 0;
     uint64_t free_bytes = 0;
 
@@ -133,7 +133,7 @@ esp_err_t format_sd_if_no_space(void) {
              (unsigned)free_bytes,
              (unsigned)SD_NEAR_FULL_THRESHOLD_BYTES);
 
-    ret = format_sd();
+    ret = sd_format();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to format SD card: %s", esp_err_to_name(ret));
         return ret;
@@ -144,7 +144,7 @@ esp_err_t format_sd_if_no_space(void) {
 }
 
 /* Desmonta la tarjeta SD y libera recursos asociados. */
-esp_err_t unmount_sd(void) {
+esp_err_t sd_unmount(void) {
     esp_err_t ret = ESP_OK;
 
     if (!s_sd_mounted && !s_spi_bus_inited) {

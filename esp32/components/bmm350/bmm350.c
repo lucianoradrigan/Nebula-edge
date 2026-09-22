@@ -73,7 +73,7 @@ static esp_err_t chipid(void) {
     uint8_t data[4];
 
     for (int attempt = 1; attempt <= BMM350_INIT_RETRIES; ++attempt) {
-        ret = device_read(s_dev, &reg, data, sizeof(data), TAG);
+        ret = i2c_device_read(s_dev, &reg, data, sizeof(data), TAG);
         
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Intento %d/%d de lectura CHIPID falló: %s", attempt, BMM350_INIT_RETRIES, esp_err_to_name(ret));
@@ -106,7 +106,7 @@ static esp_err_t softreset(void) {
     uint8_t val_softreset_2 = 0x00;
 
     for (int attempt = 1; attempt <= BMM350_INIT_RETRIES; ++attempt) {
-        ret = device_write(s_dev, &reg_softreset, &val_softreset_1, 1, TAG);
+        ret = i2c_device_write(s_dev, &reg_softreset, &val_softreset_1, 1, TAG);
         vTaskDelay(100 / portTICK_PERIOD_MS);
 
         if (ret != ESP_OK) {
@@ -114,7 +114,7 @@ static esp_err_t softreset(void) {
             continue;
         }
 
-        ret = device_write(s_dev, &reg_softreset, &val_softreset_2, 1, TAG);
+        ret = i2c_device_write(s_dev, &reg_softreset, &val_softreset_2, 1, TAG);
         vTaskDelay(300 / portTICK_PERIOD_MS);
 
         if (ret != ESP_OK) {
@@ -149,7 +149,7 @@ static void download_otp(void) {
         val_otp_cmd = val_otp_cmd_read | (i & 0x1F);
 
         // Set OTP command
-        ret = device_write(s_dev, &reg_otp_cmd, &val_otp_cmd, 1, TAG);
+        ret = i2c_device_write(s_dev, &reg_otp_cmd, &val_otp_cmd, 1, TAG);
 
         // Delay en específico que ralentiza el programa.
         // En la API Bosch estaba en 300 pero se puede bajar.
@@ -160,7 +160,7 @@ static void download_otp(void) {
         }
 
         // Get OTP data
-        device_read(s_dev, &reg, data, sizeof(data), TAG);
+        i2c_device_read(s_dev, &reg, data, sizeof(data), TAG);
         vTaskDelay(24 / portTICK_PERIOD_MS);
         
         /* Valor de comprobación. Debería dar 0x33. */
@@ -172,7 +172,7 @@ static void download_otp(void) {
 
     // The boot phase must be terminated by writing 0x80 
     // to OTP_CMD_REG (also done in BMM350_init).
-    ret = device_write(s_dev, &reg_otp_cmd, &val_otp_cmd_end, 1, TAG);
+    ret = i2c_device_write(s_dev, &reg_otp_cmd, &val_otp_cmd_end, 1, TAG);
     vTaskDelay(100 / portTICK_PERIOD_MS);
 
     if (ret != ESP_OK) {
@@ -350,10 +350,10 @@ static void odr_avg_config(int odr_set, int avg_set) {
     }
     val_pmu_cmd_aggr_set = (avg << 4) | odr;
 
-    device_write(s_dev, &reg_pmu_cmd, &val_pmu_cmd_upd_aoe, 1, TAG);
+    i2c_device_write(s_dev, &reg_pmu_cmd, &val_pmu_cmd_upd_aoe, 1, TAG);
     vTaskDelay(24 / portTICK_PERIOD_MS);
 
-    device_write(s_dev, &reg_pmu_cmd_aggr_set, &val_pmu_cmd_aggr_set, 1, TAG);
+    i2c_device_write(s_dev, &reg_pmu_cmd_aggr_set, &val_pmu_cmd_aggr_set, 1, TAG);
     vTaskDelay(24 / portTICK_PERIOD_MS);   
 }
 
@@ -365,11 +365,11 @@ static void bmmpowermode(void) {
     uint8_t val_int_ctrl = 0x88;
 
     // Normal mode
-    device_write(s_dev, &reg_pmu_cmd, &val_pmu_cmd, 1, TAG);
+    i2c_device_write(s_dev, &reg_pmu_cmd, &val_pmu_cmd, 1, TAG);
     vTaskDelay(pdMS_TO_TICKS(24));
 
     // Data ready on
-    device_write(s_dev, &reg_int_ctrl, &val_int_ctrl, 1, TAG);
+    i2c_device_write(s_dev, &reg_int_ctrl, &val_int_ctrl, 1, TAG);
     vTaskDelay(pdMS_TO_TICKS(24));
 }
 
@@ -387,7 +387,7 @@ static void internal_status(void) {
     // Datos a leer 
     uint8_t data[12];
 
-    device_read(s_dev, &reg, data, sizeof(data), TAG);
+    i2c_device_read(s_dev, &reg, data, sizeof(data), TAG);
 
     ESP_LOGI(TAG, "PMU CMD Status 0: 0x%02X", (data[reg_pmu_cmd_status_0] & 0b00011111));
     ESP_LOGI(TAG, "PMU CMD Status 1: 0x%02X", (data[reg_pmu_cmd_status_1] & 0b00111111));
@@ -422,13 +422,13 @@ esp_err_t bmm350_read(bmm350_reading_t *out) {
     float out_data[4] = { 0.0f };
 
     // Lectura en el sensor
-    device_read(s_dev, &reg, sensor_data_buffer, sizeof(sensor_data_buffer), TAG);
+    i2c_device_read(s_dev, &reg, sensor_data_buffer, sizeof(sensor_data_buffer), TAG);
 
     // Data ready condition
     if ((sensor_data_buffer[50] & 0b00000100) == 4) {
 
         // Read data
-        ret = device_read(s_dev, &data_reg, (uint8_t*) sensor_data_buffer, data_bytes, TAG);
+        ret = i2c_device_read(s_dev, &data_reg, (uint8_t*) sensor_data_buffer, data_bytes, TAG);
         
         raw_mag_x = ((uint32_t) sensor_data_buffer[2] << 16) + ((uint32_t) sensor_data_buffer[1] << 8) + (uint32_t) sensor_data_buffer[0];
         raw_mag_y = ((uint32_t) sensor_data_buffer[5] << 16) + ((uint32_t) sensor_data_buffer[4] << 8) + (uint32_t) sensor_data_buffer[3];

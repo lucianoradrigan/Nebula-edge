@@ -27,11 +27,11 @@ typedef struct {
 
 /* El driver i2c_master de ESP-IDF ya serializa cada transacción por su cuenta,
  * así que este mutex NO está para eso. Lo que agrega es atomicidad de la
- * secuencia completa: `device_read` son dos transacciones (escribir la
+ * secuencia completa: `i2c_device_read` son dos transacciones (escribir la
  * dirección del registro, después leer), y sin el mutex otra task podría
  * colarse entre las dos si ambas hablan con el MISMO device.
  *
- * Nadie tiene que tomarlo a mano: `device_read`/`device_write` ya lo hacen por
+ * Nadie tiene que tomarlo a mano: `i2c_device_read`/`i2c_device_write` ya lo hacen por
  * dentro. Se expone por compatibilidad; no lo uses desde afuera para congelar
  * tasks — suspender una task desde otra es justamente lo que hay que evitar. */
 extern SemaphoreHandle_t i2c_bus_mutex;
@@ -45,11 +45,11 @@ esp_err_t i2c_slave_init(i2c_master_bus_handle_t *bus, i2c_master_dev_handle_t *
                          int slave_addr, uint32_t freq_hz);
 esp_err_t i2c_slave_deinit(i2c_master_dev_handle_t *device);
 
-esp_err_t device_read(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_rd, size_t size, const char *tag);
-esp_err_t device_write(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_wr, size_t size, const char *tag);
+esp_err_t i2c_device_read(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_rd, size_t size, const char *tag);
+esp_err_t i2c_device_write(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_wr, size_t size, const char *tag);
 
 /* Fuerza SDA en LOW con GPIO open-drain, para destrabar un bus colgado.
  * Hay que liberar el driver I2C antes de llamarla. */
-esp_err_t force_sda_low(int sda_io);
+esp_err_t i2c_force_sda_low(int sda_io);
 
 #endif

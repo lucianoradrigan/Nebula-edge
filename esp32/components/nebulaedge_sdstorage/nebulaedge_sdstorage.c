@@ -102,15 +102,15 @@ static esp_err_t inertial_to_ndjson(Inertial *ine, FILE *f) {
 }
 
 /* Recibe paquete de forma [tipo|payload protobuf] y lo guarda en NDJSON. */
-esp_err_t data_to_sd(uint8_t *data, size_t size) {
+esp_err_t sdstorage_write_packet(uint8_t *data, size_t size) {
     if (!data || size < 2) return ESP_ERR_INVALID_ARG;
 
-    if (!is_sd_mounted()) {
+    if (!sd_is_mounted()) {
         ESP_LOGI(TAG, "SD not mounted. Not writing.");
         return ESP_OK;
     }
 
-    esp_err_t ret = format_sd_if_no_space();
+    esp_err_t ret = sd_format_if_no_space();
     if (ret != ESP_OK) {
         return ret;
     }

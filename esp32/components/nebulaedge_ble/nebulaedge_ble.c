@@ -304,7 +304,7 @@ static bool notify_enabled_d = false;
 
 /* Congestión del buffer de salida del stack. Lo actualiza
  * ESP_GATTS_CONGEST_EVT; es el único caso en que una notificación se pierde
- * de verdad estando la conexión viva (ver set_char_with_notify). */
+ * de verdad estando la conexión viva (ver ble_set_char_with_notify). */
 static volatile bool notify_congested = false;
 
 /* Reintentos de una notificación que el stack no aceptó. No es redundancia:
@@ -581,7 +581,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
         /* El stack avisa cuando el buffer de salida se llena y cuando se
          * vacía. Mientras esté congestionado, esp_ble_gatts_send_indicate()
          * descarta la notificación: este flag permite esperar en vez de
-         * perderla (ver set_char_with_notify). */
+         * perderla (ver ble_set_char_with_notify). */
         case ESP_GATTS_CONGEST_EVT:
             notify_congested = param->congest.congested;
             ESP_LOGW(GATTS_TABLE_TAG, "Enlace %s", notify_congested ? "CONGESTIONADO" : "descongestionado");
@@ -601,39 +601,39 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
 
 // Cambia el valor de cualquier característica dado su índice.
 // Retorna ESP_OK si se escribe correctamente.
-esp_err_t set_char(uint8_t char_index, const uint8_t *value, uint16_t length) {
+esp_err_t ble_set_char(uint8_t char_index, const uint8_t *value, uint16_t length) {
     if (char_index >= IDX_NB) {
-        ESP_LOGE(GATTS_TABLE_TAG, "set_char: índice inválido %u", char_index);
+        ESP_LOGE(GATTS_TABLE_TAG, "ble_set_char: índice inválido %u", char_index);
         return ESP_FAIL;
     }
     
     const char *label = char_index_to_label(char_index);
     esp_err_t status = esp_ble_gatts_set_attr_value(ble_handle_table[char_index], length, value);
     if (status == ESP_OK) {
-        ESP_LOGI(GATTS_TABLE_TAG, "set_char: char %s actualizado (%u bytes, handle=%u)", 
+        ESP_LOGI(GATTS_TABLE_TAG, "ble_set_char: char %s actualizado (%u bytes, handle=%u)", 
                  label, length, ble_handle_table[char_index]);
     } else {
-        ESP_LOGE(GATTS_TABLE_TAG, "set_char: falló en char %s: %s", label, esp_err_to_name(status));
+        ESP_LOGE(GATTS_TABLE_TAG, "ble_set_char: falló en char %s: %s", label, esp_err_to_name(status));
     }
     return status;
 }
 
 // Cambia el valor de cualquier característica y, si soporta notify,
 // envía notificación. Retorna ESP_OK si se escribe correctamente.
-esp_err_t set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_t length) {
+esp_err_t ble_set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_t length) {
     if (char_index >= IDX_NB) {
-        ESP_LOGE(GATTS_TABLE_TAG, "set_char_with_notify: índice inválido %u", char_index);
+        ESP_LOGE(GATTS_TABLE_TAG, "ble_set_char_with_notify: índice inválido %u", char_index);
         return ESP_FAIL;
     }
 
     const char *label = char_index_to_label(char_index);
     esp_err_t status = esp_ble_gatts_set_attr_value(ble_handle_table[char_index], length, value);
     if (status != ESP_OK) {
-        ESP_LOGE(GATTS_TABLE_TAG, "set_char_with_notify: falló en char %s: %s", label, esp_err_to_name(status));
+        ESP_LOGE(GATTS_TABLE_TAG, "ble_set_char_with_notify: falló en char %s: %s", label, esp_err_to_name(status));
         return status;
     }
 
-    ESP_LOGI(GATTS_TABLE_TAG, "set_char_with_notify: char %s actualizado (%u bytes, handle=%u)",
+    ESP_LOGI(GATTS_TABLE_TAG, "ble_set_char_with_notify: char %s actualizado (%u bytes, handle=%u)",
              label, length, ble_handle_table[char_index]);
 
     bool notify_enabled = false;
@@ -695,9 +695,9 @@ esp_err_t set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_
 
 // Lee el valor de cualquier característica dado su índice.
 // Retorna el número de bytes leídos, o 0 en caso de error.
-size_t get_char(uint8_t char_index, uint8_t *out_buffer, size_t max_len) {
+size_t ble_get_char(uint8_t char_index, uint8_t *out_buffer, size_t max_len) {
     if (char_index >= IDX_NB) {
-        ESP_LOGE(GATTS_TABLE_TAG, "get_char: índice inválido %u", char_index);
+        ESP_LOGE(GATTS_TABLE_TAG, "ble_get_char: índice inválido %u", char_index);
         return 0;
     }
     
@@ -705,13 +705,13 @@ size_t get_char(uint8_t char_index, uint8_t *out_buffer, size_t max_len) {
     const uint8_t *value = NULL;
     esp_err_t ret = esp_ble_gatts_get_attr_value(ble_handle_table[char_index], &len, &value);
     if (ret != ESP_OK || !value) {
-        ESP_LOGE(GATTS_TABLE_TAG, "get_char: error leyendo índice %u: %s", char_index, esp_err_to_name(ret));
+        ESP_LOGE(GATTS_TABLE_TAG, "ble_get_char: error leyendo índice %u: %s", char_index, esp_err_to_name(ret));
         return 0;
     }
     
     size_t copy_len = (len > max_len) ? max_len : len;
     memcpy(out_buffer, value, copy_len);
-    ESP_LOGI(GATTS_TABLE_TAG, "get_char: leídos %u bytes de índice %u (handle=%u)", 
+    ESP_LOGI(GATTS_TABLE_TAG, "ble_get_char: leídos %u bytes de índice %u (handle=%u)", 
              (unsigned)copy_len, char_index, ble_handle_table[char_index]);
     return copy_len;
 }

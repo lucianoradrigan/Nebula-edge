@@ -7,7 +7,7 @@
 #include "freertos/semphr.h"
 
 /* Ver la nota del header: el driver de ESP-IDF ya serializa cada transacción;
- * este mutex hace atómica la secuencia completa de device_read/device_write. */
+ * este mutex hace atómica la secuencia completa de i2c_device_read/i2c_device_write. */
 SemaphoreHandle_t i2c_bus_mutex;
 
 /* Velocidad por defecto del bus, la que pasó la aplicación en i2c_master_init.
@@ -169,7 +169,7 @@ esp_err_t i2c_master_deinit(i2c_master_bus_handle_t *bus_handle) {
     return ESP_OK;
 }
 
-esp_err_t force_sda_low(int sda_io) {
+esp_err_t i2c_force_sda_low(int sda_io) {
     // Tras liberar el driver I2C, forzar SDA en LOW con GPIO open-drain.
     gpio_reset_pin((gpio_num_t)sda_io);
     gpio_set_direction((gpio_num_t)sda_io, GPIO_MODE_OUTPUT_OD);
@@ -181,9 +181,9 @@ esp_err_t force_sda_low(int sda_io) {
 
 /* Lee un registro en un device cualquiera vía I2C. Análogo a funciones bmm_read 
  * y bmi_read, pero para cualquier sensor. Device representa al sensor. */
-esp_err_t device_read(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_rd, size_t size, const char *tag) {
+esp_err_t i2c_device_read(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_rd, size_t size, const char *tag) {
     if (device == NULL || data_address == NULL || data_rd == NULL) {
-        ESP_LOGE(tag, "device_read con parámetros inválidos");
+        ESP_LOGE(tag, "i2c_device_read con parámetros inválidos");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -216,9 +216,9 @@ esp_err_t device_read(i2c_master_dev_handle_t device, uint8_t *data_address, uin
 
 /* Escribe sobre un registro en un device cualquiera vía I2C. Análogo a funciones bmm_read 
  * y bmi_read, pero para cualquier sensor. Device representa al sensor. */
-esp_err_t device_write(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_wr, size_t size, const char *tag) {
+esp_err_t i2c_device_write(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_wr, size_t size, const char *tag) {
     if (device == NULL || data_address == NULL || data_wr == NULL) {
-        ESP_LOGE(tag, "device_write con parámetros inválidos");
+        ESP_LOGE(tag, "i2c_device_write con parámetros inválidos");
         return ESP_ERR_INVALID_ARG;
     }
 

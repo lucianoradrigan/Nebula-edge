@@ -54,9 +54,9 @@ void ble_set_start_semaphore(SemaphoreHandle_t sem);
 void ble_init(void);
 void ble_deinit(void);
 
-size_t get_char(uint8_t char_index, uint8_t *out_buffer, size_t max_len);
-esp_err_t set_char(uint8_t char_index, const uint8_t *value, uint16_t length);
-esp_err_t set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_t length);
+size_t ble_get_char(uint8_t char_index, uint8_t *out_buffer, size_t max_len);
+esp_err_t ble_set_char(uint8_t char_index, const uint8_t *value, uint16_t length);
+esp_err_t ble_set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_t length);
 esp_err_t ble_stop_advertising(void);
 
 #endif

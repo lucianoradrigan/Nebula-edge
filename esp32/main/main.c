@@ -453,18 +453,18 @@ static Config *udp_recv_config(void) {
 /* -------------------------------------------------------------------- TCP */
 
 static esp_err_t tcp_send_data(const uint8_t *data, size_t size) {
-    return tcp_send(data, size);
+    return nebulaedge_tcp_send(data, size);
 }
 
 static esp_err_t tcp_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
     (void)cfg;
-    return tcp_send(buf, size);
+    return nebulaedge_tcp_send(buf, size);
 }
 
 static Config *tcp_recv_config(void) {
     uint8_t buffer[CONFIG_RECV_BUF_BYTES];
 
-    size_t len_recv = tcp_receive(buffer, sizeof(buffer));
+    size_t len_recv = nebulaedge_tcp_receive(buffer, sizeof(buffer));
     if (len_recv == 0) {
         vTaskDelay(1);
         return NULL;    // timeout del socket; la task vuelve a mirar la compuerta
@@ -480,7 +480,7 @@ static Config *tcp_recv_config(void) {
 /* -------------------------------------------------------------------- BLE */
 
 static esp_err_t ble_send_data(const uint8_t *data, size_t size) {
-    return set_char_with_notify(IDX_CHAR_VAL_B_BLE, data, size);
+    return ble_set_char_with_notify(IDX_CHAR_VAL_B_BLE, data, size);
 }
 
 static esp_err_t ble_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
@@ -489,7 +489,7 @@ static esp_err_t ble_send_ack(const Config *cfg, const uint8_t *buf, size_t size
     /* Char D, distinta de la de telemetría: el ACK queda ahí legible, así que
      * si se pierde la notificación el servidor lo reconcilia leyéndolo
      * (BleTransport.confirm_config_applied). */
-    esp_err_t ret = set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
+    esp_err_t ret = ble_set_char_with_notify(IDX_CHAR_VAL_D_BLE, buf, size);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG_GET_RSP_BLE, "BLE: ACK no se pudo notificar (%s); queda legible en char D.",
                  esp_err_to_name(ret));
@@ -548,7 +548,7 @@ static const protocol_ops_t PROTOCOLS[] = {
         .name = "TCP", .id = PROTOCOL_TCP,
         .send_data = tcp_send_data, .send_ack = tcp_send_ack,
         .send_tag = TAG_SEND_TCP, .rsp_tag = TAG_GET_RSP_TCP,
-        .recv_config = tcp_recv_config, .close = tcp_close_socket,
+        .recv_config = tcp_recv_config, .close = nebulaedge_tcp_close_socket,
         .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
     [PROTOCOL_BLE] = {
@@ -557,7 +557,7 @@ static const protocol_ops_t PROTOCOLS[] = {
         .send_tag = TAG_SEND_BLE, .rsp_tag = TAG_GET_RSP_BLE,
         .recv_config = ble_recv_config, .close = ble_close,
         /* Una sola vez: el link layer de BLE ya retransmite lo que se encoló, y
-         * set_char_with_notify() reintenta por su cuenta si el stack rechaza el
+         * ble_set_char_with_notify() reintenta por su cuenta si el stack rechaza el
          * envío por congestión. */
         .control_repeats = 1,
         .pre_send_delay_ms = 1000,
@@ -894,7 +894,7 @@ void vTaskSendData(void *pvParameters) {
 
         // Respaldo local, solo en modo deep sleep.
         if (current_config->sleep_time_s > 0) {
-            data_to_sd(packet.data, packet.size);
+            sdstorage_write_packet(packet.data, packet.size);
         }
 
         free(packet.data);
@@ -1120,13 +1120,13 @@ void app_main() {
      *
      * El montaje está comentado porque en la IM-V2 ocupa el GPIO 1 y falla.
      * Consecuencia que NO es evidente leyendo el resto del código: las tasks
-     * de envío siguen llamando a data_to_sd() cuando sleep_time_s > 0, pero
-     * esa función corta de inmediato en is_sd_mounted() y no escribe nada.
+     * de envío siguen llamando a sdstorage_write_packet() cuando sleep_time_s > 0, pero
+     * esa función corta de inmediato en sd_is_mounted() y no escribe nada.
      * O sea que el firmware parece guardar respaldo local y no lo hace.
      *
      * Para reactivarlo hay que resolver antes el conflicto de pines en
      * nebulaedge_defs.h (PIN_NUM_CS). */
-    // esp_err_t sd_ret = mount_sd();
+    // esp_err_t sd_ret = sd_mount();
     // if (sd_ret != ESP_OK) {
     //     ESP_LOGW(TAG, "SD no disponible, se continúa sin persistencia local: %s", esp_err_to_name(sd_ret));
     // }
@@ -1261,11 +1261,11 @@ void app_main() {
                 };
 
                 // Abre socket TCP
-                tcp_open_socket(&params);
+                nebulaedge_tcp_open_socket(&params);
                 // Conecta
                 if (nebulaedge_tcp_connect() != 0) {
                     // Cierra el socket
-                    tcp_close_socket();
+                    nebulaedge_tcp_close_socket();
                     ESP_LOGI(TAG, "Retrying TCP connection...");
                     wifi_deinit_sta();
                     continue;

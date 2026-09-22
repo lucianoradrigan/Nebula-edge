@@ -66,7 +66,7 @@ static esp_netif_t *get_netif_from_desc(const char *desc) {
 /* Abre socket TCP IPv4 o IPv6 y lo configura en base a los parámetros entregados. 
  * Luego, se setea la dirección IPv4 o IPv6 del host. Para cambiar de host 
  * hay que cerrar el socket y llamar de nuevo a esta función con los nuevos parámetros. */
-void tcp_open_socket(tcp_params_t *params) {
+void nebulaedge_tcp_open_socket(tcp_params_t *params) {
     int addr_family = 0;
     int ip_protocol = 0;
 
@@ -173,7 +173,7 @@ int nebulaedge_tcp_connect(void) {
 
 // Esto aún no maneja el caso de conexión caída!! Se queda caída
 // hasta reiniciar
-esp_err_t tcp_send(const uint8_t *data, size_t len) {
+esp_err_t nebulaedge_tcp_send(const uint8_t *data, size_t len) {
     if (sock < 0) {
         ESP_LOGE(TAG, "Socket is closed");
         return ESP_ERR_INVALID_STATE;
@@ -271,7 +271,7 @@ static bool recv_discard(size_t n) {
  * Lee primero el prefijo de largo y después exactamente esa cantidad de bytes
  * (ver el bloque FRAMING arriba), así que el buffer nunca queda con dos
  * mensajes pegados ni con medio mensaje. */
-size_t tcp_receive(uint8_t *buffer, size_t len) {
+size_t nebulaedge_tcp_receive(uint8_t *buffer, size_t len) {
     uint8_t header[TCP_LENGTH_PREFIX_BYTES];
 
     if (!recv_exact(header, sizeof(header))) {
@@ -288,7 +288,7 @@ size_t tcp_receive(uint8_t *buffer, size_t len) {
 
     if (frame_len > len) {
         /* No cabe, pero igual hay que sacarlo del socket: si se dejara ahí, el
-         * siguiente tcp_receive() leería el cuerpo de este mensaje creyendo que
+         * siguiente nebulaedge_tcp_receive() leería el cuerpo de este mensaje creyendo que
          * es un header. */
         ESP_LOGE(TAG, "Mensaje de %u B no cabe en el buffer de %u B, se descarta",
                  (unsigned)frame_len, (unsigned)len);
@@ -308,7 +308,7 @@ size_t tcp_receive(uint8_t *buffer, size_t len) {
 /* Cierra socket previamente abierto. No recibe parámetros
  * pues el socket está definido como variable global en este
  * script. */
-void tcp_close_socket(void) {
+void nebulaedge_tcp_close_socket(void) {
     if (sock != -1) {
         shutdown(sock, SHUT_RDWR);
         close(sock);
