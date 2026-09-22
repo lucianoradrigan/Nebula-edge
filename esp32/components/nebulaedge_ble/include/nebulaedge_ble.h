@@ -1,6 +1,11 @@
 #ifndef NEBULAEDGE_BLE
 #define NEBULAEDGE_BLE
 
+#include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+
 // Índices de características GATT
 enum {
     // Índice de servicio
@@ -26,6 +31,25 @@ enum {
 
     IDX_NB_BLE,
 };
+
+/* Lo que el servidor GATT tiene que avisarle a la aplicación.
+ *
+ * Las dos las entrega la aplicación, que es la dueña; antes este componente
+ * alcanzaba dos globales por su nombre (`extern QueueHandle_t xQueueConfigBle`
+ * y `extern SemaphoreHandle_t semaphore`), así que copiarlo a otro proyecto
+ * obligaba a ese proyecto a declarar globales con esos nombres exactos.
+ *
+ * Las dos existen porque bluedroid entrega por callback, desde su propia task:
+ * ese callback no puede bloquearse esperando a nadie, así que deja el dato o la
+ * señal y retorna. Si no se llaman, lo que llegue se descarta con un aviso. */
+
+/* Cola donde dejar lo que el cliente escriba en la característica A (config),
+ * como packet_t de bytes crudos. Desempaquetarlo es trabajo de la aplicación. */
+void ble_set_config_queue(QueueHandle_t queue);
+
+/* Semáforo que se libera cuando el cliente escribe en la característica C,
+ * la señal de "ya estoy listo, arranca". */
+void ble_set_start_semaphore(SemaphoreHandle_t sem);
 
 void ble_init(void);
 void ble_deinit(void);

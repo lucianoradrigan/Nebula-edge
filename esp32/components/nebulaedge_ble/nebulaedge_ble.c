@@ -39,8 +39,18 @@
 #define SCAN_RSP_CONFIG_FLAG        (1 << 1)
 
 // static EventGroupHandle_t s_ble_event_group = NULL;
-extern SemaphoreHandle_t semaphore;
-extern QueueHandle_t xQueueConfigBle;
+/* Las pone la aplicación (ver nebulaedge_ble.h); el componente no las crea ni
+ * las conoce por nombre. */
+static QueueHandle_t   s_config_queue = NULL;
+static SemaphoreHandle_t s_start_semaphore = NULL;
+
+void ble_set_config_queue(QueueHandle_t queue) {
+    s_config_queue = queue;
+}
+
+void ble_set_start_semaphore(SemaphoreHandle_t sem) {
+    s_start_semaphore = sem;
+}
 
 // Este script implementa una Application Profile. El APP Profile ID, que es un número
 // asignado por el usuario para identificar cada perfil, se usa para registrar el perfil
@@ -441,7 +451,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                 ESP_LOGI(GATTS_TABLE_TAG, "cliente escribió en característica A (configuración).");
 
                 // Encola paquete de configuración solo si la ESP se encuentra en conexión persistente (envío datos)
-                if (xQueueConfigBle != NULL && param->write.len > 0) {
+                if (s_config_queue != NULL && param->write.len > 0) {
                     packet_t pkt = {
                         .size = param->write.len,
                         .data = malloc(param->write.len),
@@ -450,7 +460,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                         ESP_LOGW(GATTS_TABLE_TAG, "Sin memoria para cola de config BLE");
                     } else {
                         memcpy(pkt.data, param->write.value, param->write.len);
-                        if (xQueueSend(xQueueConfigBle, &pkt, 0) != pdTRUE) {
+                        if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
                             ESP_LOGW(GATTS_TABLE_TAG, "cola BLE llena, descartando config");
                             free(pkt.data);
                         }
@@ -464,8 +474,8 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             /* Se escribe en char C: se cede semáforo. */
             if (param->write.handle == ble_handle_table[IDX_CHAR_VAL_C]) {
                 ESP_LOGI(GATTS_TABLE_TAG, "Cliente escribió en característica C, se cede semáforo.");
-                if (semaphore != NULL) {
-                    xSemaphoreGive(semaphore);
+                if (s_start_semaphore != NULL) {
+                    xSemaphoreGive(s_start_semaphore);
                 }
             }
 
@@ -495,7 +505,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             );
 
             if (param->exec_write.exec_write_flag == ESP_GATT_PREP_WRITE_EXEC && prepare_len > 0) {
-                if (xQueueConfigBle != NULL) {
+                if (s_config_queue != NULL) {
                     packet_t pkt = {
                         .size = prepare_len,
                         .data = malloc(prepare_len),
@@ -504,7 +514,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                         ESP_LOGW(GATTS_TABLE_TAG, "Sin memoria para cola de config BLE (prepare write)");
                     } else {
                         memcpy(pkt.data, prepare_buf, prepare_len);
-                        if (xQueueSend(xQueueConfigBle, &pkt, 0) != pdTRUE) {
+                        if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
                             ESP_LOGW(GATTS_TABLE_TAG, "cola BLE llena, descartando config (prepare write)");
                             free(pkt.data);
                         } else {

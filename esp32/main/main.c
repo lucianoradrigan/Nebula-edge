@@ -975,6 +975,20 @@ void app_main() {
     xQueueConfig = xQueueCreate(5, sizeof(Config *));
     xQueueConfigBle = xQueueCreate(5, sizeof(packet_t));
 
+    /* Entrega a los componentes lo que necesitan para avisar hacia acá.
+     *
+     * MQTT y BLE reciben por callback, desde la task de su propia pila: ese
+     * callback no puede bloquearse esperando a vTaskGetResponse, así que deja
+     * el dato en una cola y retorna. UDP y TCP no necesitan nada de esto
+     * porque su recv() lo hace nuestra propia task.
+     *
+     * Las colas y el semáforo son de la aplicación y se los pasamos: antes los
+     * componentes los alcanzaban con `extern` por nombre, lo que impedía
+     * copiarlos a otro proyecto sin arrastrar esas globales. */
+    mqtt_set_config_queue(xQueueConfig);
+    ble_set_config_queue(xQueueConfigBle);
+    ble_set_start_semaphore(semaphore);
+
     /********************************************************************/
     /********************* CONFIG INICIAL (NVS/BLE) *********************/
     /********************************************************************/

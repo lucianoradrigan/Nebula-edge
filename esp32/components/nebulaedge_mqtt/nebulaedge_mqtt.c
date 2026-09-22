@@ -15,7 +15,14 @@
 #include "schema.pb-c.h"
 
 static const char *TAG = "nebulaedge_mqtt";
-extern QueueHandle_t xQueueConfig;
+
+/* Cola de configuraciones entrantes. La pone la aplicación con
+ * mqtt_set_config_queue(); el componente no la crea ni la conoce por nombre. */
+static QueueHandle_t s_config_queue = NULL;
+
+void mqtt_set_config_queue(QueueHandle_t queue) {
+    s_config_queue = queue;
+}
 
 /* Variable global para el cliente MQTT */
 static esp_mqtt_client_handle_t client = NULL;
@@ -113,7 +120,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                     else {
                         ESP_LOGI(TAG, "Configuración MQTT desempaquetada correctamente");
                         // Envía el puntero a la queue para que main lo procese
-                        if (xQueueSend(xQueueConfig, &new_config, 0) != pdTRUE) {
+                        if (s_config_queue == NULL) {
+                            ESP_LOGW(TAG, "Sin cola de config (mqtt_set_config_queue no fue llamada), se descarta");
+                            config__free_unpacked(new_config, NULL);
+                        }
+                        else if (xQueueSend(s_config_queue, &new_config, 0) != pdTRUE) {
                             ESP_LOGW(TAG, "xConfigQueue FULL, configuración descartada");
                             config__free_unpacked(new_config, NULL);
                         }
