@@ -37,10 +37,9 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
 
     def _build_session(self, repo, port, timeouts):
         return sessions.UDPDeviceSession(
-            FakeBLEDevice(),
+            FakeBLEDevice().address,
             make_config(1, udp_port=port),
             repo,
-            None, None, None, None,
             timeouts,
         )
 

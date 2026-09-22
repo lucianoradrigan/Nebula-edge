@@ -19,7 +19,7 @@ import sessions
 import transport
 from gatt_uuids import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
 from codec import DataCodec
-from models import Timeouts
+from models import BleContext, Timeouts
 from tests.fakes import (
     DEEP_SLEEP_PACKET, DEVICE_ID, FakeBLEDevice, FakeRepo,
     config_ack_packet, environmental_packet, make_config,
@@ -99,9 +99,10 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(p.stop)
 
     def _build_session(self, repo, timeouts, ble_client=None):
+        device = FakeBLEDevice()
         return sessions.BLEDeviceSession(
-            FakeBLEDevice(), make_config(1), repo, None, None, None, None, timeouts,
-            ble_client=ble_client,
+            device.address, make_config(1), repo, timeouts,
+            ble=BleContext(device=device, client=ble_client),
         )
 
     async def _wait_until(self, predicate, timeout=5.0):

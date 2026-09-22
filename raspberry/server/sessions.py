@@ -36,9 +36,8 @@ import asyncio
 import time
 from typing import Callable, Any
 
-from bleak.backends.device import BLEDevice
 
-from models import Timeouts, ConfigData, Log
+from models import BleContext, Timeouts, ConfigData, Log
 from codec import DataCodec
 from system import utc_epoch_now
 from config_resolver import ConfigResolver, ConfigDecision
@@ -54,27 +53,24 @@ class DeviceSession:
     """Clase base para sesiones de protocolo (MQTT/UDP/TCP/BLE)."""
     def __init__(
         self,
-        device: BLEDevice,                              # Dispositivo BLE asociado a la sesión
-        initial_config: ConfigData,                     # Configuración inicial del dispositivo
-        database_repo: DatabaseRepository,              # Repositorio general de base de datos
-        scanner_lock: asyncio.Lock | None = None,       # Lock para coordinar el scanner BLE
-        scanner_stop: Callable[[], Any] | None = None,  # Callback para detener el scanner
-        scanner_start: Callable[[], Any] | None = None, # Callback para iniciar el scanner
-        ble_adapter: str | None = None,                 # Adaptador BLE a usar
-        timeouts: Timeouts | None = None,               # Timeouts centralizados
-        ble_client=None,                                # Conexión BLE ya abierta por el descubrimiento
+        device_id: str,                     # ID del device: cómo lo llama la base
+        initial_config: ConfigData,         # Configuración inicial del dispositivo
+        database_repo: DatabaseRepository,  # Repositorio general de base de datos
+        timeouts: Timeouts | None = None,   # Timeouts centralizados
+        ble: BleContext | None = None,      # Solo lo usa BLEDeviceSession; ver models.py
     ):
-        """Inicializa contexto de dispositivo y repositorios."""
-        self.device = device                            # Dispositivo BLE asociado a la sesión
-        self.device_id = device.address                 # ID del dispositivo (MAC)
+        """Inicializa contexto de dispositivo y repositorios.
+
+        La firma tiene cinco parámetros y no diez porque todo lo específico de
+        BLE -el BLEDevice, el adaptador, los callbacks del scanner y la
+        conexión heredada del descubrimiento- viaja junto en `ble`. MQTT, UDP
+        y TCP lo reciben como None y no lo miran.
+        """
+        self.device_id = device_id                      # ID del dispositivo
         self.database_repo = database_repo              # Repositorio compartido para config y telemetría
         self.config = initial_config                    # Configuración actual en memoria del device
-        self.scanner_lock = scanner_lock                # Lock para coordinar el scanner BLE
-        self.scanner_stop = scanner_stop                # Función para detener el scanner
-        self.scanner_start = scanner_start              # Función para iniciar el scanner
-        self.ble_adapter = ble_adapter or "hci1"         # Adaptador BLE a usar
         self.timeouts = timeouts or Timeouts()          # Timeouts centralizados
-        self.ble_client = ble_client                    # Solo BLE la usa; los demás la ignoran
+        self.ble = ble                                  # Contexto BLE, o None en los otros tres
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
         self._last_client_time: int | None = None       # Último time_client recibido (Environmental/Inertial)
 
@@ -315,15 +311,15 @@ class BLEDeviceSession(ProtocolSession):
         # La conexión que trae el descubrimiento sirve una sola vez: si el
         # enlace se cae y la sesión reabre, ese cliente ya no vale y el
         # transporte tiene que conectar por su cuenta.
-        client, self.ble_client = self.ble_client, None
+        client, self.ble.client = self.ble.client, None
         return BleTransport(
             self.config,
             self._sleep_timeout_sec(),
-            device=self.device,
-            adapter=self.ble_adapter,
-            scanner_lock=self.scanner_lock,
-            scanner_stop=self.scanner_stop,
-            scanner_start=self.scanner_start,
+            device=self.ble.device,
+            adapter=self.ble.adapter,
+            scanner_lock=self.ble.scanner_lock,
+            scanner_stop=self.ble.scanner_stop,
+            scanner_start=self.ble.scanner_start,
             ack_window_sec=self.timeouts.ble_ack_short_sec,
             client=client,
         )

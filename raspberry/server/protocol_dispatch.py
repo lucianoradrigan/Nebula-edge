@@ -25,9 +25,10 @@ CUÁNDO TERMINA DE VERDAD
 from __future__ import annotations
 import asyncio
 
-from bleak.backends.device import BLEDevice
 
-from models import ConfigData, Timeouts
+from dataclasses import replace
+
+from models import BleContext, ConfigData, Timeouts
 from repository import DatabaseRepository
 from sessions import MQTTDeviceSession, UDPDeviceSession, TCPDeviceSession, BLEDeviceSession
 
@@ -40,15 +41,11 @@ PROTOCOL_BLE = 3
 
 
 async def handle_protocol(
-    device: BLEDevice,
+    device_id: str,
     db_dsn: str,
     initial_config: ConfigData,
-    scanner_lock: asyncio.Lock | None = None,
-    scanner_stop = None,
-    scanner_start = None,
-    ble_adapter: str | None = None,
     timeouts: Timeouts | None = None,
-    ble_client=None,
+    ble: BleContext | None = None,
 ):
     """Despacha la sesión según el protocolo configurado en `ConfigData`."""
     config = initial_config
@@ -62,7 +59,6 @@ async def handle_protocol(
         PROTOCOL_BLE: BLEDeviceSession,
     }
 
-    device_id = device.address
     while True:
         idx = config.protocol_conf
         session_cls = session_classes.get(idx)
@@ -71,20 +67,15 @@ async def handle_protocol(
             idx = -1
             break
 
-        session = session_cls(
-            device,
-            config,
-            database_repo,
-            scanner_lock,
-            scanner_stop,
-            scanner_start,
-            ble_adapter,
-            timeouts,
-            ble_client=ble_client,
-        )
-        # Solo la primera sesión puede aprovechar la conexión del
-        # descubrimiento; para cuando se cambie de protocolo ya estará cerrada.
-        ble_client = None
+        session = session_cls(device_id, config, database_repo, timeouts, ble)
+
+        # Solo la PRIMERA sesión puede aprovechar la conexión que dejó abierta
+        # el descubrimiento; para cuando se cambie de protocolo ya estará
+        # cerrada. La primera recibe el contexto tal cual (con el cliente); de
+        # ahí en adelante se pasa una copia sin él. Es una copia y no una
+        # mutación para no vaciarle el cliente a la sesión que ya lo tiene.
+        if ble is not None and ble.client is not None:
+            ble = replace(ble, client=None)
 
         # Heartbeat / loggeo rutinario
         heartbeat_task = asyncio.create_task(session._protocol_heartbeat_loop())

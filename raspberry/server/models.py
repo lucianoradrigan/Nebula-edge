@@ -6,6 +6,7 @@ UTILIDAD PRINCIPAL
     mensajes protobuf ni filas de Postgres directamente.
 
         Timeouts        todos los tiempos del servidor, en un solo lugar
+        BleContext      lo que solo el transporte BLE necesita
         ConfigData      configuración de un device (protocolo, sensores, red)
         Environmental   telemetría ambiental del BME688 (ritmo lento)
         Inertial        acelerómetro, giroscopio y magnetómetro (ritmo rápido)
@@ -32,6 +33,27 @@ AJUSTAR LOS TIEMPOS
 """
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass
+class BleContext:
+    """Lo que el transporte BLE necesita y los otros tres no tienen.
+
+    Antes estos seis campos viajaban sueltos por toda la cadena -descubrimiento,
+    despacho y DeviceSession- uno por uno. MQTT, UDP y TCP los recibían y los
+    ignoraban: la clase base tenía la forma de uno solo de sus cuatro casos, y
+    agregarle algo a BLE ensanchaba la firma de los cuatro.
+
+    Los tipos van como Any a propósito: este módulo no importa nada del proyecto
+    ni de bleak, para que no haya ciclos (ver la cabecera del archivo).
+    """
+    device: Any                 # BLEDevice de bleak
+    adapter: str | None = None  # interfaz BlueZ; el backend de macOS lo ignora
+    scanner_lock: Any = None    # asyncio.Lock para coordinar el escaneo
+    scanner_stop: Any = None    # callable que detiene el scanner
+    scanner_start: Any = None   # callable que lo reanuda
+    client: Any = None          # conexión que dejó abierta el descubrimiento
 
 
 @dataclass

@@ -34,10 +34,9 @@ class TcpSessionTests(unittest.IsolatedAsyncioTestCase):
 
     def _build_session(self, repo, port, timeouts):
         return sessions.TCPDeviceSession(
-            FakeBLEDevice(),
+            FakeBLEDevice().address,
             make_config(1, tcp_port=port),
             repo,
-            None, None, None, None,
             timeouts,
         )
 

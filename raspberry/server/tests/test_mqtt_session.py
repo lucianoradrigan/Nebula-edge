@@ -54,7 +54,7 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
 
     def _build_session(self, repo, timeouts):
         return sessions.MQTTDeviceSession(
-            FakeBLEDevice(), make_config(1), repo, None, None, None, None, timeouts,
+            FakeBLEDevice().address, make_config(1), repo, timeouts,
         )
 
     async def _wait_until(self, predicate, timeout=5.0):

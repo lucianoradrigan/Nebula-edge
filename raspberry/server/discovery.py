@@ -35,7 +35,7 @@ from bleak.exc import BleakDBusError
 from bleak.backends.device import BLEDevice
 
 from gatt_uuids import UUID_CHAR_A
-from models import Timeouts, ConfigData, Log
+from models import BleContext, Timeouts, ConfigData, Log
 from codec import DataCodec
 from system import utc_epoch_now, BLEAdapterResolver
 from repository import DatabaseRepository
@@ -248,15 +248,18 @@ class DeviceDiscovery:
         last_protocol = -1
         try:
             last_protocol = await handle_protocol(
-                device,
+                device.address,
                 self.db_dsn,
                 initial_config,
-                scanner_lock=self.scanner_lock,
-                scanner_stop=self._scanner_stop,
-                scanner_start=self._scanner_start,
-                ble_adapter=self.ble_adapter,
                 timeouts=self.timeouts,
-                ble_client=ble_client,
+                ble=BleContext(
+                    device=device,
+                    adapter=self.ble_adapter,
+                    scanner_lock=self.scanner_lock,
+                    scanner_stop=self._scanner_stop,
+                    scanner_start=self._scanner_start,
+                    client=ble_client,
+                ),
             )
         finally:
             if ble_client is not None and ble_client.is_connected:
