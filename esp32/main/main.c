@@ -88,19 +88,53 @@ TaskHandle_t response_task[PROTOCOL_COUNT] = {NULL};
 static uint32_t data_window_count = 0;
 
 
-/* Los paquetes de control (ACK de config, aviso de deep sleep) no esperan respuesta:
- * se mandan varias veces seguidas para bajar la probabilidad de que se pierdan, en
- * vez de implementar un segundo hop de confirmación (que agregaría otro flanco de
- * pérdida en vez de reducir el riesgo). */
+/*****************************************************************/
+/********************* TIEMPOS DEL FIRMWARE **********************/
+/*****************************************************************/
+/* Todos los tiempos fijos, en un solo lugar, con el porqué de cada uno.
+ *
+ * El equivalente del `Timeouts` del servidor (raspberry/server/models.py).
+ * Antes estos números estaban repartidos por el archivo -un 3000 antes de
+ * dormir, dos 5000 en ramas distintas del switch, un 50 duplicado en las dos
+ * productoras-, así que ajustar el comportamiento obligaba a cazarlos de a uno
+ * y no había dónde leer cuál era cuál.
+ *
+ * Los tiempos que SÍ son configurables desde el servidor no viven acá: vienen
+ * en el Config (send_interval_s, env_interval_s, sleep_time_s). */
+
+/* Los paquetes de control (ACK de config, aviso de deep sleep) no esperan
+ * respuesta: se mandan varias veces seguidas para bajar la probabilidad de que
+ * se pierdan, en vez de implementar un segundo hop de confirmación (que
+ * agregaría otro flanco de pérdida en vez de reducir el riesgo). */
 #define CONTROL_PKT_REDUNDANCY 3
 #define CONTROL_PKT_REDUNDANCY_DELAY_MS 50
 
-/* Cuánto se espera, tras mandar el ACK de un cambio de protocolo, antes de
- * cerrar el transporte: si se cierra demasiado pronto el ACK no llega y el
- * servidor da la sesión por perdida. Era 4000 en MQTT y 2000 en UDP/TCP;
- * unificado al mayor, que es la dirección segura (el viaje al broker MQTT es
- * el más lento). Solo se paga al cambiar de protocolo, no en régimen. */
+/* Entre el ACK de un cambio de protocolo y el cierre del transporte. Si se
+ * cierra demasiado pronto el ACK no llega y el servidor da la sesión por
+ * perdida. Era 4000 en MQTT y 2000 en UDP/TCP; unificado al mayor, que es la
+ * dirección segura (el viaje al broker MQTT es el más lento). Solo se paga al
+ * cambiar de protocolo, no en régimen. */
 #define ACK_DRAIN_MS 4000
+
+/* Entre soltar el bus I2C y dormirse de verdad. Le da margen a la radio para
+ * terminar de vaciar lo que haya encolado antes de que se corte la
+ * alimentación de los periféricos. */
+#define DEEP_SLEEP_SETTLE_MS 3000
+
+/* Espera tras abrir el transporte, antes de empezar a mandar. El servidor
+ * necesita un momento para suscribirse al tópico (MQTT) o para terminar de
+ * configurar la sesión (BLE); si se le manda antes, ese primer paquete se
+ * pierde. */
+#define SERVER_READY_MS 5000
+
+/* Reintento de una productora cuando malloc() falla. Corto a propósito: es una
+ * condición transitoria y volver a intentar enseguida es mejor que perder el
+ * ritmo de muestreo. */
+#define ALLOC_RETRY_MS 50
+
+/* Antes de reiniciar por un protocol_conf inválido, para que el log alcance a
+ * salir por el puerto serie. */
+#define RESTART_LOG_FLUSH_MS 1000
 
 /* Vacía xQueueData liberando la memoria de cada packet_t pendiente.
  *
@@ -602,8 +636,7 @@ static void deep_sleep_if_needed(void) {
     bmi270_deinit();
     i2c_master_deinit(&bus_handle);
     
-    // Delay de precaución
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    vTaskDelay(pdMS_TO_TICKS(DEEP_SLEEP_SETTLE_MS));
     
     ESP_LOGI(TAG, "Entrando deep sleep por %lu s", (unsigned long)current_config->sleep_time_s);
     device_clock_save_before_deep_sleep(sleep_us);
@@ -766,7 +799,7 @@ void vTaskCollectInertial(void *pvParameters) {
         packet.data = malloc(packet.size);
         if (packet.data == NULL) {
             ESP_LOGE(TAG_COLLECT_INERTIAL, "Error: no se pudo reservar memoria para el paquete");
-            vTaskDelay(pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(ALLOC_RETRY_MS));
             continue;
         }
         packet.data[0] = 0x02;
@@ -814,7 +847,7 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         packet.data = malloc(packet.size);
         if (packet.data == NULL) {
             ESP_LOGE(TAG_COLLECT_ENV, "Error: no se pudo reservar memoria para el paquete");
-            vTaskDelay(pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(ALLOC_RETRY_MS));
             continue;
         }
         packet.data[0] = 0x01;
@@ -1149,7 +1182,7 @@ void app_main() {
                 mqtt_start(&mqtt_config);
 
                 // Da tiempo a la Raspberry para conectarse al broker antes de enviar datos
-                vTaskDelay(5000 / portTICK_PERIOD_MS);
+                vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
 
                 // Suscribe al tópico de configuración por dispositivo
                 char topic_cfg[128];
@@ -1264,7 +1297,7 @@ void app_main() {
                 }
 
                 // Da tiempo a la Raspberry para estar lista
-                vTaskDelay(5000 / portTICK_PERIOD_MS);
+                vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
 
                 start_protocol_tasks(&PROTOCOLS[PROTOCOL_BLE]);
 
@@ -1279,7 +1312,7 @@ void app_main() {
             // Protocolo inválido
             default: {
                 ESP_LOGE(TAG, "Selección de protocolo inválida: %ld", current_config->protocol_conf);
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                vTaskDelay(pdMS_TO_TICKS(RESTART_LOG_FLUSH_MS));
                 esp_restart();
                 break;
             }
