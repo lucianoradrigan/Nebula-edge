@@ -126,21 +126,21 @@ void nebulaedge_udp_open_socket(udp_params_t *params) {
 
 /* Envía un array de bytes de 8 bits (uint8_t *) a la dirección IP
  * de destino configurada al abrir el socket. */
-void nebulaedge_udp_send(const uint8_t *data, size_t len) {
+esp_err_t nebulaedge_udp_send(const uint8_t *data, size_t len) {
     if (sock < 0) {
         ESP_LOGE(TAG, "Socket is closed");
-
-        // MANEJAR ESTE CASO
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     // Envía payload a una dirección IP y puerto
     int err = sendto(sock, data, len, 0, dest_addr, sizeof(*dest_addr));
     if (err < 0) {
         ESP_LOGE(TAG, "Error occurred during sending: %s", strerror(errno));
-        return;
+        return ESP_FAIL;
     }
+
     ESP_LOGI(TAG, "UDP packet sent");
+    return ESP_OK;
 }
 
 /* Recibe datos del socket preconfigurado. MODO BLOQUEANTE. */

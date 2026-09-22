@@ -173,15 +173,15 @@ int nebulaedge_tcp_connect(void) {
 
 // Esto aún no maneja el caso de conexión caída!! Se queda caída
 // hasta reiniciar
-void tcp_send(uint8_t *data, size_t len) {
+esp_err_t tcp_send(const uint8_t *data, size_t len) {
     if (sock < 0) {
         ESP_LOGE(TAG, "Socket is closed");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     if (len == 0 || len > TCP_MAX_FRAME_BYTES) {
         ESP_LOGE(TAG, "Largo de paquete fuera de rango: %u B", (unsigned)len);
-        return;
+        return ESP_ERR_INVALID_SIZE;
     }
 
     /* Header y payload en un solo buffer. Con dos send() separados, una
@@ -191,7 +191,7 @@ void tcp_send(uint8_t *data, size_t len) {
     uint8_t *frame = malloc(frame_len);
     if (frame == NULL) {
         ESP_LOGE(TAG, "Sin memoria para el frame TCP (%u B)", (unsigned)frame_len);
-        return;
+        return ESP_ERR_NO_MEM;
     }
     frame[0] = (uint8_t)((len >> 8) & 0xFF);    // big-endian (orden de red)
     frame[1] = (uint8_t)(len & 0xFF);
@@ -221,9 +221,12 @@ void tcp_send(uint8_t *data, size_t len) {
 
     free(frame);
 
-    if (!failed) {
-        ESP_LOGI(TAG, "TCP packet sent (%u B de payload)", (unsigned)len);
+    if (failed) {
+        return ESP_FAIL;
     }
+
+    ESP_LOGI(TAG, "TCP packet sent (%u B de payload)", (unsigned)len);
+    return ESP_OK;
 }
 
 /* Lee exactamente `n` bytes del socket. Retorna true si los completó.

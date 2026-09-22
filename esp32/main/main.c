@@ -298,13 +298,18 @@ typedef struct {
     protocol_t  id;              // el mismo valor que protocol_conf del Config
 
     /* Manda un paquete de telemetría ya serializado. En MQTT va al tópico
-     * /data; en BLE, a la característica B. */
-    void (*send_data)(const uint8_t *data, size_t size);
+     * /data; en BLE, a la característica B.
+     *
+     * Devuelve esp_err_t en los cuatro. Antes era void porque cada transporte
+     * reportaba distinto -esp_err_t en BLE, msg_id en MQTT, nada en UDP y
+     * TCP-, así que un fallo de envío se veía en MQTT y era invisible en los
+     * otros tres. */
+    esp_err_t (*send_data)(const uint8_t *data, size_t size);
 
     /* Manda UN ACK de config ya serializado. El caller repite la llamada
      * `control_repeats` veces. En MQTT va al tópico /config/ack; en BLE, a la
      * característica D, que es distinta de la de telemetría. */
-    void (*send_ack)(const Config *cfg, const uint8_t *buf, size_t size);
+    esp_err_t (*send_ack)(const Config *cfg, const uint8_t *buf, size_t size);
 
     /* Bloquea hasta que llegue una config nueva y la devuelve desempaquetada,
      * o NULL si lo que llegó no servía. El caller la libera.
@@ -339,23 +344,25 @@ typedef struct {
 
 /* ------------------------------------------------------------------- MQTT */
 
-static void mqtt_send_data(const uint8_t *data, size_t size) {
+static esp_err_t mqtt_send_data(const uint8_t *data, size_t size) {
     char topic_data[128];
     snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
 
+    /* esp-mqtt devuelve el msg_id, o negativo si falló. Se traduce a esp_err_t
+     * para que los cuatro transportes hablen el mismo idioma. */
     int msg_id = mqtt_publish(topic_data, data, size, 0);
     if (msg_id < 0) {
-        ESP_LOGE(TAG_SEND_MQTT, "Error al publicar por MQTT. msg_id=%d", msg_id);
+        return ESP_FAIL;
     }
-    else {
-        ESP_LOGI(TAG_SEND_MQTT, "Paquete publicado por MQTT. msg_id=%d", msg_id);
-    }
+
+    ESP_LOGI(TAG_SEND_MQTT, "Paquete publicado por MQTT. msg_id=%d", msg_id);
+    return ESP_OK;
 }
 
-static void mqtt_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
+static esp_err_t mqtt_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
     char topic_ack[128];
     snprintf(topic_ack, sizeof(topic_ack), "/topic/nebulaedge/%s/config/ack", cfg->id_device);
-    mqtt_publish(topic_ack, buf, size, 0);
+    return mqtt_publish(topic_ack, buf, size, 0) < 0 ? ESP_FAIL : ESP_OK;
 }
 
 /* La config llega cruda por la cola y se desempaqueta acá, igual que en BLE:
@@ -383,13 +390,13 @@ static Config *mqtt_recv_config(void) {
 
 /* -------------------------------------------------------------------- UDP */
 
-static void udp_send_data(const uint8_t *data, size_t size) {
-    nebulaedge_udp_send(data, size);
+static esp_err_t udp_send_data(const uint8_t *data, size_t size) {
+    return nebulaedge_udp_send(data, size);
 }
 
-static void udp_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
+static esp_err_t udp_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
     (void)cfg;    // UDP no direcciona dentro de la conexión
-    nebulaedge_udp_send(buf, size);
+    return nebulaedge_udp_send(buf, size);
 }
 
 static Config *udp_recv_config(void) {
@@ -411,13 +418,13 @@ static Config *udp_recv_config(void) {
 
 /* -------------------------------------------------------------------- TCP */
 
-static void tcp_send_data(const uint8_t *data, size_t size) {
-    tcp_send((uint8_t *)data, size);
+static esp_err_t tcp_send_data(const uint8_t *data, size_t size) {
+    return tcp_send(data, size);
 }
 
-static void tcp_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
+static esp_err_t tcp_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
     (void)cfg;
-    tcp_send((uint8_t *)buf, size);
+    return tcp_send(buf, size);
 }
 
 static Config *tcp_recv_config(void) {
@@ -438,11 +445,11 @@ static Config *tcp_recv_config(void) {
 
 /* -------------------------------------------------------------------- BLE */
 
-static void ble_send_data(const uint8_t *data, size_t size) {
-    set_char_with_notify(IDX_CHAR_VAL_B_BLE, data, size);
+static esp_err_t ble_send_data(const uint8_t *data, size_t size) {
+    return set_char_with_notify(IDX_CHAR_VAL_B_BLE, data, size);
 }
 
-static void ble_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
+static esp_err_t ble_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
     (void)cfg;
 
     /* Char D, distinta de la de telemetría: el ACK queda ahí legible, así que
@@ -453,6 +460,7 @@ static void ble_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
         ESP_LOGW(TAG_GET_RSP_BLE, "BLE: ACK no se pudo notificar (%s); queda legible en char D.",
                  esp_err_to_name(ret));
     }
+    return ret;
 }
 
 /* En BLE la config llega cruda por la cola y hay que desempaquetarla acá. */
@@ -571,9 +579,16 @@ static void deep_sleep_if_needed(void) {
      * Va por send_data() y no por send_ack(): el flag viaja por el mismo canal
      * que la telemetría (tópico /data en MQTT, característica B en BLE), no por
      * el de los ACKs. */
+    int flag_sent = 0;
     for (int i = 0; i < proto->control_repeats; i++) {
-        proto->send_data((const uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN);
+        if (proto->send_data((const uint8_t *)DEEP_SLEEP_FLAG, DEEP_SLEEP_FLAG_LEN) == ESP_OK) {
+            flag_sent++;
+        }
         vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
+    }
+    if (flag_sent == 0) {
+        ESP_LOGW(TAG, "%s: el aviso de deep sleep no salió; el servidor va a ver una caída",
+                 proto->name);
     }
 
     proto->close();
@@ -649,13 +664,26 @@ static void send_config_ack(protocol_t over, const Config *cfg, bool applied) {
     }
     config_ack__pack(&ack, buf);
 
+    int sent = 0;
     for (int i = 0; i < proto->control_repeats; i++) {
-        proto->send_ack(cfg, buf, size);
+        if (proto->send_ack(cfg, buf, size) == ESP_OK) {
+            sent++;
+        }
         vTaskDelay(pdMS_TO_TICKS(CONTROL_PKT_REDUNDANCY_DELAY_MS));
     }
 
     free(buf);
-    ESP_LOGI(TAG, "%s: ACK de config enviado.", proto->name);
+
+    /* Con que salga una copia alcanza; el servidor descarta las repetidas. Que
+     * no salga ninguna sí importa: el servidor va a dar la config por no
+     * aplicada y cerrar la sesión. */
+    if (sent == 0) {
+        ESP_LOGE(TAG, "%s: NINGUNA copia del ACK de config pudo enviarse", proto->name);
+    }
+    else {
+        ESP_LOGI(TAG, "%s: ACK de config enviado (%d/%d copias).",
+                 proto->name, sent, proto->control_repeats);
+    }
 }
 
 /* Encola un paquete ya serializado, liberando su memoria si la cola lo rechaza.
@@ -825,7 +853,11 @@ void vTaskSendData(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(proto->pre_send_delay_ms));
         }
 
-        proto->send_data(packet.data, packet.size);
+        esp_err_t send_ret = proto->send_data(packet.data, packet.size);
+        if (send_ret != ESP_OK) {
+            ESP_LOGE(proto->send_tag, "Paquete perdido: el envío falló (%s)",
+                     esp_err_to_name(send_ret));
+        }
 
         // Respaldo local, solo en modo deep sleep.
         if (current_config->sleep_time_s > 0) {
