@@ -358,11 +358,25 @@ static void mqtt_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
     mqtt_publish(topic_ack, buf, size, 0);
 }
 
-/* El componente MQTT desempaqueta la config y deja el Config* en la cola. */
+/* La config llega cruda por la cola y se desempaqueta acá, igual que en BLE:
+ * los componentes de transporte mueven bytes y no conocen el formato de cable. */
 static Config *mqtt_recv_config(void) {
-    Config *cfg = NULL;
-    if (xQueueReceive(xQueueConfig, &cfg, pdMS_TO_TICKS(TASK_POLL_MS)) != pdTRUE) {
+    packet_t pkt;
+
+    if (xQueueReceive(xQueueConfig, &pkt, pdMS_TO_TICKS(TASK_POLL_MS)) != pdTRUE) {
         return NULL;    // nada todavía; la task vuelve a mirar la compuerta
+    }
+
+    if (pkt.data == NULL || pkt.size == 0) {
+        free(pkt.data);
+        return NULL;
+    }
+
+    Config *cfg = config__unpack(NULL, pkt.size, pkt.data);
+    free(pkt.data);
+
+    if (cfg == NULL) {
+        ESP_LOGW(TAG_GET_RSP_MQTT, "Error al desempaquetar la configuración MQTT");
     }
     return cfg;
 }
@@ -972,7 +986,7 @@ void app_main() {
 
     // Crea queues para pasar datos entre tasks
     xQueueData = xQueueCreate(100, sizeof(packet_t));
-    xQueueConfig = xQueueCreate(5, sizeof(Config *));
+    xQueueConfig = xQueueCreate(5, sizeof(packet_t));
     xQueueConfigBle = xQueueCreate(5, sizeof(packet_t));
 
     /* Entrega a los componentes lo que necesitan para avisar hacia acá.

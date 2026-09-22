@@ -12,8 +12,6 @@
 #include "nebulaedge_mqtt.h"
 #include "nebulaedge_defs.h"
 
-#include "schema.pb-c.h"
-
 static const char *TAG = "nebulaedge_mqtt";
 
 /* Cola de configuraciones entrantes. La pone la aplicación con
@@ -112,21 +110,32 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                 if (topic_len >= suffix_len &&
                     strncmp(event->topic + (topic_len - suffix_len), suffix, suffix_len) == 0) {
                     ESP_LOGI(TAG, "MQTT config topic: %.*s", (int)topic_len, event->topic);
-                    Config *new_config = config__unpack(NULL, event->data_len, (uint8_t *)event->data);
 
-                    if (new_config == NULL) {
-                        ESP_LOGE(TAG, "Error al desempaquetar configuración MQTT");
-                    } 
+                    /* Se encolan los bytes crudos, sin desempaquetar. Este
+                     * componente mueve bytes y no tiene por qué conocer el
+                     * formato de cable; la aplicación, que sí lo conoce, hace
+                     * el config__unpack en su recv_config. Es el mismo
+                     * contrato que ya usaba BLE. */
+                    if (s_config_queue == NULL) {
+                        ESP_LOGW(TAG, "Sin cola de config (mqtt_set_config_queue no fue llamada), se descarta");
+                    }
+                    else if (event->data_len <= 0) {
+                        ESP_LOGW(TAG, "Config MQTT vacía, se descarta");
+                    }
                     else {
-                        ESP_LOGI(TAG, "Configuración MQTT desempaquetada correctamente");
-                        // Envía el puntero a la queue para que main lo procese
-                        if (s_config_queue == NULL) {
-                            ESP_LOGW(TAG, "Sin cola de config (mqtt_set_config_queue no fue llamada), se descarta");
-                            config__free_unpacked(new_config, NULL);
+                        packet_t pkt = {
+                            .size = (size_t)event->data_len,
+                            .data = malloc((size_t)event->data_len),
+                        };
+                        if (pkt.data == NULL) {
+                            ESP_LOGE(TAG, "Sin memoria para la config MQTT entrante");
                         }
-                        else if (xQueueSend(s_config_queue, &new_config, 0) != pdTRUE) {
-                            ESP_LOGW(TAG, "xConfigQueue FULL, configuración descartada");
-                            config__free_unpacked(new_config, NULL);
+                        else {
+                            memcpy(pkt.data, event->data, (size_t)event->data_len);
+                            if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
+                                ESP_LOGW(TAG, "Cola de config llena, configuración descartada");
+                                free(pkt.data);
+                            }
                         }
                     }
                 }
