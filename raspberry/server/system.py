@@ -59,7 +59,17 @@ def utc_epoch_now() -> int:
     return int(time.time())
 
 class BLEAdapterResolver:
-    """Utilidades para resolver qué adaptador BLE usar."""
+    """Utilidades para resolver qué adaptador BLE usar.
+
+    Solo tiene efecto sobre BlueZ (Linux). El backend CoreBluetooth de macOS
+    ignora el kwarg `adapter=`, así que ahí lo que se resuelva da igual.
+    """
+
+    # Adaptador de la placa. Es el último recurso, cuando no hay ninguno USB.
+    DEFAULT_ADAPTER = "hci1"
+
+    # Valores de BLE_ADAPTER que significan "decidilo vos", no un nombre.
+    _AUTO_SENTINELS = ("auto", "usb")
 
     @staticmethod
     def detect_usb_adapter() -> str:
@@ -93,12 +103,20 @@ class BLEAdapterResolver:
         3) Fallback a `hci1`.
         """
         env_value = os.getenv("BLE_ADAPTER", "").strip()
-        if env_value and env_value.lower() not in ("auto", "usb"):
+
+        # Un nombre explícito gana sobre todo lo demás.
+        if env_value and env_value.lower() not in cls._AUTO_SENTINELS:
             return env_value
+
         detected = cls.detect_usb_adapter()
         if detected:
             return detected
-        return "hci1" if not env_value else env_value
+
+        # Sin adaptador USB detectado se cae al de la placa. El valor centinela
+        # NO se devuelve tal cual: antes, con BLE_ADAPTER=auto -que es lo que
+        # pone docker-compose.yml- esta función devolvía la cadena "auto", y
+        # bleak recibía "auto" como si fuera un nombre de interfaz.
+        return cls.DEFAULT_ADAPTER
 
 class LocalWifiConfig:
     """Obtiene datos de WiFi local usando nmcli con cache temporal."""

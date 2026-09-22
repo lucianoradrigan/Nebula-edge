@@ -970,9 +970,9 @@ void app_main() {
     // Obtiene MAC BT del dispositivo
     device_id_init();
 
-    // Inicializa semáforos binario. Inician cerrados.
+    /* Semáforo binario, arranca cerrado. Lo libera la task de respuesta al
+     * cambiar de protocolo, y lo espera app_main en cada rama del switch. */
     semaphore = xSemaphoreCreateBinary();
-    semaphore_ble = xSemaphoreCreateBinary();
 
     /* Compuerta de las tasks de sensores. Arranca con el permiso dado, para que
      * una productora recién creada produzca sin esperar a nadie. */

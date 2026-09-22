@@ -48,7 +48,6 @@ typedef struct {
 extern const uint8_t DEEP_SLEEP_FLAG[DEEP_SLEEP_FLAG_LEN];
 
 extern SemaphoreHandle_t semaphore;
-extern SemaphoreHandle_t semaphore_ble;
 
 
 /*****************************************************************/

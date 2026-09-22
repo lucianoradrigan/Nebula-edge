@@ -123,7 +123,10 @@ class DatabaseRepository:
                 row = cursor.fetchone()
 
                 if row:
-                    host_ip_addr, ssid, passwd = LocalWifiConfig.get(cache_ttl_sec=0)
+                    # Con el TTL por defecto: sin esto, cada get_config lanzaba
+                    # cuatro subprocesos nmcli. El SSID y la IP del host no
+                    # cambian entre dos lecturas seguidas de la misma tabla.
+                    host_ip_addr, ssid, passwd = LocalWifiConfig.get()
                     time_cli = utc_epoch_now()
                     return ConfigData(
                         id_device=row[0],
