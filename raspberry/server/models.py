@@ -56,13 +56,22 @@ class BleContext:
     client: Any = None          # conexión que dejó abierta el descubrimiento
 
 
-@dataclass
+@dataclass(frozen=True)
 class Timeouts:
     """Todos los tiempos del servidor, centralizados.
 
     Se arma una vez en DeviceDiscovery y baja por descubrimiento -> despacho
     -> sesión -> transporte. Los tests construyen uno con valores chicos para
     que la suite corra en segundos en vez de minutos.
+
+    FROZEN A PROPÓSITO
+        Todas las sesiones vivas comparten LA MISMA instancia, que es lo que
+        hace cierto el "centralizados" de arriba. Sin congelar, un
+        `session.timeouts.config_ack_sec = 0` en cualquier parte se lo cambiaría
+        a todos los devices a la vez. Nadie escribe hoy en estos campos, así que
+        congelarlo no cambia comportamiento: solo deja que el lenguaje garantice
+        lo que antes era una convención. Para una variante se construye otro
+        (`Timeouts(**valores)` o `dataclasses.replace(t, campo=...)`).
     """
     # --- descubrimiento BLE (discovery.py) ---
     ble_connect_sec: float = 30.0       # Espera máxima al conectar con BleakClient

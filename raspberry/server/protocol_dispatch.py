@@ -50,7 +50,7 @@ async def handle_protocol(
     """Despacha la sesión según el protocolo configurado en `ConfigData`."""
     config = initial_config
     idx = None
-    timeouts = timeouts or Timeouts()
+    timeouts = Timeouts() if timeouts is None else timeouts
     database_repo = DatabaseRepository(db_dsn)
     session_classes = {
         PROTOCOL_MQTT: MQTTDeviceSession,

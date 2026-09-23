@@ -69,7 +69,7 @@ class DeviceDiscovery:
         self.devices = {}                                                   # Estado por dispositivo descubierto
         self.shared_queue = asyncio.Queue()                                 # Cola de dispositivos descubiertos
         self.max_parallel_connects = max_parallel_connects                  # Límite de conexiones simultáneas
-        self.timeouts = timeouts or Timeouts()                              # Timeouts centralizados
+        self.timeouts = Timeouts() if timeouts is None else timeouts        # Timeouts centralizados (models.py)
         self.last_connect_attempt: Dict[str, float] = {}                    # Diccionario de últimos intentos por dispositivo
         self.active_tasks: Dict[str, asyncio.Task] = {}                     # Tasks activas por dispositivo
         self.scanner = None                                                 # Instancia de BleakScanner

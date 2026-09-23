@@ -69,7 +69,7 @@ class DeviceSession:
         self.device_id = device_id                      # ID del dispositivo
         self.database_repo = database_repo              # Repositorio compartido para config y telemetría
         self.config = initial_config                    # Configuración actual en memoria del device
-        self.timeouts = timeouts or Timeouts()          # Timeouts centralizados
+        self.timeouts = Timeouts() if timeouts is None else timeouts  # Timeouts centralizados
         self.ble = ble                                  # Contexto BLE, o None en los otros tres
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
         self._last_client_time: int | None = None       # Último time_client recibido (Environmental/Inertial)
