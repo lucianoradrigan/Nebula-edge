@@ -50,34 +50,4 @@ extern const uint8_t DEEP_SLEEP_FLAG[DEEP_SLEEP_FLAG_LEN];
 extern SemaphoreHandle_t semaphore;
 
 
-/*****************************************************************/
-/*************************** SENSORES ****************************/
-/*****************************************************************/
-
-/* Frecuencia MASTER */
-#define I2C_MASTER_FREQ_HZ              100000
-
-/* Pines I2C */
-#define I2C_MASTER_SCL_IO				GPIO_NUM_2			    // GPIO pin I2C master GPIO_NUM_47 imv1 GPIO_NUM_2 imv2
-#define I2C_MASTER_SDA_IO				GPIO_NUM_42				// GPIO pin I2C master GPIO_NUM_48 imv1 GPIO_NUM_42 imv2
-
-/* Las direcciones I2C de los sensores viven ahora en el header de su driver
- * (BME688_SLAVE_ADDR, BMI270_SLAVE_ADDR, BMM350_SLAVE_ADDR): son propiedad del
- * integrado, no de la placa. */
-
-/* Pines SPI (microsd)*/
-#define PIN_NUM_CS                          GPIO_NUM_1         // GPIO pin GPIO_NUM_1 im-v1
-#define PIN_NUM_MOSI                        GPIO_NUM_21        // GPIO pin GPIO_NUM_2 im-v1
-#define PIN_NUM_CLK                         GPIO_NUM_38        // GPIO pin GPIO_NUM_43 im-v1
-#define PIN_NUM_MISO                        GPIO_NUM_47        // GPIO pin GPIO_NUM_44 im-v1
-
-/* SD */
-#define FORMAT_IF_MOUNT_FAILED              true
-
-/* Los Output Data Rate de cada sensor viven ahora en el header de su driver
- * (BMI270_ODR_*, BMM350_ODR_*): son propiedad del chip, no de la placa, y
- * tenerlos acá obligaba a cada driver a depender de este archivo. */
-
-/* CONCAT_BYTES vive ahora en bme688.h, su único usuario. */
-
 #endif

@@ -18,6 +18,7 @@
 #include "nebulaedge_tcp.h"
 #include "nebulaedge_ble.h"
 #include "nebulaedge_defs.h"
+#include "board_pinout.h"
 #include "nebulaedge_config_store.h"
 #include "nebulaedge_device.h"
 #include "nebulaedge_i2c.h"
@@ -1125,8 +1126,17 @@ void app_main() {
      * O sea que el firmware parece guardar respaldo local y no lo hace.
      *
      * Para reactivarlo hay que resolver antes el conflicto de pines en
-     * nebulaedge_defs.h (PIN_NUM_CS). */
-    // esp_err_t sd_ret = sd_mount();
+     * board_pinout.h (PIN_NUM_CS), y contrastar los cuatro pines SPI con el
+     * esquemático: hasta ahora nebulaedge_microsd.c se definía los suyos con
+     * los valores de im-v1, distintos de los que documentaba defs.h. */
+    // static const sd_pins_t sd_pins = {
+    //     .cs_io   = PIN_NUM_CS,
+    //     .mosi_io = PIN_NUM_MOSI,
+    //     .clk_io  = PIN_NUM_CLK,
+    //     .miso_io = PIN_NUM_MISO,
+    //     .format_if_mount_failed = true,
+    // };
+    // esp_err_t sd_ret = sd_mount(&sd_pins);
     // if (sd_ret != ESP_OK) {
     //     ESP_LOGW(TAG, "SD no disponible, se continúa sin persistencia local: %s", esp_err_to_name(sd_ret));
     // }

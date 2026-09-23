@@ -18,16 +18,22 @@
 #include "esp_vfs_fat.h"
 #include "esp_err.h"
 
-#define PIN_NUM_MOSI                        GPIO_NUM_2         // GPIO pin
-#define PIN_NUM_CLK                         GPIO_NUM_43        // GPIO pin
-#define PIN_NUM_MISO                        GPIO_NUM_44        // GPIO pin
-#define PIN_NUM_CS                          GPIO_NUM_1         // GPIO pin
-#define FORMAT_IF_MOUNT_FAILED              true
+#include "nebulaedge_microsd.h"
+
+/* El pinout lo entrega la aplicación en sd_mount(); ver el header. */
 #define SD_NEAR_FULL_THRESHOLD_BYTES        128 * 1024 * 1000  // 64 MB de threshold
 
 sdmmc_card_t *card;
 sdmmc_host_t host = SDSPI_HOST_DEFAULT();
 static bool s_spi_bus_inited = false;
+
+/* Último pinout que entregó la aplicación en sd_mount(). Lo guardamos porque
+ * sd_format() remonta por su cuenta cuando la tarjeta no está montada, y este
+ * componente no tiene otra forma de saber en qué pines está la SD. `s_has_pins`
+ * distingue "nunca se llamó a sd_mount" de un struct en cero, que serían pines
+ * válidos (GPIO 0). */
+static sd_pins_t s_pins;
+static bool s_has_pins = false;
 static bool s_sd_mounted = false;
 static const char *TAG = "nebulaedge_microsd";
 
@@ -36,19 +42,28 @@ bool sd_is_mounted(void) {
     return s_sd_mounted;
 }
 
-/* Monta la tarjeta SD en /sdcard asignando recursos correspondientes. */
-esp_err_t sd_mount(void) {
+/* Monta la tarjeta SD en /sdcard asignando recursos correspondientes.
+ * `pins` lo entrega la aplicación: este componente no conoce la placa. */
+esp_err_t sd_mount(const sd_pins_t *pins) {
     esp_err_t ret;
+
+    if (pins == NULL) {
+        ESP_LOGE(TAG, "sd_mount sin pinout");
+        return ESP_ERR_INVALID_ARG;
+    }
 
     if (s_sd_mounted) {
         ESP_LOGI(TAG, "Filesystem already mounted");
         return ESP_OK;
     }
 
+    s_pins = *pins;
+    s_has_pins = true;
+
     spi_bus_config_t bus_cfg = {
-        .mosi_io_num = PIN_NUM_MOSI,
-        .miso_io_num = PIN_NUM_MISO,
-        .sclk_io_num = PIN_NUM_CLK,
+        .mosi_io_num = pins->mosi_io,
+        .miso_io_num = pins->miso_io,
+        .sclk_io_num = pins->clk_io,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = 4000,
@@ -66,12 +81,12 @@ esp_err_t sd_mount(void) {
 
     // Configuración del dispositivo SPI para la tarjeta SD
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = PIN_NUM_CS;
+    slot_config.gpio_cs = pins->cs_io;
     slot_config.host_id = host.slot;
 
     // Opciones para el sistema de archivos
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = FORMAT_IF_MOUNT_FAILED,
+        .format_if_mount_failed = pins->format_if_mount_failed,
         .max_files = 5,
         .allocation_unit_size = 16 * 1024
     };
@@ -96,7 +111,11 @@ esp_err_t sd_format(void) {
     esp_err_t ret;
 
     if (!s_sd_mounted) {
-        ret = sd_mount();
+        if (!s_has_pins) {
+            ESP_LOGE(TAG, "Cannot format SD: la aplicación nunca llamó a sd_mount()");
+            return ESP_ERR_INVALID_STATE;
+        }
+        ret = sd_mount(&s_pins);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Cannot format SD: mount failed: %s", esp_err_to_name(ret));
             return ret;
