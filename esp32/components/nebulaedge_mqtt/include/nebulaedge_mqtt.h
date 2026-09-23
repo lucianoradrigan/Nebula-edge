@@ -16,6 +16,13 @@
  * el log: el componente sigue publicando y suscribiendo igual. */
 void mqtt_set_config_queue(QueueHandle_t queue);
 
+/* Broker al que conectarse. Vivía en nebulaedge_defs.h; es parte de la API de
+ * este componente. Se puede extender muchísimo: mirar los campos de
+ * esp_mqtt_client_config_t. Por ahora, por simpleza, solo el broker. */
+typedef struct {
+    const char *broker;
+} mqtt_config_global;
+
 void mqtt_start(const mqtt_config_global *mqtt_config_global);
 int mqtt_publish(const char *topic, const uint8_t *data, size_t len, int qos);
 int mqtt_subscribe(const char *topic, int qos);

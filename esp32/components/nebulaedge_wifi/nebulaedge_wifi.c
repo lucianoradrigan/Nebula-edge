@@ -14,7 +14,6 @@
 #include "lwip/sys.h"
 
 #include "nebulaedge_wifi.h"
-#include "nebulaedge_defs.h"
 
 // FreeRTOS event group to signal when we are connected
 static EventGroupHandle_t s_wifi_event_group;

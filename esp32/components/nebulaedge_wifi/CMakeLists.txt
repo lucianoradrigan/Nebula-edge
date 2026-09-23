@@ -1,6 +1,6 @@
 idf_component_register(SRCS "nebulaedge_wifi.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES esp_wifi nvs_flash nebulaedge_defs)
+                    REQUIRES esp_wifi nvs_flash)
 
 if(CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE)
    # some variables are only used by asserts

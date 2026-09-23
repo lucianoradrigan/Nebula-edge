@@ -34,6 +34,13 @@ QueueHandle_t xQueueConfig = NULL;
 QueueHandle_t xQueueData = NULL;
 QueueHandle_t xQueueConfigBle = NULL;
 
+/* Semáforo de arranque: lo da la task que recibe la primera configuración y lo
+ * toman las tasks de envío para no mandar nada antes de estar configuradas.
+ * Es de la aplicación. Vivía en nebulaedge_defs.c, o sea que un componente era
+ * dueño de una primitiva de sincronización de main.c; nebulaedge_ble lo recibe
+ * inyectado con ble_set_start_semaphore(). */
+SemaphoreHandle_t semaphore = NULL;
+
 Config *current_config = NULL;
 
 /* El bus I2C y su pinout son de la aplicación: es la única parte que sabe en

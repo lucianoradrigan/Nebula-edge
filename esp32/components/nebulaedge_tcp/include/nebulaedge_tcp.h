@@ -4,6 +4,14 @@
 #include "esp_err.h"
 #include "nebulaedge_defs.h"
 
+/* Destino de la conexión. Vivía en nebulaedge_defs.h; es parte de la API de
+ * este componente. `ip_version_t` sí se queda en defs: lo comparten UDP y TCP. */
+typedef struct {
+    char *ip_host;            // Dirección IP (IPv4)
+    int port;                 // Puerto
+    ip_version_t ip_version;  // tipo. IPv4 o IPv6
+} tcp_params_t;
+
 void nebulaedge_tcp_open_socket(tcp_params_t *params);
 /* OJO con el nombre: NO se puede llamar `tcp_connect`. lwIP, la pila TCP/IP
  * de ESP-IDF, ya exporta un `tcp_connect` global (su API raw) y el enlace
