@@ -45,10 +45,11 @@ from __future__ import annotations
 import asyncio
 
 from discovery import DeviceDiscovery
+from system import log
 
 if __name__ == "__main__":
     master = DeviceDiscovery()
     try:
         asyncio.run(master.run())
     except KeyboardInterrupt:
-        print("\nCerrando programa...")
+        log("\nCerrando programa...")

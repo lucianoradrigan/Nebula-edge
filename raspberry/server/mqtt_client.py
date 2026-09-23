@@ -28,6 +28,7 @@ import paho.mqtt.client as mqtt
 import queue
 import threading
 from typing import Dict
+from system import log
 
 mqttc = None
 packet_queue = queue.Queue()        # Fallback: mensajes cuyo tópico no trae id_device
@@ -86,18 +87,18 @@ def on_message_ack(client, userdata, message):
 def on_connect(client, userdata, flags, reason_code, properties):
     """Callback de conexión: suscribe a tópicos de datos y ACKs."""
     if reason_code.is_failure:
-        print(f"Falló la conexión: {reason_code}")
+        log(f"Falló la conexión: {reason_code}")
     else:
         client.subscribe("/topic/nebulaedge/+/data")
         client.subscribe("/topic/nebulaedge/+/config")
         client.subscribe("/topic/nebulaedge/+/config/ack")
-        print("Suscrito a /topic/nebulaedge/+/data, /topic/nebulaedge/+/config y /topic/nebulaedge/+/config/ack")
+        log("Suscrito a /topic/nebulaedge/+/data, /topic/nebulaedge/+/config y /topic/nebulaedge/+/config/ack")
 
 def mqtt_publish(topic, data):
     """Publica un payload en el tópico especificado."""
     global mqttc
     mqttc.publish(topic, data)
-    print(f"Publish en {topic}")
+    log(f"Publish en {topic}")
 
 
 def get_data_queue(device_id: str) -> queue.Queue:

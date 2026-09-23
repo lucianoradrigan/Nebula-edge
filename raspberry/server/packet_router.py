@@ -35,6 +35,7 @@ from typing import Protocol
 
 from codec import DataCodec
 from models import Environmental, Inertial
+from system import log
 
 
 class TelemetryRepository(Protocol):
@@ -93,16 +94,16 @@ class PacketRouter:
             return RoutedPacket(PacketOutcome.DEEP_SLEEP, data_type=data_type)
 
         if data_type == self.codec.TYPE_ENVIRONMENTAL:
-            print(f"{prefix}Paquete Environmental recibido de {device_id}")
+            log(f"{prefix}Paquete Environmental recibido de {device_id}")
             persisted = await self.database_repo.insert_environmental_async(data)
         elif data_type == self.codec.TYPE_INERTIAL:
-            print(f"{prefix}Paquete Inertial recibido de {device_id}")
+            log(f"{prefix}Paquete Inertial recibido de {device_id}")
             persisted = await self.database_repo.insert_inertial_async(data)
         else:
             return RoutedPacket(PacketOutcome.IGNORED)
 
         if not persisted:
-            print(f"{prefix}AVISO: la telemetría de {device_id} NO se guardó en la base")
+            log(f"{prefix}AVISO: la telemetría de {device_id} NO se guardó en la base")
 
         return RoutedPacket(PacketOutcome.TELEMETRY, data=data,
                             data_type=data_type, persisted=persisted)

@@ -37,7 +37,7 @@ from bleak.backends.device import BLEDevice
 from gatt_uuids import UUID_CHAR_A
 from models import BleContext, Timeouts, ConfigData, Log
 from codec import DataCodec
-from system import utc_epoch_now, database_dsn, BLEAdapterResolver
+from system import utc_epoch_now, database_dsn, log, BLEAdapterResolver
 from repository import DatabaseRepository
 from protocol_dispatch import handle_protocol, PROTOCOL_BLE
 
@@ -76,7 +76,7 @@ class DeviceDiscovery:
         self.scanner_lock = asyncio.Lock()                                  # Lock para start/stop del scanner
         self.scanner_running = False                                        # Estado de escaneo
         self.ble_adapter = BLEAdapterResolver.resolve()                     # Forzar adaptador BLE
-        print(f"[BLE] Usando adaptador: {self.ble_adapter}")
+        log(f"[BLE] Usando adaptador: {self.ble_adapter}")
 
     async def _scanner_stop(self):
         """Detiene el escaneo BLE si está activo."""
@@ -88,7 +88,7 @@ class DeviceDiscovery:
             await self.scanner.stop()
             self.scanner_running = False
         except BleakDBusError as e:
-            print(f"[BLE] stop scan falló: {e}")
+            log(f"[BLE] stop scan falló: {e}")
 
     async def _scanner_start(self):
         """Inicia el escaneo BLE si está detenido."""
@@ -100,7 +100,7 @@ class DeviceDiscovery:
             await self.scanner.start()
             self.scanner_running = True
         except BleakDBusError as e:
-            print(f"[BLE] start scan falló: {e}")
+            log(f"[BLE] start scan falló: {e}")
 
     def _is_target_advertisement(self, device, adv) -> bool:
         """Valida si el advertisement BLE corresponde a un dispositivo target."""
@@ -141,7 +141,7 @@ class DeviceDiscovery:
 
     async def connection_worker(self):
         """Consume la cola de descubrimientos y crea sesiones BLE por dispositivo. Debe correr en un task aparte."""
-        print("Esperando conexiones BLE...")
+        log("Esperando conexiones BLE...")
         while True:
             device = await self.shared_queue.get()
             addr = device.address
@@ -151,20 +151,20 @@ class DeviceDiscovery:
                 continue
 
             self.devices[addr] = self.State.CONNECTING
-            print(f"Device {addr} encontrado")
+            log(f"Device {addr} encontrado")
 
             config = None
             try:
                 config = await DatabaseRepository(self.db_dsn).get_config_async(addr)
                 if config:
-                    print(f"[WiFi] SSID: {config.ssid}, Contraseña: {config.passwd}")
+                    log(f"[WiFi] SSID: {config.ssid}, Contraseña: {config.passwd}")
             except Exception as e:
-                print(f"Error al conectar/obtener config para {addr}: {e}")
+                log(f"Error al conectar/obtener config para {addr}: {e}")
                 self.devices.pop(addr, None)
                 continue
 
             if config is None:
-                print(f"No se encontró configuración para device_id {addr}")
+                log(f"No se encontró configuración para device_id {addr}")
                 self.devices.pop(addr, None)
                 continue
 
@@ -190,7 +190,7 @@ class DeviceDiscovery:
 
             try:
                 await client.connect()
-                print(f"Conectado exitosamente a {addr}")
+                log(f"Conectado exitosamente a {addr}")
                 self.devices[addr] = self.State.CONNECTED
                 await client.write_gatt_char(UUID_CHAR_A, serialized_config, response=True)
 
@@ -207,10 +207,10 @@ class DeviceDiscovery:
                 )
 
                 if self.active_tasks:
-                    print(f"Tasks activas: {len(self.active_tasks)} -> {list(self.active_tasks.keys())}")
+                    log(f"Tasks activas: {len(self.active_tasks)} -> {list(self.active_tasks.keys())}")
                 else:
-                    print("Tasks activas: 0")
-                print(f"Creando task de sesión por dispositivo {addr}")
+                    log("Tasks activas: 0")
+                log(f"Creando task de sesión por dispositivo {addr}")
                 task = asyncio.create_task(
                     self._device_session(device, config, client if reuse_connection else None)
                 )
@@ -218,9 +218,9 @@ class DeviceDiscovery:
                 connection_handed_over = reuse_connection
 
             except Exception as e:
-                print(f"Fallo en la primera conexión BLE con {addr}: {type(e).__name__}: {e!r}")
+                log(f"Fallo en la primera conexión BLE con {addr}: {type(e).__name__}: {e!r}")
                 # traceback.print_exc()
-                print(f"Pop device {addr}")
+                log(f"Pop device {addr}")
                 self.devices.pop(addr, None)
 
             finally:
@@ -271,7 +271,7 @@ class DeviceDiscovery:
             self.active_tasks.pop(addr, None)
             server_time = utc_epoch_now()
             # Permite re-descubrimiento si se pierde la conexión
-            print(f"Pop device {addr}")
+            log(f"Pop device {addr}")
             # Registra la desconexión
             await DatabaseRepository(self.db_dsn).insert_log_async(
                 Log(

@@ -36,7 +36,7 @@ import asyncio
 import threading
 
 from models import ConfigData, Environmental, Inertial, Log
-from system import utc_epoch_now, LocalWifiConfig
+from system import utc_epoch_now, log, LocalWifiConfig
 
 
 class DatabaseRepository:
@@ -182,10 +182,10 @@ class DatabaseRepository:
             # Un campo que no existe en la dataclass es un bug nuestro, no un
             # fallo de base. Antes se hacía `return` en silencio y el error
             # quedaba invisible para siempre.
-            print(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
+            log(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
             return False
         except Exception as e:
-            print(f"ERROR de base insertando {_ctx}: {e}")
+            log(f"ERROR de base insertando {_ctx}: {e}")
             return False
 
     def insert_inertial(self, inertial: "Inertial") -> bool:
@@ -223,10 +223,10 @@ class DatabaseRepository:
             # Un campo que no existe en la dataclass es un bug nuestro, no un
             # fallo de base. Antes se hacía `return` en silencio y el error
             # quedaba invisible para siempre.
-            print(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
+            log(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
             return False
         except Exception as e:
-            print(f"ERROR de base insertando {_ctx}: {e}")
+            log(f"ERROR de base insertando {_ctx}: {e}")
             return False
 
     def insert_log(self, log: "Log") -> bool:
@@ -254,10 +254,10 @@ class DatabaseRepository:
             # Un campo que no existe en la dataclass es un bug nuestro, no un
             # fallo de base. Antes se hacía `return` en silencio y el error
             # quedaba invisible para siempre.
-            print(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
+            log(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
             return False
         except Exception as e:
-            print(f"ERROR de base insertando {_ctx}: {e}")
+            log(f"ERROR de base insertando {_ctx}: {e}")
             return False
 
     # psycopg2 es sincrónico/bloqueante: cada método de arriba abre su propia

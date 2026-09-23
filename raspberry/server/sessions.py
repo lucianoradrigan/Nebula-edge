@@ -39,7 +39,7 @@ from typing import Callable, Any
 
 from models import BleContext, Timeouts, ConfigData, Log
 from codec import DataCodec
-from system import utc_epoch_now
+from system import utc_epoch_now, log
 from config_resolver import ConfigResolver, ConfigDecision
 from packet_router import PacketRouter, PacketOutcome
 from repository import DatabaseRepository
@@ -99,7 +99,7 @@ class DeviceSession:
                     )
                 )
             except Exception as e:
-                print(f"No se pudo insertar heartbeat para {self.device_id}: {e}")
+                log(f"No se pudo insertar heartbeat para {self.device_id}: {e}")
 
     def _sleep_timeout_sec(self) -> float:
         """Calcula timeout de recepción según `send_interval_s` (s) y `sleep_time_s` (s)."""
@@ -180,7 +180,7 @@ class ProtocolSession(DeviceSession):
                     and ack.config_version == db_config.config_version
                     and ack.applied
                 ):
-                    print(f"ACK {tx.name} recibido para {self.device_id} v{db_config.config_version}")
+                    log(f"ACK {tx.name} recibido para {self.device_id} v{db_config.config_version}")
                     return True
 
                 # No era ACK: si es telemetría se inserta y se sigue esperando.
@@ -192,19 +192,19 @@ class ProtocolSession(DeviceSession):
             # Se acabó la ventana sin ACK. Algunos transportes (BLE) pueden
             # preguntarle al device si igual la aplicó, por si se perdió el aviso.
             if await tx.confirm_config_applied(self.device_id, db_config.config_version):
-                print(f"{tx.name}: {self.device_id} confirma v{db_config.config_version} aplicada (sin ACK directo)")
+                log(f"{tx.name}: {self.device_id} confirma v{db_config.config_version} aplicada (sin ACK directo)")
                 return True
 
-        print(f"ACK {tx.name} de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
+        log(f"ACK {tx.name} de config v{db_config.config_version} no recibido para {self.device_id}. Cerrando sesión.")
         return False
 
     async def _push_and_wait(self, tx: Transport, db_config: "ConfigData") -> bool:
         """Envía una config nueva al device y espera su ACK."""
-        print(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
+        log(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
         try:
             await tx.send(DataCodec.serialize_config(db_config))
         except Exception as e:
-            print(f"Error enviando config {tx.name}: {e}")
+            log(f"Error enviando config {tx.name}: {e}")
             return False
         return await self._wait_ack(tx, db_config)
 
@@ -228,9 +228,9 @@ class ProtocolSession(DeviceSession):
                 return await self._session_loop(tx)
             except TransportClosed as e:
                 if not tx.reopens:
-                    print(f"{tx.name}: enlace cortado con {self.device_id} ({e}). Cerrando sesión.")
+                    log(f"{tx.name}: enlace cortado con {self.device_id} ({e}). Cerrando sesión.")
                     return None
-                print(f"{tx.name}: {e}. Reabriendo para esperar al device.")
+                log(f"{tx.name}: {e}. Reabriendo para esperar al device.")
             finally:
                 await tx.close()
 
@@ -245,7 +245,7 @@ class ProtocolSession(DeviceSession):
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    print(f"Timeout {tx.name} ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
+                    log(f"Timeout {tx.name} ({timeout_sec}s) sin datos de {self.device_id}. " "Cerrando sesión para permitir reconexión.")
                     return None
 
                 packet = await tx.recv(min(remaining, self.timeouts.config_poll_sec))
@@ -267,7 +267,7 @@ class ProtocolSession(DeviceSession):
                 if tx.reopens:
                     # El device cierra el enlace al dormirse: hay que reabrirlo.
                     raise TransportClosed(f"{self.device_id} avisó deep sleep")
-                print(f"{tx.name}: Se detectó deep sleep de {self.device_id}, se sigue escuchando")
+                log(f"{tx.name}: Se detectó deep sleep de {self.device_id}, se sigue escuchando")
                 continue
             data = routed.data
             self._update_last_client_time(data)
@@ -281,7 +281,7 @@ class ProtocolSession(DeviceSession):
             applied_version = data.config_version_applied
             decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
             if decision.decision == ConfigDecision.APPLIED_NEWER:
-                print(f"Config aplicada detectada en {tx.name} ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
+                log(f"Config aplicada detectada en {tx.name} ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
                 return decision.db_config
             elif decision.decision == ConfigDecision.ALREADY_SENT:
                 # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique

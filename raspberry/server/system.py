@@ -7,6 +7,7 @@ UTILIDAD PRINCIPAL
     entorno:
 
         utc_epoch_now()      la hora actual, en epoch Unix UTC
+        log()                imprime con marca de tiempo, para cruzar con el device
         database_dsn()       DSN de Postgres (PG_HOST / PG_DB / PG_USER / PG_PASSWORD)
         BLEAdapterResolver   qué adaptador BLE usar (hciconfig / BLE_ADAPTER)
         LocalWifiConfig      SSID, password e IP local del host, vía nmcli
@@ -46,6 +47,31 @@ import os
 import socket
 import subprocess
 import time
+
+
+_PROCESS_START = time.monotonic()
+
+
+def log(message) -> None:
+    """Imprime un mensaje con hora de pared y segundos desde que arrancó el proceso.
+
+    POR QUÉ NO print() PELADO
+        El firmware loguea con el reloj del ESP32 -milisegundos desde SU
+        arranque- y el servidor no tenía ninguna marca de tiempo. Cuando un
+        paquete se perdía entre los dos lados no había forma de alinear las dos
+        trazas y decir cuál ocurrió antes.
+
+    LOS DOS NÚMEROS SON PARA COSAS DISTINTAS
+        La hora de pared sirve para cruzar con logs externos (la base, el
+        broker, journalctl). Los segundos desde el arranque sirven para medir
+        intervalos sin tener que restar horas a mano, y para comparar contra el
+        contador del device, que también cuenta desde su propio arranque.
+    """
+    now = time.time()
+    stamp = time.strftime("%H:%M:%S", time.localtime(now))
+    millis = int((now % 1) * 1000)
+    since = time.monotonic() - _PROCESS_START
+    print(f"[{stamp}.{millis:03d} +{since:8.3f}s] {message}")
 
 
 def utc_epoch_now() -> int:
@@ -227,7 +253,7 @@ class LocalWifiConfig:
 
         ok, _, err = cls._run_cmd_with_status(cmd)
         if not ok:
-            print(f"[WiFi] Error conectando a '{target_ssid}': {err}")
+            log(f"[WiFi] Error conectando a '{target_ssid}': {err}")
             return "error"
 
         cls._CACHE["ts"] = 0.0
@@ -243,7 +269,7 @@ class LocalWifiConfig:
                 continue
             device, dev_type, state = parts
             if dev_type == "wifi" and state == "connected":
-                print(f"Adaptador WIFI a usar: {device}")
+                log(f"Adaptador WIFI a usar: {device}")
                 return device
         return ""
 
@@ -274,7 +300,7 @@ class LocalWifiConfig:
             "ssid", target_ssid,
         ])
         if not ok:
-            print(f"[WiFi] Error creando perfil AP '{conn_name}': {err}")
+            log(f"[WiFi] Error creando perfil AP '{conn_name}': {err}")
             return "error"
 
         ok, _, err = cls._run_cmd_with_status([
@@ -287,12 +313,12 @@ class LocalWifiConfig:
             "ipv6.method", "ignore",
         ])
         if not ok:
-            print(f"[WiFi] Error configurando WPA2 AP '{conn_name}': {err}")
+            log(f"[WiFi] Error configurando WPA2 AP '{conn_name}': {err}")
             return "error"
 
         ok, _, err = cls._run_cmd_with_status(["sudo", "nmcli", "connection", "up", conn_name])
         if not ok:
-            print(f"[WiFi] Error activando AP '{conn_name}': {err}")
+            log(f"[WiFi] Error activando AP '{conn_name}': {err}")
             return "error"
 
         cls._CACHE["ts"] = 0.0
@@ -346,7 +372,7 @@ class LocalWifiConfig:
                 s.connect(("8.8.8.8", 80))
                 return s.getsockname()[0]
         except Exception:
-            print("No se pudo obtener IP.")
+            log("No se pudo obtener IP.")
             return ""
 
     @classmethod

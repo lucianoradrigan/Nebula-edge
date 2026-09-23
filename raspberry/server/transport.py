@@ -45,6 +45,7 @@ from gatt_uuids import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
 from codec import DataCodec
 from models import ConfigData
 from mqtt_client import mqtt_start, mqtt_publish, get_data_queue, get_ack_queue
+from system import log
 
 
 class TransportClosed(Exception):
@@ -152,7 +153,7 @@ class UdpTransport(Transport):
         sock.bind((host, port))
 
         self._sock = sock
-        print(f"Servidor UDP escuchando en {host}:{port}")
+        log(f"Servidor UDP escuchando en {host}:{port}")
         return True
 
     async def close(self) -> None:
@@ -255,7 +256,7 @@ class TcpTransport(Transport):
         listen.bind((host, port))
         listen.listen()
         self._listen = listen
-        print(f"Servidor TCP escuchando en {host}:{port}")
+        log(f"Servidor TCP escuchando en {host}:{port}")
 
         try:
             conn, addr = await asyncio.wait_for(
@@ -263,13 +264,13 @@ class TcpTransport(Transport):
                 timeout=self.connect_timeout_sec,
             )
         except asyncio.TimeoutError:
-            print(f"Timeout esperando conexion TCP ({self.connect_timeout_sec}s)")
+            log(f"Timeout esperando conexion TCP ({self.connect_timeout_sec}s)")
             await self.close()
             return False
 
         conn.setblocking(False)
         self._conn = conn
-        print(f"Conexión establecida desde {addr}")
+        log(f"Conexión establecida desde {addr}")
         return True
 
     async def close(self) -> None:
@@ -486,9 +487,9 @@ class BleTransport(Transport):
         client, self._adopted = self._adopted, None
 
         if client is not None and client.is_connected:
-            print(f"BLE: se reutiliza la conexión del descubrimiento para {self.config.id_device}")
+            log(f"BLE: se reutiliza la conexión del descubrimiento para {self.config.id_device}")
         else:
-            print(f"BLE: Modo persistente. Intentando conectar al dispositivo {self.config.id_device}")
+            log(f"BLE: Modo persistente. Intentando conectar al dispositivo {self.config.id_device}")
 
             # Conectar con el scanner corriendo da problemas (ver docs de bleak).
             await self._scanner(self.scanner_stop)
@@ -496,10 +497,10 @@ class BleTransport(Transport):
                 client = BleakClient(self.device, adapter=self.adapter)
                 await client.connect()
                 if not client.is_connected:
-                    print(f"No se pudo conectar a {self.config.id_device} para RECIBIR DATOS.")
+                    log(f"No se pudo conectar a {self.config.id_device} para RECIBIR DATOS.")
                     return False
             except Exception as e:
-                print(f"BLE: fallo conectando a {self.config.id_device}: {type(e).__name__}: {e}")
+                log(f"BLE: fallo conectando a {self.config.id_device}: {type(e).__name__}: {e}")
                 return False
             finally:
                 # El scanner vuelve pase lo que pase: si queda apagado, no se
@@ -522,7 +523,7 @@ class BleTransport(Transport):
         # Señal de inicio por característica C (libera el semáforo en la ESP32)
         await client.write_gatt_char(UUID_CHAR_C, b"start", response=True)
 
-        print(f"BLE persistente iniciado correctamente para {self.config.id_device}")
+        log(f"BLE persistente iniciado correctamente para {self.config.id_device}")
         return True
 
     async def close(self) -> None:

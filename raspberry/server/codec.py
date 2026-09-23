@@ -35,6 +35,7 @@ from __future__ import annotations
 import schema_pb2
 
 from models import Environmental, Inertial, ConfigData, ConfigAckData
+from system import log
 
 
 class DataCodec:
@@ -87,7 +88,7 @@ class DataCodec:
             pb = schema_pb2.Environmental()
             pb.ParseFromString(packet)
         except Exception as e:
-            print(f"Error al desempaquetar el paquete Environmental: {e}")
+            log(f"Error al desempaquetar el paquete Environmental: {e}")
             return None
 
         # Convertir a objeto neutro (Environmental)
@@ -126,7 +127,7 @@ class DataCodec:
             pb = schema_pb2.Inertial()
             pb.ParseFromString(packet)
         except Exception as e:
-            print(f"Error al desempaquetar el paquete Inertial: {e}")
+            log(f"Error al desempaquetar el paquete Inertial: {e}")
             return None
 
         return Inertial(
@@ -174,7 +175,7 @@ class DataCodec:
             pb = schema_pb2.Config()
             pb.ParseFromString(packet)
         except Exception as e:
-            print(f"Error al desempaquetar el paquete: {e}")
+            log(f"Error al desempaquetar el paquete: {e}")
             return None
 
         return ConfigData(
@@ -214,7 +215,7 @@ class DataCodec:
             pb = schema_pb2.ConfigAck()
             pb.ParseFromString(packet)
         except Exception as e:
-            print(f"Error al desempaquetar el ACK: {e}")
+            log(f"Error al desempaquetar el ACK: {e}")
             return None
 
         return ConfigAckData(

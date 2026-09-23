@@ -31,6 +31,7 @@ from dataclasses import replace
 from models import BleContext, ConfigData, Timeouts
 from repository import DatabaseRepository
 from sessions import MQTTDeviceSession, UDPDeviceSession, TCPDeviceSession, BLEDeviceSession
+from system import log
 
 # Valores de `protocol_conf` en la tabla config. Son parte del contrato con el
 # firmware (ver el switch de app_main en esp32/main/main.c): no se reordenan.
@@ -63,7 +64,7 @@ async def handle_protocol(
         idx = config.protocol_conf
         session_cls = session_classes.get(idx)
         if session_cls is None:
-            print(f"Protocol_conf inválido ({idx}) para {device_id}. Cerrando sesión.")
+            log(f"Protocol_conf inválido ({idx}) para {device_id}. Cerrando sesión.")
             idx = -1
             break
 
@@ -89,7 +90,7 @@ async def handle_protocol(
                 pass
 
         if config is None:
-            print(f"Sesión finalizada para {device_id}")
+            log(f"Sesión finalizada para {device_id}")
             break
 
     # Se retorna último protocolo, con propósito de loggeo
