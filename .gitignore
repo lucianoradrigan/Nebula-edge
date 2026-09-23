@@ -13,6 +13,8 @@ esp32/components/**/build/
 esp32/components/**/log/
 
 # Server
+# Credenciales reales de la base. La plantilla versionada es raspberry/.env.example
+raspberry/.env
 raspberry/__pycache__/
 raspberry/server/venv/
 raspberry/**/__pycache__/

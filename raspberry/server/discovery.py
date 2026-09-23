@@ -37,7 +37,7 @@ from bleak.backends.device import BLEDevice
 from gatt_uuids import UUID_CHAR_A
 from models import BleContext, Timeouts, ConfigData, Log
 from codec import DataCodec
-from system import utc_epoch_now, BLEAdapterResolver
+from system import utc_epoch_now, database_dsn, BLEAdapterResolver
 from repository import DatabaseRepository
 from protocol_dispatch import handle_protocol, PROTOCOL_BLE
 
@@ -59,13 +59,13 @@ class DeviceDiscovery:
     def __init__(
         self,
         name_target="ESP_NEBULAEDGE",
-        db_dsn="host=localhost dbname=nebulaedge user=nebulaedge password=1234",
+        db_dsn: str | None = None,
         max_parallel_connects: int = 8,
         timeouts: Timeouts | None = None,
     ):
         """Inicializa parámetros de escaneo BLE y acceso a BD."""
         self.name_target = name_target                                      # Nombre BLE objetivo
-        self.db_dsn = db_dsn                                                # DSN de conexión a la base de datos
+        self.db_dsn = db_dsn or database_dsn()                              # DSN de conexión a la base de datos (system.py)
         self.devices = {}                                                   # Estado por dispositivo descubierto
         self.shared_queue = asyncio.Queue()                                 # Cola de dispositivos descubiertos
         self.max_parallel_connects = max_parallel_connects                  # Límite de conexiones simultáneas

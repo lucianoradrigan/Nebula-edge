@@ -1,11 +1,13 @@
 """Todo lo que el servidor le pregunta al sistema operativo del host.
 
 UTILIDAD PRINCIPAL
-    Aislar en un solo módulo las tres cosas que dependen de la máquina donde
-    corre el servidor, para que el resto del código no tenga que saber de
-    subprocess ni de comandos de Linux:
+    Aislar en un solo módulo lo que depende de la máquina donde corre el
+    servidor -el sistema operativo y el entorno- para que el resto del código
+    no tenga que saber de subprocess, de comandos de Linux ni de variables de
+    entorno:
 
         utc_epoch_now()      la hora actual, en epoch Unix UTC
+        database_dsn()       DSN de Postgres (PG_HOST / PG_DB / PG_USER / PG_PASSWORD)
         BLEAdapterResolver   qué adaptador BLE usar (hciconfig / BLE_ADAPTER)
         LocalWifiConfig      SSID, password e IP local del host, vía nmcli
 
@@ -57,6 +59,49 @@ def utc_epoch_now() -> int:
     en la misma escala.
     """
     return int(time.time())
+
+# Valores por defecto de la base. Son los mismos que docker-compose.yml le pasa
+# al contenedor de Postgres, y están acá para que el servidor arranque sin
+# configuración extra: clonar el repo y levantarlo tiene que seguir funcionando
+# en un comando. No son secretos -están commiteados-; para una base que no sea
+# la de desarrollo, se sobrescriben por entorno.
+_DB_DEFAULTS = {
+    "host": "localhost",
+    "dbname": "nebulaedge",
+    "user": "nebulaedge",
+    "password": "1234",
+}
+
+
+def database_dsn() -> str:
+    """Arma el DSN de Postgres leyendo PG_HOST / PG_DB / PG_USER / PG_PASSWORD.
+
+    POR QUÉ ESTÁ ACÁ Y NO EN discovery.py
+        Antes el DSN era un parámetro por defecto de `DeviceDiscovery.__init__`,
+        o sea que el módulo que escanea anuncios BLE era el dueño de la
+        contraseña de la base. Y como nadie le pasaba nunca ese parámetro, ese
+        "default" era en realidad la configuración de todo el sistema, metida en
+        la firma de un constructor.
+
+        Además quedaba duplicado con docker-compose.yml, que define las mismas
+        tres cosas para el contenedor de Postgres. Dos fuentes de verdad para
+        una sola credencial: cambiar una y no la otra deja al servidor sin poder
+        conectarse, con el error apareciendo en repository.py, lejos del cambio
+        que lo causó. Ahora compose pasa las mismas variables a los dos
+        servicios y esta función es el único lugar que las arma.
+
+    Cada variable se puede poner por separado; las que falten caen al valor de
+    desarrollo.
+    """
+    env = {
+        "host": os.getenv("PG_HOST", "").strip(),
+        "dbname": os.getenv("PG_DB", "").strip(),
+        "user": os.getenv("PG_USER", "").strip(),
+        "password": os.getenv("PG_PASSWORD", "").strip(),
+    }
+    fields = {key: env[key] or default for key, default in _DB_DEFAULTS.items()}
+    return " ".join(f"{key}={value}" for key, value in fields.items())
+
 
 class BLEAdapterResolver:
     """Utilidades para resolver qué adaptador BLE usar.

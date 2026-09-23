@@ -6,6 +6,15 @@ services:
     environment:
       PYTHONUNBUFFERED: 1
       BLE_ADAPTER: auto
+      # Las mismas cuatro variables que recibe el contenedor de la base, para
+      # que la credencial se defina UNA vez (en .env, o en los defaults de acá)
+      # y no haya dos copias que se puedan desincronizar. El servidor las lee
+      # en system.py -> database_dsn(). PG_HOST es localhost porque este
+      # servicio corre con network_mode: host.
+      PG_HOST: ${PG_HOST:-localhost}
+      PG_DB: ${PG_DB:-nebulaedge}
+      PG_USER: ${PG_USER:-nebulaedge}
+      PG_PASSWORD: ${PG_PASSWORD:-1234}
     restart: unless-stopped
     privileged: true
     network_mode: host
@@ -19,15 +28,22 @@ services:
     image: postgres:16.2
     container_name: nebulaedge_db
     environment:
-      POSTGRES_DB: nebulaedge
-      POSTGRES_USER: nebulaedge
-      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: ${PG_DB:-nebulaedge}
+      POSTGRES_USER: ${PG_USER:-nebulaedge}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-1234}
     volumes:
       - db_data:/var/lib/postgresql/data
       - ./db_init:/docker-entrypoint-initdb.d
     restart: unless-stopped
     ports:
       - "5432:5432"
+
+# CREDENCIALES
+# Los ${...:-valor} salen de un archivo .env en esta misma carpeta (compose lo
+# lee solo) y, si no existe, caen al valor de desarrollo. Copiar .env.example a
+# .env y editarlo alcanza para cambiar la contraseña en los dos servicios a la
+# vez. Ojo: la contraseña queda grabada en el volumen db_data la primera vez que
+# Postgres se inicializa; cambiarla después pide un `docker compose down -v`.
 
 # Observación: con docker compose up --build --force-recreate no
 # se re-inicializa la base de datos

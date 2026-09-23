@@ -24,14 +24,22 @@ MAPA DEL SERVIDOR
 
     codec.py            (de)serialización protobuf
     models.py           dataclasses del dominio
-    system.py           reloj UTC, adaptador BLE, credenciales WiFi del host
+    system.py           lo que viene del host: reloj UTC, DSN, adaptador BLE, WiFi
     mqtt_client.py      cliente MQTT compartido del proceso
     gatt_uuids.py       UUIDs del servicio GATT
 
 CONFIGURACIÓN
-    El DSN de Postgres y el nombre BLE objetivo tienen valores por defecto en
-    `DeviceDiscovery.__init__`. El adaptador BLE se puede forzar con la
-    variable de entorno BLE_ADAPTER (ver system.py).
+    Todo lo que depende del entorno se lee en system.py, no acá ni en
+    discovery.py:
+
+        PG_HOST / PG_DB / PG_USER / PG_PASSWORD   conexión a Postgres
+        BLE_ADAPTER                               adaptador BLE a usar
+        HOST_IP / WIFI_SSID / WIFI_PASSWD         credenciales que van al device
+
+    Las cuatro primeras las pone docker-compose.yml a partir de un .env
+    opcional (plantilla en raspberry/.env.example); sin él caen a los valores
+    de desarrollo. El nombre BLE objetivo sigue siendo un parámetro por defecto
+    de `DeviceDiscovery.__init__`.
 """
 from __future__ import annotations
 import asyncio
