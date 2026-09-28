@@ -2,6 +2,7 @@
 #define BOARD_PINOUT
 
 #include "driver/gpio.h"
+#include "driver/spi_common.h"   // SPI3_HOST
 
 /* Pinout de la placa. ÚNICA fuente de verdad.
  *
@@ -27,19 +28,37 @@
 
 /* --- Bus SPI (microSD) ---
  *
- * OJO: estos cuatro estaban TRIPLICADOS y las copias no coincidían.
+ * OJO: estos pines estaban TRIPLICADOS y las copias no coincidían.
  * nebulaedge_microsd.c se definía los suyos con los valores de im-v1
  * (MOSI GPIO_NUM_2, MISO GPIO_NUM_44, CLK GPIO_NUM_43) y nunca incluyó
  * nebulaedge_defs.h, así que la microSD quedó compilando contra el pinout de
- * la placa vieja. No rompía nada porque sd_mount() está comentado en main.c.
+ * la placa vieja. Queda una cuarta copia sin usar en nebulaedge_spi.h.
  *
- * Acá quedan los valores de im-v2, que son los que documentaba defs.h. Hay que
- * CONTRASTARLOS CON EL ESQUEMÁTICO antes de volver a habilitar la SD: en im-v2
- * el GPIO_NUM_2 que usaba la copia vieja como MOSI es el reloj del I2C.
+ * Los tres valores de abajo coinciden con los del proyecto de bringup de la
+ * IM-V2, que es el único código de la microSD probado contra la placa.
  */
-#define PIN_NUM_CS              GPIO_NUM_1      // im-v1: GPIO_NUM_1 (igual)
 #define PIN_NUM_MOSI            GPIO_NUM_21     // im-v1: GPIO_NUM_2
 #define PIN_NUM_CLK             GPIO_NUM_38     // im-v1: GPIO_NUM_43
 #define PIN_NUM_MISO            GPIO_NUM_47     // im-v1: GPIO_NUM_44
+
+/* Periférico SPI y reloj de la tarjeta. El bringup fija los dos explícitamente
+ * en vez de tomar los de SDSPI_HOST_DEFAULT() (SPI2_HOST a 20 MHz), que es lo
+ * que este firmware venía usando sin que nadie lo decidiera. Con el chip
+ * select saliendo por I2C a 400 kHz, 20 MHz de SPI es optimista. */
+#define SD_SPI_HOST             SPI3_HOST
+#define SD_MAX_FREQ_KHZ         4000
+
+/* --- Expansor de IO (FXL6408) ---
+ *
+ * En la im-v2 el chip select de la microSD dejó de ser un GPIO: cuelga del IO0
+ * de este expansor. Por eso ya no hay PIN_NUM_CS; el de im-v1 era GPIO_NUM_1,
+ * que en esta placa está ocupado.
+ *
+ * El bringup además deja los IO 4, 6 y 7 en alto para desactivar otros
+ * dispositivos del bus SPI, lo que sugiere que el expansor maneja más
+ * periféricos que la sola tarjeta. */
+#define FXL6408_I2C_ADDR        0x44            // pin ADDR a VCC
+#define SD_CS_EXPANDER_PIN      0               // IO0
+#define SPI_DISABLED_EXPANDER_PINS  { 4, 6, 7 }
 
 #endif

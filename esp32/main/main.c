@@ -49,6 +49,9 @@ Config *current_config = NULL;
 /* El bus I2C y su pinout son de la aplicación: es la única parte que sabe en
  * qué placa corre. El componente nebulaedge_i2c ya no los compila adentro. */
 i2c_master_bus_handle_t bus_handle = NULL;
+/* Expansor de IO de la im-v2. Vive acá por el mismo motivo que bus_handle: se
+ * rehace en cada cambio de protocolo. Ver el bloque de la SD, más abajo. */
+// fxl6408_handle_t io_expander = NULL;
 static const i2c_bus_config_t board_i2c = {
     .scl_io  = I2C_MASTER_SCL_IO,
     .sda_io  = I2C_MASTER_SDA_IO,
@@ -1239,27 +1242,20 @@ void app_main() {
 
     /* PERSISTENCIA EN SD: DESACTIVADA.
      *
-     * El montaje está comentado porque en la IM-V2 ocupa el GPIO 1 y falla.
+     * El montaje sigue comentado, pero ya no por el conflicto de pines: el
+     * chip select pasó al IO0 del expansor FXL6408 y el pinout de la SD es el
+     * del bringup de la IM-V2, que es el único probado contra la placa.
+     * Queda apagado a propósito hasta que la SD tenga su turno en las pruebas
+     * de banco.
+     *
+     * El código está más abajo, dentro del bucle de protocolos: el expansor
+     * cuelga del bus I2C, que se rehace en cada cambio de protocolo, así que
+     * hay que volver a registrarlo igual que los tres sensores.
+     *
      * Consecuencia que NO es evidente leyendo el resto del código: las tasks
      * de envío siguen llamando a sdstorage_write_packet() cuando sleep_time_s > 0, pero
      * esa función corta de inmediato en sd_is_mounted() y no escribe nada.
-     * O sea que el firmware parece guardar respaldo local y no lo hace.
-     *
-     * Para reactivarlo hay que resolver antes el conflicto de pines en
-     * board_pinout.h (PIN_NUM_CS), y contrastar los cuatro pines SPI con el
-     * esquemático: hasta ahora nebulaedge_microsd.c se definía los suyos con
-     * los valores de im-v1, distintos de los que documentaba defs.h. */
-    // static const sd_pins_t sd_pins = {
-    //     .cs_io   = PIN_NUM_CS,
-    //     .mosi_io = PIN_NUM_MOSI,
-    //     .clk_io  = PIN_NUM_CLK,
-    //     .miso_io = PIN_NUM_MISO,
-    //     .format_if_mount_failed = true,
-    // };
-    // esp_err_t sd_ret = sd_mount(&sd_pins);
-    // if (sd_ret != ESP_OK) {
-    //     ESP_LOGW(TAG, "SD no disponible, se continúa sin persistencia local: %s", esp_err_to_name(sd_ret));
-    // }
+     * O sea que el firmware parece guardar respaldo local y no lo hace. */
 
     /****************************************************************/
     /********** ITERACIÓN QUE MANEJA DE CAMBIOS DE PROTOCOLO ********/
@@ -1271,6 +1267,11 @@ void app_main() {
         bmi270_deinit();
         bme688_deinit();
         bmm350_deinit();
+        /* La SD sale antes que el bus: su chip select vive en el expansor, que
+         * a su vez cuelga del bus I2C que estamos por borrar. */
+        // sd_unmount();
+        // fxl6408_del(io_expander);
+        // io_expander = NULL;
         i2c_master_deinit(&bus_handle);
 
         // Inicializa el bus con el pinout de esta placa
@@ -1281,6 +1282,35 @@ void app_main() {
         bmm350_init(bus_handle, 400, 4);
         bme688_init(bus_handle, current_config->bme688_sampling, current_config->bme688_sampling, current_config->bme688_sampling);
         bmi270_init(bus_handle, current_config->acc_sampling, 4, 8, 400, current_config->gyro_sensibility); 
+
+        /* Expansor de IO y microSD. Descomentar este bloque es todo lo que
+         * hace falta para reactivar la persistencia local. */
+        // if (fxl6408_init(bus_handle, FXL6408_I2C_ADDR, &io_expander) != ESP_OK) {
+        //     ESP_LOGW(TAG, "Expansor de IO no disponible, se continúa sin SD");
+        // } else {
+        //     /* Los otros dispositivos del bus SPI se dejan deseleccionados
+        //      * antes de montar la tarjeta. Qué cuelga de cada IO lo sabe la
+        //      * placa, no el componente de la microSD. */
+        //     static const uint8_t disabled_pins[] = SPI_DISABLED_EXPANDER_PINS;
+        //     for (size_t i = 0; i < sizeof(disabled_pins) / sizeof(disabled_pins[0]); i++) {
+        //         fxl6408_config_output(io_expander, disabled_pins[i], true, false);
+        //     }
+        //
+        //     const sd_pins_t sd_pins = {
+        //         .mosi_io          = PIN_NUM_MOSI,
+        //         .clk_io           = PIN_NUM_CLK,
+        //         .miso_io          = PIN_NUM_MISO,
+        //         .spi_host         = SD_SPI_HOST,
+        //         .max_freq_khz     = SD_MAX_FREQ_KHZ,
+        //         .cs_expander      = io_expander,
+        //         .cs_expander_pin  = SD_CS_EXPANDER_PIN,
+        //         .format_if_mount_failed = true,
+        //     };
+        //     esp_err_t sd_ret = sd_mount(&sd_pins);
+        //     if (sd_ret != ESP_OK) {
+        //         ESP_LOGW(TAG, "SD no disponible, se continúa sin persistencia local: %s", esp_err_to_name(sd_ret));
+        //     }
+        // }
     
         switch (current_config->protocol_conf) {
 
