@@ -27,3 +27,6 @@ raspberry/server/requirements.txt
 .LSOverride
 # CMake suelto en la raíz (idf.py lanzado desde el repo, no desde esp32/)
 /build/
+
+# Entorno virtual de Python (local, no versionado)
+raspberry/.venv/
