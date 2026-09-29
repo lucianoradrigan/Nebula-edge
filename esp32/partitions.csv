@@ -1,0 +1,20 @@
+# Tabla de particiones propia. Reemplaza al preset SINGLE_APP_LARGE, que fija la
+# app en 1500K sin importar el tamaño real de la flash (16 MB configurados sobre
+# un chip de 32 MB).
+#
+# Sin partición factory: con OTA, el bootloader arranca ota_0 cuando otadata está
+# vacía, que es el estado de fábrica. Una factory aparte sería una tercera ranura
+# de app de 4 MB sin uso.
+#
+# nvs y phy_init conservan los offsets del preset anterior (0x9000 y 0xf000) para
+# no mover la NVS de lugar.
+# Offset vacío = calculado automáticamente; las particiones de app se alinean
+# solas a 64 KB.
+
+# Name,     Type, SubType,  Offset,  Size,    Flags
+nvs,        data, nvs,      ,        0x6000,
+phy_init,   data, phy,      ,        0x1000,
+otadata,    data, ota,      ,        0x2000,
+ota_0,      app,  ota_0,    ,        4M,
+ota_1,      app,  ota_1,    ,        4M,
+model,      data, 0x40,     ,        1M,

@@ -34,3 +34,11 @@ CONFIG_FATFS_LFN_STACK=y
 
 # Ajusta Watchdog timer. Default es 300
 # CONFIG_ESP_INT_WDT_TIMEOUT_MS=2400
+
+# Ajusta memoria flash a 16MB
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Tabla de particiones propia (partitions.csv): el preset SINGLE_APP_LARGE fija
+# la app en 1500K y no crece con el tamaño de la flash.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
