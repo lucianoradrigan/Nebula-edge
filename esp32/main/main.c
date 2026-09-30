@@ -635,11 +635,16 @@ static esp_err_t ble_send_ack(const Config *cfg, const uint8_t *buf, size_t size
     return ret;
 }
 
-/* En BLE la config llega cruda por la cola y hay que desempaquetarla acá. */
-static Config *ble_recv_config(void) {
+/* En BLE la config llega cruda por la cola y hay que desempaquetarla acá.
+ *
+ * `wait_ms` en 0 la convierte en un sondeo que no bloquea, que es como la usa
+ * el canal de rescate de vTaskGetResponse() cuando el protocolo activo es otro:
+ * ahí la espera ya la hizo el recv_config de ese protocolo y sumarle otra
+ * alargaría cada vuelta del bucle. */
+static Config *ble_config_from_queue(uint32_t wait_ms) {
     packet_t pkt;
 
-    if (xQueueReceive(xQueueConfigBle, &pkt, pdMS_TO_TICKS(TASK_POLL_MS)) != pdTRUE) {
+    if (xQueueReceive(xQueueConfigBle, &pkt, pdMS_TO_TICKS(wait_ms)) != pdTRUE) {
         return NULL;    // nada todavía; la task vuelve a mirar la compuerta
     }
 
@@ -660,6 +665,11 @@ static Config *ble_recv_config(void) {
         ESP_LOGI(TAG_GET_RSP_BLE, "BLE: Se recibió información de configuración!");
     }
     return cfg;
+}
+
+/* La que va en la tabla de protocolos, con la espera normal del bucle. */
+static Config *ble_recv_config(void) {
+    return ble_config_from_queue(TASK_POLL_MS);
 }
 
 /* El enlace BLE no se cierra al cambiar de protocolo: queda activo siempre. */
@@ -1115,6 +1125,40 @@ void vTaskGetResponse(void *pvParameters) {
         /* Espera una config, con timeout. Devuelve NULL si no llegó nada o si
          * lo que llegó no servía; cada protocolo ya logueó el motivo. */
         Config *new_config = proto->recv_config();
+
+        /* Por dónde sale el ACK. Es igual al protocolo activo salvo cuando la
+         * config entró por el canal de rescate, más abajo. */
+        protocol_t ack_over = proto->id;
+
+        /* CANAL DE RESCATE POR BLE
+         *
+         * ble_init() corre una sola vez en app_main y no se deshace nunca: el
+         * anuncio BLE y la característica A quedan activos con cualquier
+         * protocolo, así que el servidor puede escribir ahí cuando el
+         * transporte principal dejó de responder. Es su única forma de
+         * recuperar un device que ya no lo escucha.
+         *
+         * Lo que faltaba era que alguien vaciara la cola: solo la vaciaban
+         * app_main al arrancar y la task de respuesta de BLE. Con UDP, TCP o
+         * MQTT activos nadie la tocaba, se llenaba con cinco configs y el resto
+         * se descartaba, así que el rescate no llegaba nunca. Medido en banco:
+         * "cola BLE llena, descartando config" mientras el servidor esperaba
+         * una conexión TCP que el device no iba a abrir.
+         *
+         * El sondeo va sin espera porque la de esta vuelta ya la hizo el
+         * recv_config del protocolo activo. */
+        if (!new_config && proto->id != PROTOCOL_BLE) {
+            new_config = ble_config_from_queue(0);
+            if (new_config) {
+                ESP_LOGW(proto->rsp_tag, "Config recibida por BLE (canal de rescate)");
+                /* El ACK tiene que volver por BLE: el servidor escribió en la
+                 * característica A y está esperando en la D, no en el
+                 * transporte activo. Mandarlo por el otro lado lo dejaría
+                 * reintentando hasta darla por no aplicada. */
+                ack_over = PROTOCOL_BLE;
+            }
+        }
+
         if (!new_config) {
             continue;
         }
@@ -1140,7 +1184,7 @@ void vTaskGetResponse(void *pvParameters) {
         if (current_config && new_config->config_version < current_config->config_version) {
             ESP_LOGW(proto->rsp_tag, "Config antigua: %ld < %ld",
                      (long)new_config->config_version, (long)current_config->config_version);
-            send_config_ack(proto->id, new_config, false);
+            send_config_ack(ack_over, new_config, false);
             config__free_unpacked(new_config, NULL);
             continue;
         }
@@ -1148,7 +1192,7 @@ void vTaskGetResponse(void *pvParameters) {
         /* Misma versión: se confirma y se descarta. No hay nada que cambiar. */
         if (!config_has_changed(current_config, new_config)) {
             ESP_LOGI(proto->rsp_tag, "La configuración recibida es la misma");
-            send_config_ack(proto->id, new_config, true);
+            send_config_ack(ack_over, new_config, true);
             config__free_unpacked(new_config, NULL);
             continue;
         }
@@ -1163,7 +1207,7 @@ void vTaskGetResponse(void *pvParameters) {
         /* El ACK sale ANTES de detener nada, y por `proto->id` en vez de por el
          * protocolo de la config nueva: el transporte abierto sigue siendo
          * este, y el ACK es lo último que se manda antes de cerrarlo. */
-        send_config_ack(proto->id, current_config, true);
+        send_config_ack(ack_over, current_config, true);
 
         /* Detiene la task de envío y las productoras, y vacía la cola: los
          * paquetes del protocolo anterior no deben colarse al siguiente. */

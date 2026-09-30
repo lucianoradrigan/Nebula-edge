@@ -48,6 +48,49 @@ void ble_set_config_queue(QueueHandle_t queue) {
     s_config_queue = queue;
 }
 
+/* Encola una configuración recibida por BLE.
+ *
+ * SI LA COLA ESTÁ LLENA SE DESCARTA LA MÁS VIEJA, NO LA NUEVA
+ *     Una configuración es estado, no un evento: la única que importa es la
+ *     última. Descartando la nueva, un device con la cola llena se quedaba con
+ *     configuraciones viejas y no aplicaba nunca la que el servidor acababa de
+ *     escribir, que es justo el caso del rescate por BLE cuando el transporte
+ *     activo dejó de responder.
+ *
+ * Corre en la task de la pila BLE, así que ninguna de estas llamadas puede
+ * bloquear: las dos van con timeout 0. */
+static void enqueue_config(const uint8_t *data, uint16_t len, const char *origin) {
+    if (s_config_queue == NULL || len == 0) {
+        return;
+    }
+
+    packet_t pkt = { .size = len, .data = malloc(len) };
+    if (pkt.data == NULL) {
+        ESP_LOGW(GATTS_TABLE_TAG, "Sin memoria para cola de config BLE (%s)", origin);
+        return;
+    }
+    memcpy(pkt.data, data, len);
+
+    if (xQueueSend(s_config_queue, &pkt, 0) == pdTRUE) {
+        ESP_LOGI(GATTS_TABLE_TAG, "configuración encolada (%s)", origin);
+        return;
+    }
+
+    /* Hace lugar sacando la más vieja. El free() es nuestro: al paquete que sale
+     * de la cola ya no lo va a liberar nadie. */
+    packet_t stale;
+    if (xQueueReceive(s_config_queue, &stale, 0) == pdTRUE) {
+        free(stale.data);
+    }
+
+    if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
+        ESP_LOGW(GATTS_TABLE_TAG, "cola BLE llena, descartando config (%s)", origin);
+        free(pkt.data);
+        return;
+    }
+    ESP_LOGW(GATTS_TABLE_TAG, "cola BLE llena: se descartó la config más vieja (%s)", origin);
+}
+
 void ble_set_start_semaphore(SemaphoreHandle_t sem) {
     s_start_semaphore = sem;
 }
@@ -450,25 +493,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             if (param->write.handle == ble_handle_table[IDX_CHAR_VAL_A]) {
                 ESP_LOGI(GATTS_TABLE_TAG, "cliente escribió en característica A (configuración).");
 
-                // Encola paquete de configuración solo si la ESP se encuentra en conexión persistente (envío datos)
-                if (s_config_queue != NULL && param->write.len > 0) {
-                    packet_t pkt = {
-                        .size = param->write.len,
-                        .data = malloc(param->write.len),
-                    };
-                    if (pkt.data == NULL) {
-                        ESP_LOGW(GATTS_TABLE_TAG, "Sin memoria para cola de config BLE");
-                    } else {
-                        memcpy(pkt.data, param->write.value, param->write.len);
-                        if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
-                            ESP_LOGW(GATTS_TABLE_TAG, "cola BLE llena, descartando config");
-                            free(pkt.data);
-                        }
-                        else {
-                            ESP_LOGW(GATTS_TABLE_TAG, "configuración encolada correctamente");
-                        }
-                    }
-                }
+                enqueue_config(param->write.value, param->write.len, "escritura directa");
             }
 
             /* Se escribe en char C: se cede semáforo. */
@@ -505,23 +530,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             );
 
             if (param->exec_write.exec_write_flag == ESP_GATT_PREP_WRITE_EXEC && prepare_len > 0) {
-                if (s_config_queue != NULL) {
-                    packet_t pkt = {
-                        .size = prepare_len,
-                        .data = malloc(prepare_len),
-                    };
-                    if (pkt.data == NULL) {
-                        ESP_LOGW(GATTS_TABLE_TAG, "Sin memoria para cola de config BLE (prepare write)");
-                    } else {
-                        memcpy(pkt.data, prepare_buf, prepare_len);
-                        if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
-                            ESP_LOGW(GATTS_TABLE_TAG, "cola BLE llena, descartando config (prepare write)");
-                            free(pkt.data);
-                        } else {
-                            ESP_LOGI(GATTS_TABLE_TAG, "configuración encolada (prepare write)");
-                        }
-                    }
-                }
+                enqueue_config(prepare_buf, prepare_len, "prepare write");
             } else {
                 ESP_LOGI(GATTS_TABLE_TAG, "prepare write cancelado");
             }
