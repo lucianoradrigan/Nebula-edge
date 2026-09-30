@@ -10,6 +10,7 @@ Correr desde raspberry/server/ con las dependencias instaladas:
 from __future__ import annotations
 import asyncio
 import socket
+import time
 import unittest
 
 import sessions
@@ -28,6 +29,10 @@ def quick_timeouts(**overrides) -> Timeouts:
         no_data_grace_sec=8.0,
         config_ack_sec=1.0,
         config_ack_retries=3,
+        # Alto a propósito: estos tests no son sobre la resincronización de la
+        # hora, y con un valor chico el reenvío de la config vigente se mezcla
+        # con las configs que sí están midiendo. El resync tiene su propio test.
+        clock_resync_sec=3600.0,
     )
     base.update(overrides)
     return Timeouts(**base)
@@ -114,6 +119,48 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(task, timeout=5.0)
         self.assertIsNotNone(result, "run() debía devolver la config aplicada")
         self.assertEqual(result.config_version, 2)
+
+    async def test_current_config_is_resent_to_put_the_device_clock_on_time(self):
+        """El server reenvía la config VIGENTE, con la misma versión, solo para
+        poner el reloj del device en hora.
+
+        La ESP32 no tiene RTC con batería: su hora entra por `time_client` y
+        después deriva (~0,75 s por minuto medidos en banco). El único reloj
+        confiable que puede ver es el que le manda el server.
+
+        Se comprueba además que la sesión NO se cierre: el reenvío es
+        accesorio y no tiene que interrumpir la recepción de telemetría.
+        """
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        # Intervalo chico para no esperar los 300 s de producción.
+        timeouts = quick_timeouts(clock_resync_sec=0.3)
+        session = self._build_session(repo, port, timeouts)
+        # La primera vez que se ve un device solo se anota el instante, así que
+        # se arranca con el registro ya puesto: es el estado de un device que
+        # viene corriendo desde hace rato, que es cuando hay deriva que corregir.
+        type(session)._clock_resync_at[session.device_id] = time.monotonic() - 1.0
+        self.addCleanup(type(session)._clock_resync_at.pop, session.device_id, None)
+
+        task = asyncio.create_task(session.run())
+        self.addCleanup(task.cancel)
+
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+
+        for _ in range(5):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
+                break
+        self.assertGreaterEqual(len(repo.data_1), 1, "no se insertó la telemetría")
+
+        raw = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=5.0)
+        resent = DataCodec.deserialize_config(raw)
+        self.assertIsNotNone(resent, "no llegó ninguna config de resincronización")
+        self.assertEqual(resent.config_version, 1,
+                         "el resync no debe cambiar la versión: el device rearmaría todo por nada")
+        self.assertGreater(resent.time_client, 0, "el resync tiene que traer hora")
+        self.assertFalse(task.done(), "el reenvío de hora no debía cerrar la sesión")
 
     async def test_config_is_resent_until_the_device_acks(self):
         """El device pierde el primer envío de config y el server reintenta.

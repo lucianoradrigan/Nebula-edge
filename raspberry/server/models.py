@@ -82,6 +82,10 @@ class Timeouts:
     no_data_grace_sec: float = 50.0     # Gracia sobre el intervalo de envío antes de dar por muerta la sesión
     config_poll_sec: float = 15.0       # Cada cuánto se consulta la BD aunque no llegue telemetría
 
+    # --- resincronización de la hora (sessions.py) ---
+    clock_resync_sec: float = 300.0     # Cada cuánto se reenvía la config vigente solo para poner el reloj
+                                        # del device en hora. Ver _resync_device_clock().
+
     # --- handshake de configuración (sessions.py) ---
     config_ack_sec: float = 2.0         # Ventana de espera del ACK, por intento
     config_ack_retries: int = 10        # Intentos antes de dar la config por no aplicada

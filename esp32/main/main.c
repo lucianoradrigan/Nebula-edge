@@ -1119,6 +1119,22 @@ void vTaskGetResponse(void *pvParameters) {
             continue;
         }
 
+        /* PONER EL RELOJ EN HORA, ANTES DE MIRAR LA VERSIÓN
+         *
+         * El servidor estampa `time_client` con la hora del momento en CADA
+         * Config que arma (repository.py: time_cli = utc_epoch_now()), así que
+         * cualquier config que llegue —nueva, repetida o vieja— trae hora
+         * fresca. Antes solo se usaba la de la primera config por BLE, y las
+         * demás se descartaban junto con la config: el reloj quedaba corriendo
+         * libre desde el arranque, con una deriva medida en banco de ~0,75 s
+         * por minuto (unos 45 s de atraso en una hora).
+         *
+         * Va acá arriba y no más abajo a propósito: si fuera después de las
+         * comparaciones de versión, una config repetida —que es justamente el
+         * caso de la resincronización periódica del servidor— se descartaría
+         * sin que su hora llegara nunca al reloj. */
+        device_clock_set(new_config->time_client);
+
         /* Config más vieja que la aplicada: se rechaza con un ACK negativo, para
          * que el servidor sepa que llegó y que NO se aplicó. */
         if (current_config && new_config->config_version < current_config->config_version) {

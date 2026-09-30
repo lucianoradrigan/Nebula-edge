@@ -133,6 +133,58 @@ class DeviceSession:
             return base + grace
         return self.timeouts.no_data_grace_sec
 
+    # Último reenvío de hora, por device y NO por sesión.
+    #
+    # POR QUÉ NO ES UN ATRIBUTO DE INSTANCIA
+    #     En deep sleep, TCP y BLE cierran el enlace al dormirse y la sesión se
+    #     construye de nuevo en cada despertar (Transport.reopens). Un contador
+    #     por sesión se reiniciaría en cada ciclo y la resincronización no
+    #     llegaría nunca justo en el modo donde más falta hace, que es el que
+    #     acumula error de reloj al dormir.
+    _clock_resync_at: dict[str, float] = {}
+
+    async def _resync_device_clock(self, tx: Transport, db_config: "ConfigData") -> None:
+        """Reenvía la config VIGENTE, sin cambiarle la versión, para poner el
+        reloj del device en hora.
+
+        POR QUÉ HACE FALTA
+            La ESP32 no tiene RTC con batería: su hora entra en el campo
+            `time_client` de la config y después corre sola. Y corre mal: el
+            atraso medido en banco es de ~0,75 s por minuto, unos 45 s en una
+            hora. La única hora confiable que el device puede ver es la que le
+            mandamos nosotros.
+
+        POR QUÉ REENVIAR LA MISMA VERSIÓN Y NO INVENTAR UNA NUEVA
+            `get_config()` estampa `time_client` con la hora del momento en
+            cada config que arma, así que el mismo mensaje que ya existe sirve
+            de reloj sin tocar nada del protocolo. Subirle la versión para
+            forzar una reaplicación ensuciaría el espacio de versiones y haría
+            que el device rearme tasks y transporte por nada.
+
+            Del lado del firmware, la hora se aplica ANTES de comparar
+            versiones justamente para que una config repetida sirva de
+            sincronización; ver vTaskGetResponse() en main.c.
+
+        RECIBE LA CONFIG DE LA BASE, NO self.config
+            `self.config` es la que quedó fija al abrir la sesión, con la hora
+            de ese momento: reenviarla sincronizaría el reloj a un instante ya
+            pasado. La que llega por parámetro sale de get_config_async() en la
+            misma vuelta del bucle, así que su `time_client` es de ahora.
+
+        NO ESPERA EL ACK
+            El device contesta un ACK que acá no le sirve a nadie: llega al
+            bucle de datos y el router lo descarta como IGNORED. Esperarlo
+            bloquearía la recepción de telemetría por una tarea accesoria.
+        """
+        try:
+            await tx.send(DataCodec.serialize_config(db_config))
+        except Exception as e:
+            # Que falle no es grave: el device sigue con su hora vieja y se
+            # reintenta en la próxima vuelta.
+            log(f"{tx.name}: no se pudo reenviar la hora a {self.device_id}: {e}")
+            return
+        log(f"{tx.name}: hora reenviada a {self.device_id} (config v{db_config.config_version})")
+
     async def _proactive_config_push(self, push_and_wait: Callable[["ConfigData"], Any]) -> "ConfigData | None":
         """Consulta la BD sin haber recibido un paquete y empuja la config si cambió.
 
@@ -387,6 +439,22 @@ class ProtocolSession(DeviceSession):
             elif decision.decision == ConfigDecision.PUSH:
                 applied = await self._push_and_wait(tx, decision.db_config)
                 return decision.db_config if applied else None
+
+            # El device está al día de config: es el momento tranquilo para
+            # ponerle el reloj en hora. Ver _resync_device_clock().
+            if tx.can_send and decision.decision == ConfigDecision.UP_TO_DATE:
+                now = time.monotonic()
+                last = self._clock_resync_at.get(self.device_id)
+                if last is None:
+                    # Primera vez que se ve este device en este proceso: solo se
+                    # anota el instante, sin mandar nada. El reenvío sirve para
+                    # corregir la deriva acumulada, y todavía no hubo tiempo de
+                    # acumular ninguna. El costo es que un device que ya venía
+                    # corriendo espera un intervalo antes de su primer ajuste.
+                    self._clock_resync_at[self.device_id] = now
+                elif now - last >= self.timeouts.clock_resync_sec:
+                    self._clock_resync_at[self.device_id] = now
+                    await self._resync_device_clock(tx, db_config)
 
 class MQTTDeviceSession(ProtocolSession):
     """Sesión MQTT: toda la lógica está en ProtocolSession, solo cambia el transporte."""

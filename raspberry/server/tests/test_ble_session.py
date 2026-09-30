@@ -33,6 +33,10 @@ def quick_timeouts(**overrides) -> Timeouts:
         config_ack_sec=0.5,
         config_ack_retries=2,
         ble_ack_short_sec=0.5,
+        # Alto a propósito: estos tests no son sobre la resincronización de la
+        # hora, y con un valor chico el reenvío de la config vigente se mezcla
+        # con las configs que sí están midiendo. El resync tiene su propio test.
+        clock_resync_sec=3600.0,
     )
     base.update(overrides)
     return Timeouts(**base)
