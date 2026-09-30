@@ -57,6 +57,18 @@ class TransportClosed(Exception):
     """
 
 
+class DeviceWentToSleep(TransportClosed):
+    """El corte lo causó un aviso de deep sleep, no una desconexión cualquiera.
+
+    Importa porque el device NO se apaga al mandar el aviso: todavía guarda la
+    config en NVS, apaga los sensores y espera (vTaskDelay(3000) al final de
+    deep_sleep_if_needed(), en main.c). Durante esos segundos su stack BLE
+    sigue vivo y acepta conexiones, así que reconectar enseguida agarra la
+    instancia que está por reiniciarse. La sesión usa esto para esperar antes
+    del primer reintento; ver ProtocolSession.run().
+    """
+
+
 class Transport(ABC):
     """Mueve bytes hacia/desde un device. Sin lógica de protocolo de aplicación."""
 

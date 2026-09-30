@@ -98,6 +98,14 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         p.start()
         self.addCleanup(p.stop)
 
+        # La pausa tras el aviso de deep sleep existe para no reconectar con el
+        # device todavía encendido; acá no hay device real que apagar, así que
+        # se achica como el resto de los tiempos (ver quick_timeouts).
+        for name, value in (("_DEEP_SLEEP_SHUTDOWN_SEC", 0.05), ("_REOPEN_RETRY_SEC", 0.05)):
+            q = mock.patch.object(sessions.ProtocolSession, name, value)
+            q.start()
+            self.addCleanup(q.stop)
+
     def _build_session(self, repo, timeouts, ble_client=None):
         device = FakeBLEDevice()
         return sessions.BLEDeviceSession(
@@ -209,6 +217,37 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
             "tras el deep sleep no se reconectó")
         self.assertFalse(task.done(), "la sesión debía seguir viva tras reconectar")
 
+    async def test_does_not_reconnect_while_the_device_is_still_shutting_down(self):
+        """Tras avisar deep sleep el device sigue encendido unos segundos.
+
+        Guarda la config en NVS, apaga los sensores y espera antes de dormirse,
+        y en todo ese rato su stack BLE acepta conexiones. Reconectar ahí agarra
+        la instancia que está por reiniciarse: el "start" de char C se pierde
+        con el reset, el device queda esperando en su xSemaphoreTake() y la
+        sesión espera datos que no van a llegar hasta agotar el timeout.
+        """
+        p = mock.patch.object(sessions.ProtocolSession, "_DEEP_SLEEP_SHUTDOWN_SEC", 0.6)
+        p.start()
+        self.addCleanup(p.stop)
+
+        repo = FakeRepo(db_version=1)
+        task, client = await self._connected_session(repo)
+        first = client
+
+        client.emit_notification(UUID_CHAR_B, DEEP_SLEEP_PACKET)
+
+        await asyncio.sleep(0.2)
+        self.assertIs(
+            FakeBleakClient.last_instance, first,
+            "se reconectó antes de que el device alcanzara a dormirse",
+        )
+
+        self.assertTrue(
+            await self._wait_until(lambda: FakeBleakClient.last_instance is not first),
+            "pasada la pausa tenía que reconectar",
+        )
+        self.assertFalse(task.done(), "la sesión debía seguir viva")
+
     async def test_a_failed_reopen_does_not_end_the_session(self):
         """Reabrir falla mientras el device duerme, y eso no cierra la sesión.
 
@@ -217,10 +256,6 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         Antes un solo fallo acá terminaba la sesión, y el descubrimiento
         sacaba al device de su lista justo cuando estaba despertando.
         """
-        p = mock.patch.object(sessions.ProtocolSession, "_REOPEN_RETRY_SEC", 0.05)
-        p.start()
-        self.addCleanup(p.stop)
-
         repo = FakeRepo(db_version=1)
         task, client = await self._connected_session(repo)
         first = client

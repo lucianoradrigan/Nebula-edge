@@ -44,7 +44,7 @@ from config_resolver import ConfigResolver, ConfigDecision
 from packet_router import PacketRouter, PacketOutcome
 from repository import DatabaseRepository
 from transport import (
-    Transport, TransportClosed,
+    Transport, TransportClosed, DeviceWentToSleep,
     UdpTransport, TcpTransport, MqttTransport, BleTransport,
 )
 
@@ -235,6 +235,12 @@ class ProtocolSession(DeviceSession):
     # caliente, igual que el asyncio.sleep(0.2) que tenía BLEDeviceSession.
     _REOPEN_RETRY_SEC = 1.0
 
+    # Piso de la pausa tras un aviso de deep sleep, para no reconectar con el
+    # device todavía encendido. Cubre lo que le queda por hacer después de
+    # avisar: nvs_save_config(), el deinit de los sensores y el
+    # vTaskDelay(3000) final de deep_sleep_if_needed() (main.c).
+    _DEEP_SLEEP_SHUTDOWN_SEC = 5.0
+
     async def run(self) -> "ConfigData | None":
         """Abre el transporte y corre la sesión; lo reabre si el enlace se corta.
 
@@ -280,9 +286,32 @@ class ProtocolSession(DeviceSession):
                     log(f"{tx.name}: enlace cortado con {self.device_id} ({e}). Cerrando sesión.")
                     return None
                 log(f"{tx.name}: {e}. Reabriendo para esperar al device.")
+                pause = self._reopen_pause_sec(e)
+                if pause > 0:
+                    log(f"{tx.name}: esperando {pause:.0f}s a que {self.device_id} duerma y vuelva.")
+                    await asyncio.sleep(pause)
                 reopen_deadline = time.monotonic() + self._sleep_timeout_sec()
             finally:
                 await tx.close()
+
+    def _reopen_pause_sec(self, closed: TransportClosed) -> float:
+        """Cuánto esperar antes del PRIMER intento de reabrir el enlace.
+
+        Solo importa tras un aviso de deep sleep. El device manda el aviso y
+        sigue encendido varios segundos más (ver DeviceWentToSleep), así que
+        reconectar enseguida se conecta a la instancia que está por
+        reiniciarse: la escritura de "start" en char C se pierde con el reset
+        y el device queda esperando en su xSemaphoreTake() mientras la sesión
+        espera datos que no van a llegar, hasta agotar el timeout completo.
+
+        Se espera lo que el device va a estar ausente -su sleep_time_s-, con
+        un piso que cubre el apagado. No se suman los dos: pasarse tampoco
+        sirve, porque al volver todavía tarda en levantar el GATT y los
+        reintentos normales se encargan de esa parte.
+        """
+        if not isinstance(closed, DeviceWentToSleep):
+            return 0.0
+        return max(self._DEEP_SLEEP_SHUTDOWN_SEC, float(self.config.sleep_time_s or 0))
 
     async def _session_loop(self, tx: Transport) -> "ConfigData | None":
         """Recibe telemetría y aplica cambios de config sobre un transporte ya abierto."""
@@ -316,7 +345,7 @@ class ProtocolSession(DeviceSession):
             if routed.outcome == PacketOutcome.DEEP_SLEEP:
                 if tx.reopens:
                     # El device cierra el enlace al dormirse: hay que reabrirlo.
-                    raise TransportClosed(f"{self.device_id} avisó deep sleep")
+                    raise DeviceWentToSleep(f"{self.device_id} avisó deep sleep")
                 log(f"{tx.name}: Se detectó deep sleep de {self.device_id}, se sigue escuchando")
                 continue
             data = routed.data
