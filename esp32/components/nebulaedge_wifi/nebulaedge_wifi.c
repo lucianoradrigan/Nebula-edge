@@ -195,14 +195,17 @@ void wifi_init_sta(global_wifi_config *global_wifi_config) {
     // xEventGroupWaitBits() returns the bits before the call returned, hence 
     // we can test which event actually happened.
     if (bits & WIFI_CONNECTED_BIT) {
-        // Conexión exitosa a la red wifi
-        ESP_LOGI(TAG, "Connection succesful. SSID:%s password:%s",
-                 global_wifi_config->ssid, global_wifi_config->password);
+        // Conexión exitosa a la red wifi. La contraseña NO se loguea: ver la
+        // nota en el handler de desconexión, más arriba.
+        ESP_LOGI(TAG, "Connection succesful. SSID:%s", global_wifi_config->ssid);
     } 
     else if (bits & WIFI_FAIL_BIT) {
-        // Error al conectar a wifi
-        ESP_LOGI(TAG, "Failed to connect to SSID: %s, password: %s",
-                 global_wifi_config->ssid, global_wifi_config->password);
+        /* Error al conectar. Acá el largo de la contraseña sí sirve: distingue
+         * "llegó vacía" de "llegó y el AP la rechaza", que es justo la duda
+         * cuando la conexión falla. */
+        ESP_LOGI(TAG, "Failed to connect to SSID: %s (PASS: %u chars)",
+                 global_wifi_config->ssid,
+                 (unsigned)strlen((const char *)global_wifi_config->password));
         ESP_LOGI(TAG, "Restarting...");
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
