@@ -23,6 +23,7 @@
 #include "nebulaedge_defs.h"
 #include "board_pinout.h"
 #include "nebulaedge_config_store.h"
+#include "nebulaedge_busscan.h"
 #include "nebulaedge_device.h"
 #include "nebulaedge_i2c.h"
 #include "bmm350.h"
@@ -214,6 +215,17 @@ static void drain_and_free_data_queue(void) {
  * bucle y miran la compuerta. El costo es despertar unas pocas veces por
  * segundo sin hacer nada; a cambio, nadie tiene que congelarlas desde afuera. */
 #define TASK_POLL_MS 250
+
+/* Escaneo de buses al arrancar: diagnóstico de bring-up, APAGADO por defecto.
+ *
+ * No queda encendido porque cuesta y porque mueve cosas: el barrido I2C son 112
+ * sondeos con su timeout, varios segundos con el bus vacío, y el SPI baja chip
+ * selects del expansor de a uno.
+ *
+ * BUS_SCAN_CS_MASK excluye el IO1 a propósito: en la im-v2 va a un RELÉ, y
+ * bajarlo lo acciona de verdad. 0xFD son los otros siete IO. */
+#define BUS_SCAN_AT_BOOT    0
+#define BUS_SCAN_CS_MASK    0xFD
 
 static EventGroupHandle_t sensor_gate = NULL;
 
@@ -1331,6 +1343,14 @@ void app_main() {
 
         // Inicializa el bus con el pinout de esta placa
         ESP_ERROR_CHECK(i2c_master_init(&bus_handle, &board_i2c));
+
+#if BUS_SCAN_AT_BOOT
+        /* Diagnóstico de bring-up, apagado por defecto. Ver nebulaedge_busscan.h.
+         * El escaneo SPI mueve IO del expansor, y en la im-v2 el IO1 va a un
+         * relé: por eso la máscara es explícita y excluye ese bit. */
+        nebulaedge_busscan_i2c(bus_handle);
+        nebulaedge_busscan_spi(bus_handle, BUS_SCAN_CS_MASK);
+#endif
 
         /* Cada driver se agrega al bus y se configura. La dirección I2C la
          * conoce cada uno; acá solo van los parámetros de medición. */
