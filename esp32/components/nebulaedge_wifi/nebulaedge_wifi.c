@@ -62,9 +62,14 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
         // Check if the maximum number of retries has not been reached
         if (s_retry_num < config->max_retry) {
-            ESP_LOGI(TAG, "trying to connect to the AP (SSID: %s, PASS: %s): attempt %d",
+            /* La contraseña NO se loguea. Se imprimía en claro en cada intento
+             * de reconexión, y la salida serie se suele redirigir a archivo
+             * durante las pruebas, así que terminaba en disco. Se deja el largo
+             * porque es lo único útil para depurar: distingue "llegó vacía" de
+             * "llegó y no autentica". */
+            ESP_LOGI(TAG, "trying to connect to the AP (SSID: %s, PASS: %u chars): attempt %d",
                      config->ssid,
-                     config->password,
+                     (unsigned)strlen((const char *)config->password),
                      s_retry_num + 1);
 
             // Attempt to reconnect

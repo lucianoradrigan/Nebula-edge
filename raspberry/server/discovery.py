@@ -157,7 +157,11 @@ class DeviceDiscovery:
             try:
                 config = await DatabaseRepository(self.db_dsn).get_config_async(addr)
                 if config:
-                    log(f"[WiFi] SSID: {config.ssid}, Contraseña: {config.passwd}")
+                    # La contraseña NO se imprime: esta línea sale en cada
+                    # descubrimiento y la salida del servidor se suele redirigir a
+                    # archivo. Se deja el largo, que es lo único útil para depurar:
+                    # distingue "no se leyó" de "se leyó y el device no autentica".
+                    log(f"[WiFi] SSID: {config.ssid}, Contraseña: {len(config.passwd or '')} chars")
             except Exception as e:
                 log(f"Error al conectar/obtener config para {addr}: {e}")
                 self.devices.pop(addr, None)
