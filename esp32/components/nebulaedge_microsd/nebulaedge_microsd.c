@@ -28,12 +28,6 @@
 /* El pinout lo entrega la aplicación en sd_mount(); ver el header. */
 #define SD_NEAR_FULL_THRESHOLD_BYTES        (128ULL * 1024 * 1000)  // 128 MB de threshold
 
-/* Los GPIO reales del ESP32-S3 llegan hasta el 48. De 100 para arriba son
- * pines del expansor: 100 + n es el IOn del FXL6408. La traducción la hace
- * __wrap_gpio_set_level(), más abajo. */
-#define GPIO_EXTENDER_BASE                  100
-#define VIRTUAL_GPIO_NUM(n)                 ((gpio_num_t)(GPIO_EXTENDER_BASE + (n)))
-
 /* Tiempo que tarda la alimentación de la tarjeta en estabilizarse después de
  * energizarla. Medido en el banco de la IM-V2: sin esta espera el montaje
  * falla de forma intermitente. */
@@ -52,39 +46,56 @@ static sd_pins_t s_pins;
 static bool s_has_pins = false;
 static bool s_sd_mounted = false;
 
-/* El expansor que maneja el chip select. Está en una estática porque
- * __wrap_gpio_set_level() no recibe contexto: el driver SDSPI la llama con un
- * número de pin y nada más. */
+/* El expansor que maneja el chip select. Lo movemos nosotros, no SDSPI; el
+ * porqué está explicado largo en sd_mount(). */
 static fxl6408_handle_t s_cs_expander = NULL;
 
 static const char *TAG = "nebulaedge_microsd";
 
-/* Declaración de la función real de ESP-IDF, que el wrap deja accesible. */
-esp_err_t __real_gpio_set_level(gpio_num_t gpio_num, uint32_t level);
-
-/* Intercepta gpio_set_level() para todo el binario. Ver la explicación larga en
- * el CMakeLists.txt raíz, que es donde vive la opción de enlace.
- *
- * Solo desvía los números de pin virtuales; cualquier GPIO real del chip cae en
- * __real_gpio_set_level() sin cambios, que es lo que hacen las otras llamadas
- * del proyecto y de ESP-IDF que este wrap también redirige. */
-esp_err_t __attribute__((used)) __wrap_gpio_set_level(gpio_num_t gpio_num, uint32_t level)
-{
-    if ((int)gpio_num < GPIO_EXTENDER_BASE) {
-        return __real_gpio_set_level(gpio_num, level);
-    }
-
-    uint8_t pin = (uint8_t)((int)gpio_num - GPIO_EXTENDER_BASE);
+/* Pone el chip select de la tarjeta en alto o en bajo. Es un IO del expansor,
+ * o sea una transacción I2C: no se puede llamar desde un contexto que no pueda
+ * bloquearse. Ver sd_mount(). */
+static esp_err_t sd_cs_set(bool high) {
     if (s_cs_expander == NULL) {
-        ESP_LOGE(TAG, "No se puede mover el IO%d: no hay expansor registrado", pin);
+        ESP_LOGE(TAG, "No hay expansor registrado para mover el chip select");
         return ESP_ERR_INVALID_STATE;
     }
+    return fxl6408_set_output(s_cs_expander, s_pins.cs_expander_pin, high);
+}
 
-    esp_err_t ret = fxl6408_set_output(s_cs_expander, pin, level != 0);
+/* Reloj de arranque que pide la norma SD: al menos 74 ciclos con el chip select
+ * en ALTO antes del primer comando, para que la tarjeta inicialice su
+ * electrónica interna. Normalmente lo da SDSPI en go_idle_clockout(), pero eso
+ * corre cuando el chip select ya es asunto nuestro, así que lo damos acá con un
+ * dispositivo temporal que no maneja ningún chip select. */
+static esp_err_t sd_clockout_before_select(const sd_pins_t *pins) {
+    const spi_device_interface_config_t dummy_cfg = {
+        .clock_speed_hz = 400000,      // frecuencia de sondeo, como la de SDSPI
+        .mode            = 0,
+        .spics_io_num    = -1,         // sin chip select: lo tenemos en alto
+        .queue_size      = 1,
+    };
+
+    spi_device_handle_t dummy = NULL;
+    esp_err_t ret = spi_bus_add_device(pins->spi_host, &dummy_cfg, &dummy);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "No se pudo poner el IO%d del expansor en %ld: %s",
-                 pin, (long)level, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "No se pudo agregar el dispositivo temporal del reloj de arranque: %s",
+                 esp_err_to_name(ret));
+        return ret;
     }
+
+    uint8_t ones[10];               // 80 ciclos, con margen sobre los 74
+    memset(ones, 0xFF, sizeof(ones));
+    spi_transaction_t t = {
+        .length    = sizeof(ones) * 8,
+        .tx_buffer = ones,
+    };
+    ret = spi_device_polling_transmit(dummy, &t);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Falló el reloj de arranque de la tarjeta: %s", esp_err_to_name(ret));
+    }
+
+    spi_bus_remove_device(dummy);
     return ret;
 }
 
@@ -111,9 +122,29 @@ esp_err_t sd_mount(const sd_pins_t *pins) {
     s_pins = *pins;
     s_has_pins = true;
 
-    /* El expansor queda registrado ANTES de tocar SDSPI: el propio
-     * sdspi_host_init_device() pone el chip select en alto al inicializar, y
-     * esa llamada ya pasa por __wrap_gpio_set_level(). */
+    /* EL CHIP SELECT NO SE LE ENTREGA A SDSPI, Y ES A PROPÓSITO
+     *
+     * El proyecto de bringup le pasaba un pin virtual (100 + IO del expansor) y
+     * lo atendía con -Wl,--wrap=gpio_set_level. El wrap funciona, pero no
+     * alcanza: sdspi_host_init_device() además configura el chip select como
+     * GPIO real, con
+     *
+     *     .pin_bit_mask = 1ULL << slot_config->gpio_cs
+     *
+     * y correr 100 lugares un valor de 64 bits es comportamiento indefinido. En
+     * este chip queda enmascarado a 100 & 63 = 36, así que gpio_config()
+     * reconfigura el GPIO 36. En la IM-V2 ese pin es una línea de datos de la
+     * flash OCTAL (el arranque dice "Octal Flash Mode Enabled" y "flash io:
+     * opi_str"), o sea que dejarlo como salida de propósito general rompe el bus
+     * de la flash: el siguiente fetch de código no vuelve y el interrupt
+     * watchdog reinicia el chip.
+     *
+     * Medido en banco: 22 reinicios seguidos con rst:0x8 (TG1WDT_SYS_RST), y
+     * una sonda que solo llama a gpio_config() sobre el GPIO 36, sin tocar la
+     * tarjeta, reproduce el reinicio por su cuenta.
+     *
+     * Así que se le dice a SDSPI que no hay chip select y lo movemos nosotros:
+     * alto para el reloj de arranque, bajo mientras la tarjeta está montada. */
     s_cs_expander = pins->cs_expander;
 
     ret = fxl6408_config_output(s_cs_expander, pins->cs_expander_pin, true, false);
@@ -156,21 +187,29 @@ esp_err_t sd_mount(const sd_pins_t *pins) {
         gpio_set_pull_mode(pins->clk_io, GPIO_PULLUP_ONLY);
     }
 
-    /* Configuración del dispositivo SPI para la tarjeta SD.
-     * El chip select va como pin virtual para que lo atienda el wrap.
-     *
-     * PENDIENTE DE VERIFICAR EN BANCO
-     *     El wrap cubre gpio_set_level(), pero no gpio_config(), y
-     *     sdspi_host_init_device() configura el chip select como GPIO real
-     *     antes de usarlo, con .pin_bit_mask = 1ULL << gpio_cs. Con gpio_cs a
-     *     100 ese corrimiento es comportamiento indefinido; siguiendo
-     *     __ashldi3 en xtensa queda enmascarado a 100 & 63 = 36, o sea que
-     *     probablemente deje el GPIO 36 como salida sin que nadie se lo pida.
-     *     Si la máscara diera 0, gpio_config() devolvería ESP_ERR_INVALID_ARG
-     *     y el montaje fallaría acá mismo, así que el síntoma distingue los
-     *     dos casos. Hay que contrastar el GPIO 36 con el esquemático. */
+    /* El reloj de arranque va con el chip select en alto, que es como lo dejó
+     * fxl6408_config_output() más arriba. Después queda en bajo y la tarjeta se
+     * mantiene seleccionada todo el tiempo que esté montada: es el único
+     * dispositivo que usamos de este bus. */
+    ret = sd_clockout_before_select(pins);
+    if (ret != ESP_OK) {
+        spi_bus_free(host.slot);
+        s_spi_bus_inited = false;
+        return ret;
+    }
+
+    ret = sd_cs_set(false);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "No se pudo bajar el chip select de la tarjeta: %s", esp_err_to_name(ret));
+        spi_bus_free(host.slot);
+        s_spi_bus_inited = false;
+        return ret;
+    }
+
+    /* Configuración del dispositivo SPI para la tarjeta SD. Sin chip select:
+     * ver la explicación larga arriba. */
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = VIRTUAL_GPIO_NUM(pins->cs_expander_pin);
+    slot_config.gpio_cs = SDSPI_SLOT_NO_CS;
     slot_config.host_id = host.slot;
 
     // Opciones para el sistema de archivos
@@ -183,6 +222,7 @@ esp_err_t sd_mount(const sd_pins_t *pins) {
     ret = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_config, &mount_config, &card);
     if (ret != ESP_OK) {
         // Si falla el mount, liberamos bus para permitir retry limpio.
+        sd_cs_set(true);
         spi_bus_free(host.slot);
         s_spi_bus_inited = false;
         card = NULL;
@@ -269,6 +309,10 @@ esp_err_t sd_unmount(void) {
     }
 
     if (s_spi_bus_inited) {
+        /* Suelta la tarjeta antes de bajar el bus: el chip select quedó en bajo
+         * todo el tiempo que estuvo montada. */
+        sd_cs_set(true);
+
         // Liberar el bus SPI
         ret = spi_bus_free(host.slot);
         if (ret != ESP_OK) {

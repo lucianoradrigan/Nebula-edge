@@ -16,10 +16,10 @@
  *
  * EL CHIP SELECT NO ES UN GPIO
  *     En la IM-V2 cuelga del IO0 del expansor FXL6408, por I2C. Por eso acá se
- *     entrega un handle de expansor y un número de IO en vez de un pin. El
- *     componente le pasa a SDSPI un pin virtual (100 + IO) y lo atiende con
- *     __wrap_gpio_set_level(), que necesita la opción de enlace declarada en el
- *     CMakeLists.txt raíz del proyecto. */
+ *     entrega un handle de expansor y un número de IO en vez de un pin. A SDSPI
+ *     se le dice que no hay chip select y lo mueve este componente: queda en
+ *     bajo mientras la tarjeta está montada. El porqué, que no es obvio, está
+ *     explicado en sd_mount(). */
 typedef struct {
     int      mosi_io;               // master out, slave in
     int      clk_io;                // reloj

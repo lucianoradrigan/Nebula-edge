@@ -5,22 +5,19 @@ cmake_minimum_required(VERSION 3.16)
 # set(IDF_TARGET esp32s3)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
-# En la IM-V2 el chip select de la microSD no es un GPIO: cuelga del IO0 del
-# expansor FXL6408, por I2C. El driver SDSPI de ESP-IDF mueve ese CS con
-# gpio_set_level() y no ofrece ningún punto de enganche, así que la única forma
-# de interceptarlo es este wrap del linker: nebulaedge_microsd le pasa a SDSPI
-# un pin virtual (100 + IO) y atiende esos números en __wrap_gpio_set_level().
+# NOTA HISTÓRICA: acá vivía un -Wl,--wrap=gpio_set_level.
 #
-# POR QUÉ ESTÁ ACÁ Y NO EN EL COMPONENTE
-#     No se puede acotar: idf_build_set_property aplica al enlace de la imagen
-#     entera, ESP-IDF incluido. Hoy redirige cuatro objetos enlazados
-#     (sdspi_host.c, sdmmc_host.c, nebulaedge_i2c.c, i2c_common.c); los otros
-#     tres pasan derecho a __real_ porque sus GPIO son <= 99.
+# Venía del proyecto de bringup de la IM-V2, donde el chip select de la microSD
+# (IO0 del expansor FXL6408, por I2C) se le entregaba a SDSPI como un pin
+# virtual 100 + IO para atenderlo en __wrap_gpio_set_level(). El wrap hacía su
+# parte, pero sdspi_host_init_device() también configura el chip select como
+# GPIO real con 1ULL << gpio_cs, y correr 100 lugares un valor de 64 bits es
+# comportamiento indefinido: acá queda en 100 & 63 = 36, que en esta placa es
+# una línea de datos de la flash octal. Reconfigurarla reiniciaba el chip por
+# interrupt watchdog. El detalle está en sd_mount(), en nebulaedge_microsd.c.
 #
-# CONSECUENCIA
-#     nebulaedge_microsd deja de ser autocontenido: necesita esta línea. Si se
-#     copia a otro proyecto sin ella, el enlace falla con "undefined reference
-#     to __real_gpio_set_level", que al menos es un fallo ruidoso.
-idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=gpio_set_level" "-Wl,-u,__wrap_gpio_set_level" APPEND)
+# Ahora SDSPI corre con SDSPI_SLOT_NO_CS y el chip select lo mueve el
+# componente, así que el wrap ya no hace falta y nebulaedge_microsd volvió a
+# ser autocontenido.
 
 project(nebulaedge)

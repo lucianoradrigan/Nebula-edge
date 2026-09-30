@@ -224,22 +224,85 @@ static void drain_and_free_data_queue(void) {
  *
  * BUS_SCAN_CS_MASK excluye el IO1 a propósito: en la im-v2 va a un RELÉ, y
  * bajarlo lo acciona de verdad. 0xFD son los otros siete IO. */
-/* Persistencia local en microSD. APAGADA.
+/* Persistencia local en microSD. ENCENDIDA.
  *
- * El código está integrado y el pinout es el del bringup de la IM-V2 (CS en el
- * IO0 del expansor FXL6408), pero encenderlo deja el chip en un bucle de reset
- * por INTERRUPT watchdog: rst:0x8 (TG1WDT_SYS_RST). Medido en banco: 2 resets
- * en 2 arranques.
+ * El pinout es el del bringup de la IM-V2 (CS en el IO0 del expansor FXL6408).
+ * Encenderla dejaba el chip en un bucle de reset por INTERRUPT watchdog
+ * (rst:0x8, TG1WDT_SYS_RST) hasta que se encontró la causa, que no era la
+ * contención en el bus I2C sino un corrimiento indefinido dentro de SDSPI: está
+ * contada en sd_mount(), en nebulaedge_microsd.c.
  *
- * Sospecha, sin confirmar: el chip select se mueve por I2C dentro de
- * __wrap_gpio_set_level(), y el driver SDSPI lo llama desde su camino crítico.
- * Una transacción I2C bloqueante ahí adentro pasa los 300 ms de
- * CONFIG_ESP_INT_WDT_TIMEOUT_MS. El proyecto de bringup no descarta la
- * hipótesis: ahí sdTest() también está comentado y nunca se ejercitó. */
-#define SD_PERSISTENCE      0
+ * Verificada en banco después del arreglo: 6 montajes, 120 líneas escritas
+ * (60 en data_1.ndjson y 60 en data_2.ndjson), 5 ciclos de deep sleep y cero
+ * reinicios por watchdog.
+ *
+ * OJO: el montaje va con .format_if_mount_failed en true, heredado del bringup.
+ * Hace que una tarjeta virgen sirva sin prepararla a mano, pero también
+ * formatea una que no monte por cualquier otro motivo. */
+#define SD_PERSISTENCE      1
 
 #define BUS_SCAN_AT_BOOT    0
 #define BUS_SCAN_CS_MASK    0xFD
+
+/* Prueba de banco de la microSD al arrancar. APAGADA.
+ *
+ * Monta, escribe, relee y desmonta antes de BLE, WiFi, sensores y tasks, con
+ * nadie más usando los buses. Sirvió para acorralar el reset por interrupt
+ * watchdog (con nada más corriendo, seguía cayéndose: eso descartó la
+ * contención) y queda acá para validar una tarjeta nueva sin tener que levantar
+ * el resto del firmware. */
+#define SD_SELFTEST_AT_BOOT 0
+
+#if SD_PERSISTENCE || SD_SELFTEST_AT_BOOT
+/* Pinout de la microSD de esta placa. Lo piden el montaje del bucle de
+ * protocolos y la prueba de banco, así que se arma en un solo lugar. Lee
+ * io_expander al ser llamada: los dos llamadores lo inicializan antes. */
+static sd_pins_t board_sd_pins(void) {
+    return (sd_pins_t){
+        .mosi_io          = PIN_NUM_MOSI,
+        .clk_io           = PIN_NUM_CLK,
+        .miso_io          = PIN_NUM_MISO,
+        .spi_host         = SD_SPI_HOST,
+        .max_freq_khz     = SD_MAX_FREQ_KHZ,
+        .cs_expander      = io_expander,
+        .cs_expander_pin  = SD_CS_EXPANDER_PIN,
+        .format_if_mount_failed = true,
+    };
+}
+
+/* Deja los otros dispositivos del bus SPI deseleccionados antes de hablarle a
+ * la tarjeta. Qué cuelga de cada IO lo sabe la placa, no el componente. */
+static void sd_deselect_other_spi_devices(void) {
+    static const uint8_t disabled_pins[] = SPI_DISABLED_EXPANDER_PINS;
+    for (size_t i = 0; i < sizeof(disabled_pins) / sizeof(disabled_pins[0]); i++) {
+        fxl6408_config_output(io_expander, disabled_pins[i], true, false);
+    }
+}
+#endif
+
+#if SD_SELFTEST_AT_BOOT
+/* Levanta el bus I2C y el expansor solo para la prueba, y los deja como los
+ * encontró: el bucle de protocolos rehace el bus desde cero más adelante, y el
+ * handle del expansor no sobrevive a que se destruya el bus. */
+static void sd_selftest_at_boot(void) {
+    ESP_ERROR_CHECK(i2c_master_init(&bus_handle, &board_i2c));
+
+    if (fxl6408_init(bus_handle, FXL6408_I2C_ADDR, &io_expander) != ESP_OK) {
+        ESP_LOGE(TAG, "Prueba de banco de la SD: el expansor de IO no responde");
+        i2c_master_deinit(&bus_handle);
+        return;
+    }
+
+    sd_deselect_other_spi_devices();
+
+    const sd_pins_t sd_pins = board_sd_pins();
+    sd_selftest(&sd_pins);
+
+    fxl6408_del(io_expander);
+    io_expander = NULL;
+    i2c_master_deinit(&bus_handle);
+}
+#endif
 
 static EventGroupHandle_t sensor_gate = NULL;
 
@@ -1239,6 +1302,11 @@ void app_main() {
     /* Lo primero de todo: qué build es este y con cuánta memoria arranca. */
     log_boot_banner();
 
+#if SD_SELFTEST_AT_BOOT
+    /* Diagnóstico, apagado por defecto. Ver el bloque de SD_SELFTEST_AT_BOOT. */
+    sd_selftest_at_boot();
+#endif
+
     // Inicializa NVS
     ESP_ERROR_CHECK(nvs_flash_init());
 
@@ -1331,20 +1399,19 @@ void app_main() {
         }
     } 
 
-    /* PERSISTENCIA EN SD: ACTIVADA.
+    /* PERSISTENCIA EN SD
      *
      * El chip select cuelga del IO0 del expansor FXL6408 y el pinout es el del
-     * bringup de la IM-V2, verificado contra esa placa. El montaje se activó
-     * para las pruebas de banco; antes estaba comentado esperando su turno.
+     * bringup de la IM-V2, verificado contra esa placa.
      *
-     * El código está más abajo, dentro del bucle de protocolos: el expansor
-     * cuelga del bus I2C, que se rehace en cada cambio de protocolo, así que
-     * hay que volver a registrarlo igual que los tres sensores.
+     * El montaje está más abajo, dentro del bucle de protocolos, y no acá: el
+     * expansor cuelga del bus I2C, que se rehace en cada cambio de protocolo,
+     * así que hay que volver a registrarlo igual que los tres sensores.
      *
-     * Consecuencia que NO es evidente leyendo el resto del código: las tasks
-     * de envío siguen llamando a sdstorage_write_packet() cuando sleep_time_s > 0, pero
-     * esa función corta de inmediato en sd_is_mounted() y no escribe nada.
-     * O sea que el firmware parece guardar respaldo local y no lo hace. */
+     * El respaldo local solo se escribe en modo deep sleep: las tasks de envío
+     * llaman a sdstorage_write_packet() cuando sleep_time_s > 0. Con
+     * SD_PERSISTENCE en 0 esa llamada corta de inmediato en sd_is_mounted() y
+     * no escribe nada, sin que el resto del código lo note. */
 
     /****************************************************************/
     /********** ITERACIÓN QUE MANEJA DE CAMBIOS DE PROTOCOLO ********/
@@ -1382,30 +1449,15 @@ void app_main() {
         bme688_init(bus_handle, current_config->bme688_sampling, current_config->bme688_sampling, current_config->bme688_sampling);
         bmi270_init(bus_handle, current_config->acc_sampling, 4, 8, 400, current_config->gyro_sensibility); 
 
-        /* Expansor de IO y microSD. Descomentar este bloque es todo lo que
+        /* Expansor de IO y microSD. Poner SD_PERSISTENCE en 1 es todo lo que
          * hace falta para reactivar la persistencia local. */
 #if SD_PERSISTENCE
         if (fxl6408_init(bus_handle, FXL6408_I2C_ADDR, &io_expander) != ESP_OK) {
             ESP_LOGW(TAG, "Expansor de IO no disponible, se continúa sin SD");
         } else {
-            /* Los otros dispositivos del bus SPI se dejan deseleccionados
-             * antes de montar la tarjeta. Qué cuelga de cada IO lo sabe la
-             * placa, no el componente de la microSD. */
-            static const uint8_t disabled_pins[] = SPI_DISABLED_EXPANDER_PINS;
-            for (size_t i = 0; i < sizeof(disabled_pins) / sizeof(disabled_pins[0]); i++) {
-                fxl6408_config_output(io_expander, disabled_pins[i], true, false);
-            }
-        
-            const sd_pins_t sd_pins = {
-                .mosi_io          = PIN_NUM_MOSI,
-                .clk_io           = PIN_NUM_CLK,
-                .miso_io          = PIN_NUM_MISO,
-                .spi_host         = SD_SPI_HOST,
-                .max_freq_khz     = SD_MAX_FREQ_KHZ,
-                .cs_expander      = io_expander,
-                .cs_expander_pin  = SD_CS_EXPANDER_PIN,
-                .format_if_mount_failed = true,
-            };
+            sd_deselect_other_spi_devices();
+
+            const sd_pins_t sd_pins = board_sd_pins();
             esp_err_t sd_ret = sd_mount(&sd_pins);
             if (sd_ret != ESP_OK) {
                 ESP_LOGW(TAG, "SD no disponible, se continúa sin persistencia local: %s", esp_err_to_name(sd_ret));

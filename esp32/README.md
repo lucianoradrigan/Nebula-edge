@@ -121,7 +121,7 @@ Componentes, por rol:
 | Protocolos de salida | `nebulaedge_mqtt`, `nebulaedge_udp`, `nebulaedge_tcp`, `nebulaedge_ble` |
 | Red | `nebulaedge_wifi` |
 | Datos | `nebulaedge_proto_schema` (schema.proto + código generado) |
-| Almacenamiento local | `nebulaedge_microsd` (montar/desmontar), `nebulaedge_sdstorage` (escritura de paquetes). **Desactivado**: ver la nota de abajo. |
+| Almacenamiento local | `nebulaedge_microsd` (montar/desmontar), `nebulaedge_sdstorage` (escritura de paquetes). Solo escribe en modo deep sleep. |
 | Definiciones compartidas | `nebulaedge_defs` |
 
 Notas:
@@ -144,16 +144,20 @@ Notas:
 - `schema.proto` está duplicado a propósito entre firmware y servidor: son dos
   copias del mismo contrato y se editan juntas. Para regenerar el código C, ver
   [components/nebulaedge_proto_schema/README.md](components/nebulaedge_proto_schema/README.md).
-- **La persistencia en microSD está desactivada**: el `mount_sd()` de `app_main`
-  está comentado porque en la IM-V2 ocupa el GPIO 1 y falla. Las tasks de envío
-  siguen llamando a `data_to_sd()`, pero esa función corta en `is_sd_mounted()`
-  y no escribe nada. O sea que el firmware parece guardar respaldo local y no lo
-  hace.
+- **La persistencia en microSD solo escribe en modo deep sleep**: las tasks de
+  envío llaman a `sdstorage_write_packet()` únicamente cuando `sleep_time_s > 0`.
+  El interruptor es `SD_PERSISTENCE` en `main/main.c`; con el interruptor en 0
+  esa llamada corta en `sd_is_mounted()` y no escribe nada, sin que el resto del
+  código lo note. En la IM-V2 el chip select cuelga del IO0 del expansor
+  FXL6408: a SDSPI se le dice que no hay chip select y lo mueve el componente,
+  porque entregárselo como pin virtual reiniciaba el chip por interrupt watchdog
+  (el porqué está en `sd_mount()`, en `nebulaedge_microsd.c`).
+- El montaje va con `.format_if_mount_failed` en true, heredado del bringup:
+  hace que una tarjeta virgen sirva sin prepararla a mano, pero también formatea
+  una que no monte por cualquier otro motivo.
 - Las funciones públicas de `nebulaedge_tcp` llevan prefijo del componente
   (`nebulaedge_tcp_connect`) porque lwIP ya exporta un `tcp_connect` global y el
   enlace falla con símbolo duplicado.
-- El almacenamiento en microSD está en desarrollo (ver limitaciones en el
-  README de la raíz).
 
 ## 10) Relación con la documentación general
 
