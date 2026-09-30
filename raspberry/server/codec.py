@@ -47,6 +47,21 @@ class DataCodec:
     # TYPE_ACK = 0x03 sería bueno implementarlo
     TYPE_DEEP_SLEEP = 0x04
 
+    # Los tres tipos que llevan byte de prefijo, para poder descartar de una
+    # que un paquete sea un ACK sin intentar decodificarlo (ver
+    # is_typed_packet).
+    TYPED_PREFIXES = frozenset({TYPE_ENVIRONMENTAL, TYPE_INERTIAL, TYPE_DEEP_SLEEP})
+
+    @staticmethod
+    def is_typed_packet(packet: bytes) -> bool:
+        """True si el paquete empieza con uno de los bytes de tipo.
+
+        Sirve para no pasarle telemetría al parser de ConfigAck. Un ConfigAck
+        es protobuf crudo, sin prefijo: su primer byte es el tag del campo 1
+        (0x0A), así que no colisiona con ninguno de los tipos.
+        """
+        return bool(packet) and packet[0] in DataCodec.TYPED_PREFIXES
+
     @staticmethod
     def split_typed_packet(packet: bytes) -> tuple[int | None, bytes]:
         """Extrae el tipo (1 byte) y el payload del paquete."""

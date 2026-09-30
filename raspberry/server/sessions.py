@@ -155,14 +155,33 @@ class ProtocolSession(DeviceSession):
         return self.transport_cls(self.config, self._sleep_timeout_sec())
 
     async def _wait_ack(self, tx: Transport, db_config: "ConfigData") -> bool:
-        """Espera un ACK de config válido. Retorna True si el device la aplicó.
+        """Manda la config y espera su ACK, reenviándola en cada reintento.
+
+        Antes la config se mandaba UNA sola vez, desde _push_and_wait, y las
+        `config_ack_retries` vueltas de acá solo volvían a esperar. Si ese
+        único mensaje no se procesaba, el server esperaba
+        `config_ack_sec * config_ack_retries` sin reintentar nada y cerraba la
+        sesión. Y eso pasa seguido: en UDP el datagrama se puede perder sin
+        más, y al despertar de deep sleep el device solo escucha config
+        mientras no complete su ventana de envío -en cuanto la completa,
+        deep_sleep_if_needed() suspende su task de respuesta y cierra el
+        socket-, ventana que con send_interval_s=1 y sleep_window_size=10 son
+        unos 5 segundos contra los 20 que esperaba el server.
 
         Mientras espera sigue procesando la telemetría que llegue (no se
         descarta data por estar en medio de un cambio de config).
         """
         ack_window = tx.ack_window_sec or self.timeouts.config_ack_sec
 
-        for _ in range(self.timeouts.config_ack_retries):
+        for attempt in range(1, self.timeouts.config_ack_retries + 1):
+            if attempt > 1:
+                log(f"{tx.name}: reenviando config v{db_config.config_version} a {self.device_id} (intento {attempt})")
+            try:
+                await tx.send(DataCodec.serialize_config(db_config))
+            except Exception as e:
+                log(f"Error enviando config {tx.name}: {e}")
+                return False
+
             deadline = time.monotonic() + ack_window
             while True:
                 remaining = deadline - time.monotonic()
@@ -172,6 +191,16 @@ class ProtocolSession(DeviceSession):
                 pkt = await tx.recv(remaining)
                 if pkt is None:
                     break
+
+                # La telemetría y el aviso de deep sleep llevan byte de tipo y
+                # nunca son un ACK: pasarlos igual por deserialize_config_ack()
+                # solo llenaba el log de "Error al desempaquetar el ACK" por
+                # cada paquete que llegaba durante la espera.
+                if DataCodec.is_typed_packet(pkt):
+                    routed = await self._router.route(pkt, self.device_id, source=tx.name)
+                    if routed.outcome == PacketOutcome.TELEMETRY:
+                        self._update_last_client_time(routed.data)
+                    continue
 
                 ack = DataCodec.deserialize_config_ack(pkt)
                 if (
@@ -183,12 +212,6 @@ class ProtocolSession(DeviceSession):
                     log(f"ACK {tx.name} recibido para {self.device_id} v{db_config.config_version}")
                     return True
 
-                # No era ACK: si es telemetría se inserta y se sigue esperando.
-                routed = await self._router.route(pkt, self.device_id, source=tx.name)
-                if routed.outcome != PacketOutcome.TELEMETRY:
-                    continue
-                self._update_last_client_time(routed.data)
-
             # Se acabó la ventana sin ACK. Algunos transportes (BLE) pueden
             # preguntarle al device si igual la aplicó, por si se perdió el aviso.
             if await tx.confirm_config_applied(self.device_id, db_config.config_version):
@@ -199,13 +222,11 @@ class ProtocolSession(DeviceSession):
         return False
 
     async def _push_and_wait(self, tx: Transport, db_config: "ConfigData") -> bool:
-        """Envía una config nueva al device y espera su ACK."""
+        """Envía una config nueva al device y espera su ACK.
+
+        El envío en sí lo hace _wait_ack, que lo repite en cada reintento.
+        """
         log(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
-        try:
-            await tx.send(DataCodec.serialize_config(db_config))
-        except Exception as e:
-            log(f"Error enviando config {tx.name}: {e}")
-            return False
         return await self._wait_ack(tx, db_config)
 
     async def run(self) -> "ConfigData | None":

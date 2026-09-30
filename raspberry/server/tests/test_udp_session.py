@@ -115,6 +115,60 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result, "run() debía devolver la config aplicada")
         self.assertEqual(result.config_version, 2)
 
+    async def test_config_is_resent_until_the_device_acks(self):
+        """El device pierde el primer envío de config y el server reintenta.
+
+        Pasa seguido: en UDP el datagrama se puede perder sin más, y al
+        despertar de deep sleep el device deja de escuchar config en cuanto
+        completa su ventana de envío. Antes la config se mandaba una sola vez
+        y los reintentos solo volvían a esperar, así que la sesión se cerraba
+        sin que el device se enterara nunca.
+        """
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
+        self.addCleanup(task.cancel)
+
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+
+        for _ in range(5):
+            await self._send(dev, environmental_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.environmental) >= 1, timeout=0.5):
+                break
+
+        # Alguien cambia la config en la BD
+        repo.db_version = 2
+        await self._send(dev, environmental_packet(applied_version=1), port)
+
+        # El device ignora el primer envío y espera el reenvío del server.
+        first = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=5.0)
+        self.assertEqual(DataCodec.deserialize_config(first).config_version, 2)
+
+        resent = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=5.0)
+        self.assertIsNotNone(
+            DataCodec.deserialize_config(resent),
+            "el server tenía que reenviar la config al no recibir ACK",
+        )
+        self.assertEqual(DataCodec.deserialize_config(resent).config_version, 2)
+
+        # Recién ahora el device confirma
+        await self._send(dev, config_ack_packet(version=2), port)
+
+        result = await asyncio.wait_for(task, timeout=5.0)
+        self.assertIsNotNone(result, "run() debía devolver la config aplicada")
+        self.assertEqual(result.config_version, 2)
+
+    async def test_typed_packets_are_never_parsed_as_ack(self):
+        """La telemetría que llega esperando el ACK no pasa por el parser de ACK.
+
+        Lleva byte de tipo, así que nunca puede ser un ConfigAck: intentarlo
+        igual solo ensuciaba el log con un error por cada paquete recibido.
+        """
+        self.assertTrue(DataCodec.is_typed_packet(environmental_packet(applied_version=1)))
+        self.assertTrue(DataCodec.is_typed_packet(DEEP_SLEEP_PACKET))
+        self.assertFalse(DataCodec.is_typed_packet(config_ack_packet(version=2)))
+
     async def test_proactive_push_without_incoming_telemetry(self):
         """La sesión detecta el cambio de config sondeando la BD, sin depender
         de que llegue telemetría nueva."""
