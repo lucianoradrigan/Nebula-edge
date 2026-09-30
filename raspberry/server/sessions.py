@@ -229,6 +229,12 @@ class ProtocolSession(DeviceSession):
         log(f"Cambio de protocolo: {self.config.protocol_conf} -> {db_config.protocol_conf} para {self.device_id}")
         return await self._wait_ack(tx, db_config)
 
+    # Entre dos intentos de reabrir el enlace después de un corte. Corto a
+    # propósito: cada intento ya cuesta lo suyo (BleTransport.open() deja el
+    # scanner apagado mientras conecta), así que esto solo evita el bucle
+    # caliente, igual que el asyncio.sleep(0.2) que tenía BLEDeviceSession.
+    _REOPEN_RETRY_SEC = 1.0
+
     async def run(self) -> "ConfigData | None":
         """Abre el transporte y corre la sesión; lo reabre si el enlace se corta.
 
@@ -237,13 +243,35 @@ class ProtocolSession(DeviceSession):
         sigue esperando al device dentro de la misma sesión, igual que hacía el
         while exterior de TCPDeviceSession. Los sin conexión (UDP, MQTT) nunca
         lanzan TransportClosed.
+
+        Reabrir puede fallar varias veces antes de lograrse, y eso es normal:
+        con deep sleep el device avisa y se va, así que el primer intento cae
+        mientras todavía está apagando sensores, y los siguientes mientras
+        duerme. Por eso se reintenta hasta `_sleep_timeout_sec()`, que ya
+        contempla `sleep_time_s`, en vez de cerrar la sesión al primer fallo.
         """
+        # None mientras no haya habido un corte: un fallo en la PRIMERA
+        # apertura sí cierra la sesión, porque el enlace no se estableció nunca.
+        reopen_deadline: float | None = None
+
         while True:
             tx = self._make_transport()
 
             if not await tx.open():
-                # No se llegó a establecer (p.ej. ningún device se conectó).
-                return None
+                await tx.close()
+
+                if reopen_deadline is None:
+                    # No se llegó a establecer (p.ej. ningún device se conectó).
+                    return None
+
+                if time.monotonic() >= reopen_deadline:
+                    log(f"{tx.name}: {self.device_id} no volvió a aparecer. Cerrando sesión.")
+                    return None
+
+                await asyncio.sleep(self._REOPEN_RETRY_SEC)
+                continue
+
+            reopen_deadline = None
 
             try:
                 return await self._session_loop(tx)
@@ -252,6 +280,7 @@ class ProtocolSession(DeviceSession):
                     log(f"{tx.name}: enlace cortado con {self.device_id} ({e}). Cerrando sesión.")
                     return None
                 log(f"{tx.name}: {e}. Reabriendo para esperar al device.")
+                reopen_deadline = time.monotonic() + self._sleep_timeout_sec()
             finally:
                 await tx.close()
 

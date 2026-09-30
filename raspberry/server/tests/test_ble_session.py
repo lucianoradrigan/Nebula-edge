@@ -209,6 +209,43 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
             "tras el deep sleep no se reconectó")
         self.assertFalse(task.done(), "la sesión debía seguir viva tras reconectar")
 
+    async def test_a_failed_reopen_does_not_end_the_session(self):
+        """Reabrir falla mientras el device duerme, y eso no cierra la sesión.
+
+        Con deep sleep el primer intento de reconexión cae mientras el device
+        todavía está apagando sensores, y los siguientes mientras duerme.
+        Antes un solo fallo acá terminaba la sesión, y el descubrimiento
+        sacaba al device de su lista justo cuando estaba despertando.
+        """
+        p = mock.patch.object(sessions.ProtocolSession, "_REOPEN_RETRY_SEC", 0.05)
+        p.start()
+        self.addCleanup(p.stop)
+
+        repo = FakeRepo(db_version=1)
+        task, client = await self._connected_session(repo)
+        first = client
+
+        # El device avisa deep sleep y se va: los reintentos van a fallar.
+        FakeBleakClient.fail_to_connect = True
+        client.emit_notification(UUID_CHAR_B, DEEP_SLEEP_PACKET)
+
+        self.assertTrue(
+            await self._wait_until(lambda: FakeBleakClient.last_instance is not first),
+            "no se intentó reabrir el enlace",
+        )
+        self.assertFalse(task.done(), "un fallo al reabrir no debía cerrar la sesión")
+
+        # El device despierta y ahora sí se puede conectar.
+        FakeBleakClient.fail_to_connect = False
+        self.assertTrue(
+            await self._wait_until(
+                lambda: FakeBleakClient.last_instance is not None
+                and FakeBleakClient.last_instance.is_connected
+            ),
+            "no se reconectó cuando el device volvió",
+        )
+        self.assertFalse(task.done(), "la sesión debía seguir viva tras reconectar")
+
     async def test_session_ends_when_connection_fails(self):
         FakeBleakClient.fail_to_connect = True
         repo = FakeRepo(db_version=1)
