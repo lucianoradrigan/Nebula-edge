@@ -8,7 +8,6 @@ CONFIG_BT_ENABLED=y
 CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
 CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
 CONFIG_BT_LE_50_FEATURE_SUPPORT=n
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 
 # Para mostrar información de tasks
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
@@ -39,6 +38,9 @@ CONFIG_FATFS_LFN_STACK=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
 # Tabla de particiones propia (partitions.csv): el preset SINGLE_APP_LARGE fija
-# la app en 1500K y no crece con el tamaño de la flash.
+# la app en 1500K y no crece con el tamaño de la flash. Ese preset se quitó de
+# más arriba en este archivo: las dos opciones son de la misma `choice` de
+# Kconfig, y tenerlas ambas en =y solo funcionaba porque la de abajo gana por
+# orden de aparición.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
