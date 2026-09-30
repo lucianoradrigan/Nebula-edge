@@ -232,9 +232,13 @@ static void drain_and_free_data_queue(void) {
  * contención en el bus I2C sino un corrimiento indefinido dentro de SDSPI: está
  * contada en sd_mount(), en nebulaedge_microsd.c.
  *
- * Verificada en banco después del arreglo: 6 montajes, 120 líneas escritas
- * (60 en data_1.ndjson y 60 en data_2.ndjson), 5 ciclos de deep sleep y cero
- * reinicios por watchdog.
+ * Verificada en banco después del arreglo, con los cuatro protocolos en deep
+ * sleep: 18 montajes, 250 líneas escritas, cero reinicios por watchdog y cero
+ * fallos de montaje. El caso de control en modo continuo monta la tarjeta y no
+ * escribe nada, que es lo que corresponde. Con la tarjeta sin responder, el
+ * montaje falla con ESP_ERR_TIMEOUT, el firmware sigue transmitiendo sin
+ * respaldo local y NO intenta formatear: format_if_mount_failed solo entra si
+ * la tarjeta contesta pero no trae una FAT válida.
  *
  * OJO: el montaje va con .format_if_mount_failed en true, heredado del bringup.
  * Hace que una tarjeta virgen sirva sin prepararla a mano, pero también
