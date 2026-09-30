@@ -33,6 +33,13 @@ static const char *TAG = "nebulaedge_tcp";
 #define TCP_LENGTH_PREFIX_BYTES 2
 #define TCP_MAX_FRAME_BYTES     4096
 
+/* Cuánto espera recv() antes de devolver vacío. Tiene que ser corto: es lo que
+ * marca cada cuánto la task de respuesta puede atender una pausa cooperativa.
+ * Antes no había ninguno —el setsockopt de SO_RCVTIMEO solo estaba en el
+ * componente UDP, y encima en cero, que significa "sin timeout"— así que
+ * tcp_receive() bloqueaba para siempre. */
+#define TCP_RECV_TIMEOUT_MS     250
+
 /* El descriptor de socket es definido globalmente en este script. */
 static int sock = -1;
 
@@ -142,6 +149,13 @@ void nebulaedge_tcp_open_socket(tcp_params_t *params) {
 
     int opt = 1;
 
+    /* Timeout de recepción, para que recv() no bloquee indefinidamente. Ver
+     * TCP_RECV_TIMEOUT_MS y el manejo de EAGAIN en recv_exact_ex(). */
+    struct timeval rcv_timeout = { .tv_sec = 0, .tv_usec = TCP_RECV_TIMEOUT_MS * 1000 };
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof rcv_timeout) < 0) {
+        ESP_LOGW(TAG, "No se pudo poner SO_RCVTIMEO: errno %d (%s)", errno, strerror(errno));
+    }
+
     if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         ESP_LOGW(TAG, "Failed to set SO_REUSEADDR: errno %d (%s)", errno, strerror(errno));
     }
@@ -234,21 +248,48 @@ esp_err_t nebulaedge_tcp_send(const uint8_t *data, size_t len) {
  * recv() puede devolver menos de lo pedido: un mensaje puede llegar repartido
  * en varios segmentos TCP. Sin este bucle, el resto del mensaje se leería como
  * si fuera el comienzo del siguiente. */
-static bool recv_exact(uint8_t *buffer, size_t n) {
+/* Resultado de una lectura. RECV_IDLE existe para poder distinguir "no llegó
+ * nada" de "falló": con SO_RCVTIMEO puesto, quedarse sin datos es el caso
+ * normal y no un error. */
+typedef enum {
+    RECV_OK,
+    RECV_IDLE,
+    RECV_FAIL,
+} recv_result_t;
+
+/* Lee exactamente `n` bytes. `idle_ok` permite devolver RECV_IDLE si el socket
+ * se queda sin datos ANTES del primer byte.
+ *
+ * Esa condición no es un detalle: a mitad de un mensaje hay que seguir
+ * esperando. Si acá se cortara con medio mensaje leído, el resto se leería en
+ * la llamada siguiente como si fuera un prefijo de largo, y el stream queda
+ * desincronizado — exactamente lo que el bloque FRAMING de arriba evita. */
+static recv_result_t recv_exact_ex(uint8_t *buffer, size_t n, bool idle_ok) {
     size_t got = 0;
     while (got < n) {
         ssize_t r = recv(sock, buffer + got, n - got, 0);
         if (r < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Timeout del socket: solo se puede reportar si no empezamos.
+                if (idle_ok && got == 0) {
+                    return RECV_IDLE;
+                }
+                continue;
+            }
             ESP_LOGE(TAG, "recv failed: errno %d (%s)", errno, strerror(errno));
-            return false;
+            return RECV_FAIL;
         }
         if (r == 0) {
             ESP_LOGW(TAG, "socket closed by peer");
-            return false;
+            return RECV_FAIL;
         }
         got += (size_t)r;
     }
-    return true;
+    return RECV_OK;
+}
+
+static bool recv_exact(uint8_t *buffer, size_t n) {
+    return recv_exact_ex(buffer, n, false) == RECV_OK;
 }
 
 /* Consume y descarta `n` bytes del socket. Sirve para no dejar el stream
@@ -274,7 +315,14 @@ static bool recv_discard(size_t n) {
 size_t nebulaedge_tcp_receive(uint8_t *buffer, size_t len) {
     uint8_t header[TCP_LENGTH_PREFIX_BYTES];
 
-    if (!recv_exact(header, sizeof(header))) {
+    /* Único punto donde un timeout es aceptable: todavía no empezó ningún
+     * mensaje, así que no hay nada que desincronizar. Devolver 0 es lo que deja
+     * al caller volver a mirar la compuerta cooperativa. */
+    recv_result_t head = recv_exact_ex(header, sizeof(header), true);
+    if (head == RECV_IDLE) {
+        return 0;
+    }
+    if (head != RECV_OK) {
         return 0;
     }
 

@@ -1,4 +1,5 @@
 #include <string.h>
+#include <errno.h>
 #include <sys/param.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,6 +16,10 @@
 #include <lwip/netdb.h>
 #include "nebulaedge_udp.h"
 #include "nebulaedge_defs.h"
+
+/* Cuánto espera recvfrom() antes de devolver vacío. Tiene que ser corto: es
+ * lo que marca cada cuánto la task de respuesta puede atender una pausa. */
+#define UDP_RECV_TIMEOUT_MS 250
 
 static const char *TAG = "nebulaedge_udp";
 
@@ -117,10 +122,16 @@ void nebulaedge_udp_open_socket(udp_params_t *params) {
     }
     ESP_LOGI(TAG, "Socket created successfully. Destiny: %s:%d", params->ip_host, params->port);
 
-    // Set timeout del socket
+    /* Timeout de recepción. Estaba en cero, que en POSIX/lwIP significa "sin
+     * timeout": el recvfrom() quedaba bloqueado para siempre y la task de
+     * respuesta no volvía nunca a mirar la compuerta cooperativa, así que toda
+     * pausa que la esperara agotaba su timeout de escape.
+     *
+     * UDP es de datagramas, así que cortar acá es seguro: no hay mensajes a
+     * medio leer como en el stream de TCP. */
     struct timeval timeout;
     timeout.tv_sec = 0;
-    timeout.tv_usec = 0;
+    timeout.tv_usec = UDP_RECV_TIMEOUT_MS * 1000;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
 }
 
@@ -150,13 +161,17 @@ size_t nebulaedge_udp_receive(uint8_t *data_recv, size_t len) {
     struct sockaddr_storage source_addr;        
     socklen_t socklen = sizeof(source_addr);
 
-    // Espera que lleguen datos al socket
-    ESP_LOGI(TAG, "Waiting to receive data");
+    // Espera que lleguen datos al socket, hasta UDP_RECV_TIMEOUT_MS.
     int len_recv = recvfrom(sock, data_recv, len, 0, (struct sockaddr *)&source_addr, &socklen);
 
     // Error occurred during receiving
     if (len_recv < 0) {
-        ESP_LOGW(TAG, "recvfrom failed: %s", strerror(errno));
+        /* El timeout no es un error: es la vía normal para que el caller vuelva
+         * a mirar la compuerta. Loguearlo sería una línea cada
+         * UDP_RECV_TIMEOUT_MS, o cuatro por segundo. */
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            ESP_LOGW(TAG, "recvfrom failed: %s", strerror(errno));
+        }
         return 0;
     }
 
