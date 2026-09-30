@@ -1,6 +1,7 @@
 #ifndef NEBULAEDGE_TCP
 #define NEBULAEDGE_TCP
 
+#include <stdbool.h>
 #include "esp_err.h"
 #include "nebulaedge_defs.h"
 
@@ -24,6 +25,16 @@ int nebulaedge_tcp_connect(void);
  * era uint8_t* y obligaba a un cast en cada llamada. */
 esp_err_t nebulaedge_tcp_send(const uint8_t *data, size_t len);
 size_t nebulaedge_tcp_receive(uint8_t *buffer, size_t len);
+/* Responde si el enlace se cayó. Hace falta porque nebulaedge_tcp_receive()
+ * devuelve 0 tanto para "no llegó nada" como para "el enlace murió", y sin
+ * poder distinguirlos la task de respuesta gira en falso. */
+bool nebulaedge_tcp_link_is_down(void);
+
+/* Rearma el socket y vuelve a conectar al mismo destino, con tope de tiempo.
+ * Devuelve 0 si quedó conectado. Se puede llamar sin volver a pasar los
+ * parámetros: el destino quedó guardado al abrir. */
+int nebulaedge_tcp_reconnect(void);
+
 void nebulaedge_tcp_close_socket(void);
 
 #endif

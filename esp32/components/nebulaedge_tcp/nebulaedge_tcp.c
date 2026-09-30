@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/select.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <netdb.h>            // struct addrinfo
 #include <arpa/inet.h>
@@ -40,8 +42,35 @@ static const char *TAG = "nebulaedge_tcp";
  * tcp_receive() bloqueaba para siempre. */
 #define TCP_RECV_TIMEOUT_MS     250
 
+/* Tope del connect() al reconectar. No se puede dejar sin tope: si el host
+ * desaparece sin contestar (apagado, fuera de la red) el connect bloqueante se
+ * queda esperando el timeout de TCP, y esta llamada corre en la task de
+ * respuesta, que es la que tiene que atender las pausas cooperativas. Por eso
+ * el reconnect usa connect no bloqueante más select(). */
+#define TCP_CONNECT_TIMEOUT_MS  3000
+
 /* El descriptor de socket es definido globalmente en este script. */
 static int sock = -1;
+
+/* Enlace caído: lo levanta cualquier fallo duro de recv() o de send(), y lo
+ * baja un reconexión exitosa.
+ *
+ * POR QUÉ HACE FALTA UN FLAG Y NO ALCANZA EL VALOR DE RETORNO
+ *     nebulaedge_tcp_receive() devuelve 0 tanto para "no llegó nada" -que con
+ *     SO_RCVTIMEO es el caso normal- como para "el enlace murió". La task de
+ *     respuesta no podía distinguirlos, así que ante un enlace caído volvía a
+ *     llamar de inmediato y giraba en falso. Medido en banco: 21099 "recv
+ *     failed: errno 128" a ~76 por segundo, y el device solo se recuperaba con
+ *     un reset físico. */
+static bool link_down = false;
+
+/* Familia y protocolo con los que se abrió el socket. Se guardan para poder
+ * rearmarlo en el reconnect sin volver a resolver los parámetros: el ip_host
+ * del tcp_params_t apunta dentro del Config, que se libera al cambiar de
+ * configuración, así que guardarse ese puntero sería quedarse con uno colgado.
+ * dest_addr ya tiene la dirección resuelta y es nuestro. */
+static int sock_addr_family = 0;
+static int sock_ip_protocol = 0;
 
 /* Variable global para guardar información del destinatario.
  * esta se configura al momento de abrir el socket. */
@@ -73,6 +102,31 @@ static esp_netif_t *get_netif_from_desc(const char *desc) {
 /* Abre socket TCP IPv4 o IPv6 y lo configura en base a los parámetros entregados. 
  * Luego, se setea la dirección IPv4 o IPv6 del host. Para cambiar de host 
  * hay que cerrar el socket y llamar de nuevo a esta función con los nuevos parámetros. */
+/* Crea el socket y le deja puestas las opciones. Lo usan la apertura normal y
+ * el reconnect, para que las dos rutas queden con el mismo SO_RCVTIMEO: si el
+ * socket rearmado quedara sin él, recv() volvería a bloquear para siempre. */
+static int create_socket(void) {
+    sock = socket(sock_addr_family, SOCK_STREAM, sock_ip_protocol);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Unable to create socket: errno %d (%s)", errno, strerror(errno));
+        return -1;
+    }
+
+    /* Timeout de recepción, para que recv() no bloquee indefinidamente. Ver
+     * TCP_RECV_TIMEOUT_MS y el manejo de EAGAIN en recv_exact_ex(). */
+    struct timeval rcv_timeout = { .tv_sec = 0, .tv_usec = TCP_RECV_TIMEOUT_MS * 1000 };
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof rcv_timeout) < 0) {
+        ESP_LOGW(TAG, "No se pudo poner SO_RCVTIMEO: errno %d (%s)", errno, strerror(errno));
+    }
+
+    int opt = 1;
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        ESP_LOGW(TAG, "Failed to set SO_REUSEADDR: errno %d (%s)", errno, strerror(errno));
+    }
+
+    return 0;
+}
+
 void nebulaedge_tcp_open_socket(tcp_params_t *params) {
     int addr_family = 0;
     int ip_protocol = 0;
@@ -140,24 +194,11 @@ void nebulaedge_tcp_open_socket(tcp_params_t *params) {
         }
     }
 
-    // Abre socket
-    sock = socket(addr_family, SOCK_STREAM, ip_protocol);
-    if (sock < 0) {
-        ESP_LOGE(TAG, "Unable to create socket: errno %d (%s)", errno, strerror(errno));
+    sock_addr_family = addr_family;
+    sock_ip_protocol = ip_protocol;
+
+    if (create_socket() != 0) {
         return;
-    }
-
-    int opt = 1;
-
-    /* Timeout de recepción, para que recv() no bloquee indefinidamente. Ver
-     * TCP_RECV_TIMEOUT_MS y el manejo de EAGAIN en recv_exact_ex(). */
-    struct timeval rcv_timeout = { .tv_sec = 0, .tv_usec = TCP_RECV_TIMEOUT_MS * 1000 };
-    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof rcv_timeout) < 0) {
-        ESP_LOGW(TAG, "No se pudo poner SO_RCVTIMEO: errno %d (%s)", errno, strerror(errno));
-    }
-
-    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        ESP_LOGW(TAG, "Failed to set SO_REUSEADDR: errno %d (%s)", errno, strerror(errno));
     }
 
     ESP_LOGI(TAG, "Socket created, connecting to %s:%d", params->ip_host, params->port);
@@ -174,8 +215,91 @@ int nebulaedge_tcp_connect(void) {
         ESP_LOGE(TAG, "Socket unable to connect: errno %d (%s)", errno, strerror(errno));
         return err;
     }
+    link_down = false;
     ESP_LOGI(TAG, "Successful TCP connection to host");
     return err;
+}
+
+bool nebulaedge_tcp_link_is_down(void) {
+    return link_down;
+}
+
+/* Rearma el socket y vuelve a conectar al mismo destino. Devuelve 0 si quedó
+ * conectado.
+ *
+ * El connect va en modo no bloqueante con select(): ver TCP_CONNECT_TIMEOUT_MS.
+ * dest_addr NO se libera acá, que es la diferencia con
+ * nebulaedge_tcp_close_socket(): el destino sigue siendo el mismo y es lo único
+ * que permite reconectar sin volver a pedirle los parámetros a la aplicación. */
+int nebulaedge_tcp_reconnect(void) {
+    if (dest_addr == NULL) {
+        ESP_LOGE(TAG, "No se puede reconectar: no hay destino guardado");
+        return -1;
+    }
+
+    if (sock >= 0) {
+        shutdown(sock, SHUT_RDWR);
+        close(sock);
+        sock = -1;
+    }
+
+    if (create_socket() != 0) {
+        return -1;
+    }
+
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags < 0 || fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0) {
+        ESP_LOGW(TAG, "No se pudo poner el socket en no bloqueante: errno %d (%s)",
+                 errno, strerror(errno));
+        flags = -1;     // se sigue igual: un connect bloqueante es peor que nada
+    }
+
+    int err = connect(sock, dest_addr, dest_addr_len);
+    if (err != 0 && errno == EINPROGRESS) {
+        /* El connect quedó en curso. select() sobre escritura avisa cuando
+         * termina, bien o mal; el resultado real hay que pedirlo con
+         * SO_ERROR, porque el socket aparece escribible en los dos casos. */
+        fd_set wset;
+        FD_ZERO(&wset);
+        FD_SET(sock, &wset);
+        struct timeval tv = {
+            .tv_sec  = TCP_CONNECT_TIMEOUT_MS / 1000,
+            .tv_usec = (TCP_CONNECT_TIMEOUT_MS % 1000) * 1000,
+        };
+
+        int ready = select(sock + 1, NULL, &wset, NULL, &tv);
+        if (ready <= 0) {
+            ESP_LOGW(TAG, "Reconexión: el connect no respondió en %d ms", TCP_CONNECT_TIMEOUT_MS);
+            close(sock);
+            sock = -1;
+            return -1;
+        }
+
+        int so_error = 0;
+        socklen_t so_len = sizeof(so_error);
+        if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &so_error, &so_len) < 0 || so_error != 0) {
+            ESP_LOGW(TAG, "Reconexión rechazada: errno %d (%s)", so_error, strerror(so_error));
+            close(sock);
+            sock = -1;
+            return -1;
+        }
+        err = 0;
+    }
+    else if (err != 0) {
+        ESP_LOGW(TAG, "Reconexión falló: errno %d (%s)", errno, strerror(errno));
+        close(sock);
+        sock = -1;
+        return -1;
+    }
+
+    // Vuelve a bloqueante: el resto del componente asume esa semántica.
+    if (flags >= 0 && fcntl(sock, F_SETFL, flags) < 0) {
+        ESP_LOGW(TAG, "No se pudo devolver el socket a bloqueante: errno %d (%s)",
+                 errno, strerror(errno));
+    }
+
+    link_down = false;
+    return 0;
 }
 
 /* Envía un array de bytes de 8 bits (uint8_t *) a la dirección IP
@@ -222,7 +346,12 @@ esp_err_t nebulaedge_tcp_send(const uint8_t *data, size_t len) {
     while (sent < frame_len) {
         int n = send(sock, frame + sent, frame_len - sent, 0);
         if (n < 0) {
-            ESP_LOGE(TAG, "Error occurred during sending errno %d (%s)", errno, strerror(errno));
+            if (!link_down) {
+                ESP_LOGE(TAG, "Error occurred during sending errno %d (%s)", errno, strerror(errno));
+            }
+            /* La reconexión la hace la task de respuesta, que es la que mira
+             * link_down; acá solo se marca. */
+            link_down = true;
             failed = true;
             break;
         }
@@ -276,11 +405,19 @@ static recv_result_t recv_exact_ex(uint8_t *buffer, size_t n, bool idle_ok) {
                 }
                 continue;
             }
-            ESP_LOGE(TAG, "recv failed: errno %d (%s)", errno, strerror(errno));
+            /* Fallo duro. Se loguea una sola vez por caída: antes esto se
+             * imprimía en cada vuelta del bucle de la task de respuesta. */
+            if (!link_down) {
+                ESP_LOGE(TAG, "recv failed: errno %d (%s)", errno, strerror(errno));
+            }
+            link_down = true;
             return RECV_FAIL;
         }
         if (r == 0) {
-            ESP_LOGW(TAG, "socket closed by peer");
+            if (!link_down) {
+                ESP_LOGW(TAG, "socket closed by peer");
+            }
+            link_down = true;
             return RECV_FAIL;
         }
         got += (size_t)r;
@@ -369,4 +506,5 @@ void nebulaedge_tcp_close_socket(void) {
     free(dest_addr);
     dest_addr = NULL;
     dest_addr_len = 0;
+    link_down = false;
 }

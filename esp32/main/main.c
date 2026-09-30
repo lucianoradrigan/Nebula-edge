@@ -581,8 +581,26 @@ static esp_err_t tcp_send_ack(const Config *cfg, const uint8_t *buf, size_t size
     return nebulaedge_tcp_send(buf, size);
 }
 
+/* Espera entre reintentos de reconexión TCP. Tiene que quedar holgadamente
+ * por debajo de los 5 s de escape de pause_for_protocol_change(): esta espera
+ * corre en la task de respuesta, que es la que tiene que levantar su bit de
+ * "detenida" cuando se pide una pausa. */
+#define TCP_RECONNECT_DELAY_MS  1000
+
 static Config *tcp_recv_config(void) {
     uint8_t buffer[CONFIG_RECV_BUF_BYTES];
+
+    /* Enlace caído: hay que reconectar acá, porque nebulaedge_tcp_receive()
+     * devuelve 0 igual que cuando no llegó nada y la task volvería a llamar de
+     * inmediato. Antes de esto el device giraba a ~76 recv fallidos por segundo
+     * y solo se recuperaba con un reset físico. */
+    if (nebulaedge_tcp_link_is_down()) {
+        vTaskDelay(pdMS_TO_TICKS(TCP_RECONNECT_DELAY_MS));
+        if (nebulaedge_tcp_reconnect() != 0) {
+            return NULL;
+        }
+        ESP_LOGI(TAG_GET_RSP_TCP, "TCP: enlace recuperado");
+    }
 
     size_t len_recv = nebulaedge_tcp_receive(buffer, sizeof(buffer));
     if (len_recv == 0) {
