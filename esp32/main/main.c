@@ -890,6 +890,28 @@ void vTaskSendData(void *pvParameters) {
         // Punto seguro: acá no hay memoria reservada ni transporte a medias.
         sensor_gate_wait(GATE_SEND_IDLE);
 
+        /* GATE_RUN es un bit GLOBAL: resume_collect_tasks() lo levanta para
+         * todas las tasks estacionadas, también para la de envío de un
+         * protocolo que ya cerró su transporte. Sin esta guarda esa task volvía
+         * a consumir de xQueueData —la misma cola que la nueva— y mandaba por un
+         * socket cerrado: "socket is closed", "MQTT client is not initialized".
+         * Y el paquete se perdía igual, porque lo liberaba de todos modos: con N
+         * protocolos ya usados llegaba 1 de cada N.
+         *
+         * Antes del refactor esto no pasaba porque el cambio de protocolo hacía
+         * vTaskSuspend() sobre la task de envío concreta y solo su propia rama
+         * de app_main la reanudaba. Al pasar a la compuerta cooperativa se
+         * perdió esa selectividad, porque el bit es uno para todas.
+         *
+         * Auto-suspenderse es seguro, igual que en la task de respuesta: ocurre
+         * en un punto que esta misma task eligió y sin nada tomado.
+         * start_protocol_tasks() la reanuda si su protocolo vuelve a activarse. */
+        if (current_config && current_config->protocol_conf != proto->id) {
+            ESP_LOGI(proto->send_tag, "Protocolo inactivo: se suspende la task de envío");
+            vTaskSuspend(NULL);
+            continue;
+        }
+
         // Con timeout, para poder volver acá arriba si se pide una pausa.
         if (xQueueReceive(xQueueData, &packet, pdMS_TO_TICKS(TASK_POLL_MS)) != pdTRUE) {
             continue;
@@ -1131,7 +1153,13 @@ static void start_protocol_tasks(const protocol_ops_t *proto) {
      * auto-suspende al salir de su protocolo, así que a esa hay que reanudarla
      * de verdad — auto-suspenderse es seguro, es suspender a OTRA lo que no. */
     resume_collect_tasks();
+    /* Las dos se reanudan de verdad y no solo por la compuerta: la de respuesta
+     * porque se auto-suspende al salir de su protocolo, y la de envío por la
+     * misma razón desde que tiene la guarda de protocolo inactivo. vTaskResume
+     * sobre una task que no está suspendida no hace nada, así que sirve igual
+     * la primera vez, cuando se acaban de crear. */
     vTaskResume(response_task[proto->id]);
+    vTaskResume(send_task[proto->id]);
 
     /* Un punto de medida por protocolo activado. Acá ya levantaron WiFi y, si
      * corresponde, el cliente MQTT, así que es el número que de verdad importa:
