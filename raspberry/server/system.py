@@ -98,6 +98,26 @@ _DB_DEFAULTS = {
     "password": "1234",
 }
 
+# Segundos que psycopg2 puede pasar intentando ABRIR una conexión.
+#
+# POR QUÉ NO ALCANZA CON EL DEFAULT
+#     Sin este parámetro el connect no tiene tope propio y queda a merced del
+#     timeout de TCP del sistema. Si la base deja de aceptar pero el puerto
+#     sigue abierto -el caso típico es el contenedor caído con el proxy de
+#     Docker todavía escuchando- el connect se cuelga sin devolver.
+#
+#     Y no se cuelga solo: las llamadas *_async corren en hilos de
+#     asyncio.to_thread, así que cada intento ocupa un hilo del executor. Con
+#     los hilos tomados, cualquier to_thread posterior queda en cola y el
+#     servidor entero se queda inerte, sin loguear nada, aunque los devices
+#     sigan transmitiendo. Medido en banco: 4,5 minutos sin una sola línea de
+#     salida tras una caída de la base de 30 segundos.
+#
+#     Con el tope, el intento falla rápido, el hilo se libera y el siguiente
+#     reintento vuelve a probar: cuando la base vuelve, el servidor la toma
+#     sin necesidad de reiniciarlo.
+_DB_CONNECT_TIMEOUT_S = 5
+
 
 def database_dsn() -> str:
     """Arma el DSN de Postgres leyendo PG_HOST / PG_DB / PG_USER / PG_PASSWORD.
@@ -126,6 +146,7 @@ def database_dsn() -> str:
         "password": os.getenv("PG_PASSWORD", "").strip(),
     }
     fields = {key: env[key] or default for key, default in _DB_DEFAULTS.items()}
+    fields["connect_timeout"] = str(_DB_CONNECT_TIMEOUT_S)
     return " ".join(f"{key}={value}" for key, value in fields.items())
 
 
