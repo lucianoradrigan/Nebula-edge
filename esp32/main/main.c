@@ -188,8 +188,18 @@ static void drain_and_free_data_queue(void) {
 #define GATE_PAUSE_REQ      (1 << 1)  // hay una pausa pedida (despierta los sleeps)
 #define GATE_INERTIAL_IDLE  (1 << 2)  // la task Inertial ya está detenida
 #define GATE_ENV_IDLE       (1 << 3)  // la task Environmental ya está detenida
-#define GATE_SEND_IDLE      (1 << 4)  // la task de envío ya está detenida
-#define GATE_RSP_IDLE       (1 << 5)  // la task de respuesta ya está detenida
+/* Un bit por protocolo, no uno para los cuatro.
+ *
+ * Con un bit compartido la pausa no podía distinguir QUÉ task lo había puesto.
+ * La del protocolo que se está abandonando se auto-suspende, y si alcanzaba a
+ * poner el bit compartido después del resume, la pausa siguiente creía que la
+ * task ACTIVA ya se había detenido y cerraba el transporte por debajo de ella.
+ * Con un bit propio cada una, el estado de una task suspendida no le miente a
+ * nadie. */
+#define GATE_SEND_IDLE(id)  ((EventBits_t)1 << (4 + (id)))   // bits 4..7
+#define GATE_RSP_IDLE(id)   ((EventBits_t)1 << (8 + (id)))   // bits 8..11
+#define GATE_ALL_SEND_IDLE  ((EventBits_t)0x0F << 4)
+#define GATE_ALL_RSP_IDLE   ((EventBits_t)0x0F << 8)
 
 /* Cuánto se espera a que lleguen a la compuerta. Una lectura de sensor a medio
  * hacer puede tardar lo suyo si el bus está lento; pasado esto se sigue igual,
@@ -295,7 +305,7 @@ static EventBits_t collect_idle_bits(void) {
  * es seguro). */
 static void pause_for_protocol_change(protocol_t id) {
     EventBits_t expected = collect_idle_bits();
-    if (send_task[id]) expected |= GATE_SEND_IDLE;
+    if (send_task[id]) expected |= GATE_SEND_IDLE(id);
     pause_data_tasks(expected);
 }
 
@@ -303,7 +313,7 @@ static void pause_for_protocol_change(protocol_t id) {
  * task de respuesta. A la de envío no se la espera — es la que está acá. */
 static void pause_for_deep_sleep(protocol_t id) {
     EventBits_t expected = collect_idle_bits();
-    if (response_task[id]) expected |= GATE_RSP_IDLE;
+    if (response_task[id]) expected |= GATE_RSP_IDLE(id);
     pause_data_tasks(expected);
 }
 
@@ -315,7 +325,7 @@ static void resume_collect_tasks(void) {
     }
 
     xEventGroupClearBits(sensor_gate, GATE_PAUSE_REQ | GATE_INERTIAL_IDLE |
-                                  GATE_ENV_IDLE | GATE_SEND_IDLE | GATE_RSP_IDLE);
+                                  GATE_ENV_IDLE | GATE_ALL_SEND_IDLE | GATE_ALL_RSP_IDLE);
     xEventGroupSetBits(sensor_gate, GATE_RUN);
 }
 
@@ -888,7 +898,7 @@ void vTaskSendData(void *pvParameters) {
 
     for (;;) {
         // Punto seguro: acá no hay memoria reservada ni transporte a medias.
-        sensor_gate_wait(GATE_SEND_IDLE);
+        sensor_gate_wait(GATE_SEND_IDLE(proto->id));
 
         /* GATE_RUN es un bit GLOBAL: resume_collect_tasks() lo levanta para
          * todas las tasks estacionadas, también para la de envío de un
@@ -907,6 +917,17 @@ void vTaskSendData(void *pvParameters) {
          * en un punto que esta misma task eligió y sin nada tomado.
          * start_protocol_tasks() la reanuda si su protocolo vuelve a activarse. */
         if (current_config && current_config->protocol_conf != proto->id) {
+            /* Declarar el bit propio antes de dormirse no es una formalidad: la
+             * task de respuesta reemplaza current_config ANTES de llamar a
+             * pause_for_protocol_change(), así que esta guarda dispara mientras
+             * esa pausa todavía no empezó. Una task suspendida no vuelve nunca
+             * al punto seguro, así que sin esto la pausa esperaba en vano los
+             * 5 s enteros de GATE_PAUSE_TIMEOUT_MS en cada cambio de protocolo.
+             *
+             * Y es cierto: suspendida es la forma más fuerte de estar detenida.
+             * El bit es propio de este protocolo, así que no le habla por la
+             * task activa. */
+            xEventGroupSetBits(sensor_gate, GATE_SEND_IDLE(proto->id));
             ESP_LOGI(proto->send_tag, "Protocolo inactivo: se suspende la task de envío");
             vTaskSuspend(NULL);
             continue;
@@ -962,7 +983,7 @@ void vTaskGetResponse(void *pvParameters) {
 
     for (;;) {
         // Punto seguro: acá no hay config a medio desempaquetar ni memoria viva.
-        sensor_gate_wait(GATE_RSP_IDLE);
+        sensor_gate_wait(GATE_RSP_IDLE(proto->id));
 
         /* Espera una config, con timeout. Devuelve NULL si no llegó nada o si
          * lo que llegó no servía; cada protocolo ya logueó el motivo. */
