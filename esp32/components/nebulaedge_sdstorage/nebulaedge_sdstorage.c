@@ -1,5 +1,5 @@
 /* Dependencias de esta componente: nebulaedge_microsd, nebulaedge_proto_schema
- * (tipos Environmental, Inertial) y cJSON (en ESP-IDF). */
+ * (tipos Data_1, Data_2) y cJSON (en ESP-IDF). */
 
 #include <stdio.h>
 #include <string.h>
@@ -12,8 +12,8 @@
 #include "schema.pb-c.h"
 #include "nebulaedge_microsd.h"
 
-static const char *environmental_path = "/sdcard/environmental.ndjson";
-static const char *inertial_path      = "/sdcard/inertial.ndjson";
+static const char *data_1_path = "/sdcard/data_1.ndjson";
+static const char *data_2_path = "/sdcard/data_2.ndjson";
 static const char *TAG = "nebulaedge_sdstorage";
 
 /* Abre en append (crea si no existe). */
@@ -51,7 +51,7 @@ static esp_err_t append_ndjson_line(FILE *f, cJSON *json) {
 }
 
 /* Escribe en un archivo los datos ambientales en formato .ndjson. */
-static esp_err_t environmental_to_ndjson(Environmental *env, FILE *f) {
+static esp_err_t data_1_to_ndjson(Data1 *env, FILE *f) {
     if (!env || !f) return ESP_ERR_INVALID_ARG;
 
     cJSON *json = cJSON_CreateObject();
@@ -68,13 +68,13 @@ static esp_err_t environmental_to_ndjson(Environmental *env, FILE *f) {
     esp_err_t ret = append_ndjson_line(f, json);
     cJSON_Delete(json);
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "NDJSON write OK: type=0x01 path=%s", environmental_path);
+        ESP_LOGI(TAG, "NDJSON write OK: type=0x01 path=%s", data_1_path);
     }
     return ret;
 }
 
 /* Escribe en un archivo los datos inerciales en formato .ndjson. */
-static esp_err_t inertial_to_ndjson(Inertial *ine, FILE *f) {
+static esp_err_t data_2_to_ndjson(Data2 *ine, FILE *f) {
     if (!ine || !f) return ESP_ERR_INVALID_ARG;
 
     cJSON *json = cJSON_CreateObject();
@@ -96,7 +96,7 @@ static esp_err_t inertial_to_ndjson(Inertial *ine, FILE *f) {
     esp_err_t ret = append_ndjson_line(f, json);
     cJSON_Delete(json);
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "NDJSON write OK: type=0x02 path=%s", inertial_path);
+        ESP_LOGI(TAG, "NDJSON write OK: type=0x02 path=%s", data_2_path);
     }
     return ret;
 }
@@ -120,33 +120,33 @@ esp_err_t sdstorage_write_packet(uint8_t *data, size_t size) {
     size_t payload_size = size - 1;
 
     if (type == 0x01) {
-        FILE *f = open_append(environmental_path);
+        FILE *f = open_append(data_1_path);
         if (!f) return ESP_FAIL;
 
-        Environmental *msg = environmental__unpack(NULL, payload_size, payload);
+        Data1 *msg = data_1__unpack(NULL, payload_size, payload);
         if (!msg) {
             fclose(f);
             return ESP_FAIL;
         }
 
-        ret = environmental_to_ndjson(msg, f);
-        environmental__free_unpacked(msg, NULL);
+        ret = data_1_to_ndjson(msg, f);
+        data_1__free_unpacked(msg, NULL);
         fclose(f);
         return ret;
     }
 
     if (type == 0x02) {
-        FILE *f = open_append(inertial_path);
+        FILE *f = open_append(data_2_path);
         if (!f) return ESP_FAIL;
 
-        Inertial *msg = inertial__unpack(NULL, payload_size, payload);
+        Data2 *msg = data_2__unpack(NULL, payload_size, payload);
         if (!msg) {
             fclose(f);
             return ESP_FAIL;
         }
 
-        ret = inertial_to_ndjson(msg, f);
-        inertial__free_unpacked(msg, NULL);
+        ret = data_2_to_ndjson(msg, f);
+        data_2__free_unpacked(msg, NULL);
         fclose(f);
         return ret;
     }

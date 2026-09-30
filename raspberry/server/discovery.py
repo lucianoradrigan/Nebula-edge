@@ -109,11 +109,13 @@ class DeviceDiscovery:
             return False
 
         # Validar manufacturer data (acepta formatos típicos de Bleak)
-        mfg_data = adv.manufacturer_data or {}
-        payload = mfg_data.get(76, b"")  # 0x004C Apple (usado en firmware)
-        if payload:
-            return payload.endswith(b"\x01") or payload.endswith(b"\x02")
-        return False
+        # BANCO macOS: CoreBluetooth no entrega el manufacturer data como BlueZ.
+        # mfg_data = adv.manufacturer_data or {}
+        # payload = mfg_data.get(76, b"")  # 0x004C Apple (usado en firmware)
+        # if payload:
+        #     return payload.endswith(b"\x01") or payload.endswith(b"\x02")
+        # return False
+        return True
 
     def on_connect(self, device, adv):
         """Callback de descubrimiento BLE usado por BleakScanner cuando se detecta advertisements de

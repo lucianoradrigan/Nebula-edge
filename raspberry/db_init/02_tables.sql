@@ -7,8 +7,7 @@ CREATE TABLE nebulaedge_schema.config (
     acc_sampling INT,
     gyro_sensibility INT,
     bme688_sampling INT,
-    send_interval_s INT,        -- Segundos entre paquetes inertial (flujo rapido)
-    env_interval_s INT,         -- Segundos entre paquetes environmental (flujo lento)
+    send_interval_s INT,        -- Segundos entre paquetes Data_2 (flujo rapido); 0 = sin espera
     sleep_time_s INT,
     sleep_window_size INT,
     tcp_port INT,
@@ -28,8 +27,8 @@ CREATE TABLE nebulaedge_schema.log (
     time_server TIMESTAMP
 );
 
--- Telemetria ambiental (BME688). Ritmo lento: env_interval_s.
-CREATE TABLE nebulaedge_schema.environmental (
+-- Telemetria ambiental (BME688). Ritmo: send_interval_s.
+CREATE TABLE nebulaedge_schema.data_1 (
     id_device VARCHAR(45),
     temperature FLOAT,
     press INT,
@@ -40,7 +39,7 @@ CREATE TABLE nebulaedge_schema.environmental (
 );
 
 -- Telemetria inercial (BMI270 + BMM350). Ritmo rapido: send_interval_s.
-CREATE TABLE nebulaedge_schema.inertial (
+CREATE TABLE nebulaedge_schema.data_2 (
     id_device VARCHAR(45),
     acc_x FLOAT,
     acc_y FLOAT,

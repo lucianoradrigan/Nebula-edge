@@ -17,7 +17,7 @@ from codec import DataCodec
 from models import Timeouts
 from tests.fakes import (
     DEEP_SLEEP_PACKET, DEVICE_ID, FakeBLEDevice, FakeRepo,
-    config_ack_packet, environmental_packet, free_port, make_config,
+    config_ack_packet, data_1_packet, free_port, make_config,
 )
 
 
@@ -76,12 +76,12 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         dev = await self._device_socket()
         # Se manda repetido: UDP descarta en silencio lo que llegue antes del bind.
         for _ in range(5):
-            await self._send(dev, environmental_packet(applied_version=1), port)
-            if await self._wait_until(lambda: len(repo.environmental) >= 1, timeout=0.5):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
                 break
 
-        self.assertGreaterEqual(len(repo.environmental), 1, "no se insertó la telemetría")
-        self.assertEqual(repo.environmental[0].id_device, DEVICE_ID)
+        self.assertGreaterEqual(len(repo.data_1), 1, "no se insertó la telemetría")
+        self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
         self.assertFalse(task.done(), "la sesión no debía cerrar con la config al día")
 
     async def test_new_config_in_db_is_pushed_and_confirmed_with_ack(self):
@@ -94,14 +94,14 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
 
         for _ in range(5):
-            await self._send(dev, environmental_packet(applied_version=1), port)
-            if await self._wait_until(lambda: len(repo.environmental) >= 1, timeout=0.5):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
                 break
-        self.assertGreaterEqual(len(repo.environmental), 1)
+        self.assertGreaterEqual(len(repo.data_1), 1)
 
         # Alguien cambia la config en la BD
         repo.db_version = 2
-        await self._send(dev, environmental_packet(applied_version=1), port)
+        await self._send(dev, data_1_packet(applied_version=1), port)
 
         raw = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=5.0)
         pushed = DataCodec.deserialize_config(raw)
@@ -133,13 +133,13 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
 
         for _ in range(5):
-            await self._send(dev, environmental_packet(applied_version=1), port)
-            if await self._wait_until(lambda: len(repo.environmental) >= 1, timeout=0.5):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
                 break
 
         # Alguien cambia la config en la BD
         repo.db_version = 2
-        await self._send(dev, environmental_packet(applied_version=1), port)
+        await self._send(dev, data_1_packet(applied_version=1), port)
 
         # El device ignora el primer envío y espera el reenvío del server.
         first = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=5.0)
@@ -165,7 +165,7 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         Lleva byte de tipo, así que nunca puede ser un ConfigAck: intentarlo
         igual solo ensuciaba el log con un error por cada paquete recibido.
         """
-        self.assertTrue(DataCodec.is_typed_packet(environmental_packet(applied_version=1)))
+        self.assertTrue(DataCodec.is_typed_packet(data_1_packet(applied_version=1)))
         self.assertTrue(DataCodec.is_typed_packet(DEEP_SLEEP_PACKET))
         self.assertFalse(DataCodec.is_typed_packet(config_ack_packet(version=2)))
 

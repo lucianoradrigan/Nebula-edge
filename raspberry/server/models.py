@@ -8,8 +8,8 @@ UTILIDAD PRINCIPAL
         Timeouts        todos los tiempos del servidor, en un solo lugar
         BleContext      lo que solo el transporte BLE necesita
         ConfigData      configuración de un device (protocolo, sensores, red)
-        Environmental   telemetría ambiental del BME688 (ritmo lento)
-        Inertial        acelerómetro, giroscopio y magnetómetro (ritmo rápido)
+        Data_1   telemetría ambiental del BME688 (ritmo lento)
+        Data_2        acelerómetro, giroscopio y magnetómetro (ritmo rápido)
         ConfigAckData   confirmación del device de que aplicó una versión
         Log             evento de operación (conexión, heartbeat, desconexión)
 
@@ -19,7 +19,7 @@ POR QUÉ DOS MENSAJES DE TELEMETRÍA Y NO UNO
     acelerómetro, en milisegundos. Mandarlos juntos obliga a elegir un solo
     intervalo, y cualquiera que se elija sobremuestrea uno o submuestrea el
     otro. Separados, cada uno viaja a su propio intervalo (`send_interval_s`
-    para Inertial, `env_interval_s` para Environmental).
+    para los dos flujos).
 
     Son el punto donde convergen las tres representaciones del mismo dato: el
     mensaje protobuf que viaja por el cable, la fila de la tabla, y el objeto
@@ -89,10 +89,10 @@ class Timeouts:
                                         # cuando el transporte la declara (Transport.ack_window_sec)
 
 @dataclass
-class Environmental:
-    """Telemetría ambiental del BME688 (equivalente a protobuf Environmental).
+class Data_1:
+    """Telemetría ambiental del BME688 (equivalente a protobuf Data_1).
 
-    Viaja cada `env_interval_s` segundos, más lento que Inertial.
+    Viaja cada `send_interval_s` segundos, al mismo ritmo que Data_2.
     """
     id_device: str          # Cambiar por device_id
     temperature: float
@@ -103,10 +103,10 @@ class Environmental:
     time_client: int
 
 @dataclass
-class Inertial:
+class Data_2:
     """Acelerómetro y giroscopio (BMI270) más magnetómetro (BMM350).
 
-    Equivalente a protobuf Inertial. Viaja cada `send_interval_s` segundos.
+    Equivalente a protobuf Data_2. Viaja cada `send_interval_s` segundos.
     """
     id_device: str
     acc_x: float
@@ -130,8 +130,7 @@ class ConfigData:
     acc_sampling: int
     gyro_sensibility: int
     bme688_sampling: int
-    send_interval_s: int    # Intervalo del flujo rápido (Inertial)
-    env_interval_s: int     # Intervalo del flujo lento (Environmental); 0 = usar send_interval_s
+    send_interval_s: int    # Intervalo del flujo rápido (Data_2); 0 = sin espera
     sleep_time_s: int
     sleep_window_size: int
     tcp_port: int

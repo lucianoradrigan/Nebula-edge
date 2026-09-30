@@ -17,8 +17,8 @@ PROTOBUF_C__BEGIN_DECLS
 
 typedef struct Config Config;
 typedef struct ConfigAck ConfigAck;
-typedef struct Environmental Environmental;
-typedef struct Inertial Inertial;
+typedef struct Data1 Data1;
+typedef struct Data2 Data2;
 
 
 /* --- enums --- */
@@ -48,9 +48,12 @@ struct  Config
   int32_t gyro_sensibility;
   int32_t bme688_sampling;
   /*
-   * Segundos entre paquetes Inertial (el flujo rápido).
+   * Segundos entre paquetes, para Data_1 y Data_2.
    */
   uint32_t send_interval_s;
+  /*
+   * 0 = sin espera: tan rápido como dejen el bus y el transporte.
+   */
   /*
    * Tiempo en segundos que se irá a dormir la ESP. Cuando es > 0 se corre el modo discontinuo.
    */
@@ -81,14 +84,10 @@ struct  Config
    * Hora
    */
   uint32_t time_client;
-  /*
-   * Segundos entre paquetes Environmental (el flujo lento).
-   */
-  uint32_t env_interval_s;
 };
 #define CONFIG__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&config__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0 }
 
 
 /*
@@ -108,13 +107,13 @@ struct  ConfigAck
 
 
 /*
- * Telemetría ambiental: BME688.
+ * Paquete de datos 1: telemetría ambiental (BME688).
  * Va en su propio mensaje porque su ritmo natural es otro: la temperatura, la
  * presión y la humedad cambian en segundos o minutos, no en milisegundos.
  * Enviarla al ritmo del acelerómetro era gastar ancho de banda y batería en
- * repetir el mismo valor.
+ * repetir el mismo valor. Conserva el nombre Data_1 del contrato original.
  */
-struct  Environmental
+struct  Data1
 {
   ProtobufCMessage base;
   char *id_device;
@@ -128,18 +127,19 @@ struct  Environmental
   int32_t config_version_applied;
   uint32_t time_client;
 };
-#define ENVIRONMENTAL__INIT \
- { PROTOBUF_C_MESSAGE_INIT (&environmental__descriptor) \
+#define DATA_1__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&data_1__descriptor) \
 , (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0 }
 
 
 /*
- * Telemetría inercial: BMI270 (acelerómetro + giroscopio) y BMM350 (magnetómetro).
+ * Paquete de datos 2: telemetría inercial (BMI270 + BMM350).
  * Los tres sensores comparten el ritmo rápido, que es el que manda en este
- * mensaje. El magnetómetro vive acá y no en Environmental porque se configura
- * al mismo ODR que el acelerómetro.
+ * mensaje. El magnetómetro vive acá y no en Data_1 porque se configura al
+ * mismo ODR que el acelerómetro. Conserva el nombre Data_2 del contrato
+ * original.
  */
-struct  Inertial
+struct  Data2
 {
   ProtobufCMessage base;
   char *id_device;
@@ -155,8 +155,8 @@ struct  Inertial
   int32_t config_version_applied;
   uint32_t time_client;
 };
-#define INERTIAL__INIT \
- { PROTOBUF_C_MESSAGE_INIT (&inertial__descriptor) \
+#define DATA_2__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&data_2__descriptor) \
 , (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 
@@ -198,43 +198,43 @@ ConfigAck *
 void   config_ack__free_unpacked
                      (ConfigAck *message,
                       ProtobufCAllocator *allocator);
-/* Environmental methods */
-void   environmental__init
-                     (Environmental         *message);
-size_t environmental__get_packed_size
-                     (const Environmental   *message);
-size_t environmental__pack
-                     (const Environmental   *message,
+/* Data1 methods */
+void   data_1__init
+                     (Data1         *message);
+size_t data_1__get_packed_size
+                     (const Data1   *message);
+size_t data_1__pack
+                     (const Data1   *message,
                       uint8_t             *out);
-size_t environmental__pack_to_buffer
-                     (const Environmental   *message,
+size_t data_1__pack_to_buffer
+                     (const Data1   *message,
                       ProtobufCBuffer     *buffer);
-Environmental *
-       environmental__unpack
+Data1 *
+       data_1__unpack
                      (ProtobufCAllocator  *allocator,
                       size_t               len,
                       const uint8_t       *data);
-void   environmental__free_unpacked
-                     (Environmental *message,
+void   data_1__free_unpacked
+                     (Data1 *message,
                       ProtobufCAllocator *allocator);
-/* Inertial methods */
-void   inertial__init
-                     (Inertial         *message);
-size_t inertial__get_packed_size
-                     (const Inertial   *message);
-size_t inertial__pack
-                     (const Inertial   *message,
+/* Data2 methods */
+void   data_2__init
+                     (Data2         *message);
+size_t data_2__get_packed_size
+                     (const Data2   *message);
+size_t data_2__pack
+                     (const Data2   *message,
                       uint8_t             *out);
-size_t inertial__pack_to_buffer
-                     (const Inertial   *message,
+size_t data_2__pack_to_buffer
+                     (const Data2   *message,
                       ProtobufCBuffer     *buffer);
-Inertial *
-       inertial__unpack
+Data2 *
+       data_2__unpack
                      (ProtobufCAllocator  *allocator,
                       size_t               len,
                       const uint8_t       *data);
-void   inertial__free_unpacked
-                     (Inertial *message,
+void   data_2__free_unpacked
+                     (Data2 *message,
                       ProtobufCAllocator *allocator);
 /* --- per-message closures --- */
 
@@ -244,11 +244,11 @@ typedef void (*Config_Closure)
 typedef void (*ConfigAck_Closure)
                  (const ConfigAck *message,
                   void *closure_data);
-typedef void (*Environmental_Closure)
-                 (const Environmental *message,
+typedef void (*Data1_Closure)
+                 (const Data1 *message,
                   void *closure_data);
-typedef void (*Inertial_Closure)
-                 (const Inertial *message,
+typedef void (*Data2_Closure)
+                 (const Data2 *message,
                   void *closure_data);
 
 /* --- services --- */
@@ -258,8 +258,8 @@ typedef void (*Inertial_Closure)
 
 extern const ProtobufCMessageDescriptor config__descriptor;
 extern const ProtobufCMessageDescriptor config_ack__descriptor;
-extern const ProtobufCMessageDescriptor environmental__descriptor;
-extern const ProtobufCMessageDescriptor inertial__descriptor;
+extern const ProtobufCMessageDescriptor data_1__descriptor;
+extern const ProtobufCMessageDescriptor data_2__descriptor;
 
 PROTOBUF_C__END_DECLS
 

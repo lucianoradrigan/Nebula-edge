@@ -8,7 +8,8 @@ message Config {
     int32 acc_sampling = 4;
     int32 gyro_sensibility = 5;
     int32 bme688_sampling = 6;
-    uint32 send_interval_s = 7;             // Segundos entre paquetes Inertial (el flujo rápido).
+    uint32 send_interval_s = 7;             // Segundos entre paquetes, para Data_1 y Data_2.
+                                            // 0 = sin espera: tan rápido como dejen el bus y el transporte.
     uint32 sleep_time_s = 8;                // Tiempo en segundos que se irá a dormir la ESP. Cuando es > 0 se corre el modo discontinuo.
     int32 sleep_window_size = 9;            // Cantidad de datos que se enviarán antes de irse a deep sleep.
     int32 tcp_port = 10;
@@ -18,8 +19,12 @@ message Config {
     string passwd = 14;                     // Contraseña WIFI
     string mqtt_broker = 15;                // URI del broker MQTT (ej: mqtt://host:1883)
     uint32 time_client = 16;                // Hora
-    uint32 env_interval_s = 17;             // Segundos entre paquetes Environmental (el flujo lento).
-                                            // 0 = usar send_interval_s.
+
+    // 17 lo ocupó env_interval_s, un intervalo propio para Data_1. Los dos
+    // flujos comparten send_interval_s otra vez. Queda reservado para que el
+    // número no se reuse con otro significado: si el intervalo separado vuelve,
+    // vuelve acá.
+    reserved 17;
 }
 
 // ACK de configuración
@@ -30,13 +35,13 @@ message ConfigAck {
     uint32 time_client = 4;
 }
 
-// Telemetría ambiental: BME688.
+// Paquete de datos 1: telemetría ambiental (BME688).
 //
 // Va en su propio mensaje porque su ritmo natural es otro: la temperatura, la
 // presión y la humedad cambian en segundos o minutos, no en milisegundos.
 // Enviarla al ritmo del acelerómetro era gastar ancho de banda y batería en
-// repetir el mismo valor.
-message Environmental {
+// repetir el mismo valor. Conserva el nombre Data_1 del contrato original.
+message Data_1 {
     string id_device = 1;
     float temperature = 2;
     int32 press = 3;
@@ -46,12 +51,13 @@ message Environmental {
     uint32 time_client = 7;
 }
 
-// Telemetría inercial: BMI270 (acelerómetro + giroscopio) y BMM350 (magnetómetro).
+// Paquete de datos 2: telemetría inercial (BMI270 + BMM350).
 //
 // Los tres sensores comparten el ritmo rápido, que es el que manda en este
-// mensaje. El magnetómetro vive acá y no en Environmental porque se configura
-// al mismo ODR que el acelerómetro.
-message Inertial {
+// mensaje. El magnetómetro vive acá y no en Data_1 porque se configura al
+// mismo ODR que el acelerómetro. Conserva el nombre Data_2 del contrato
+// original.
+message Data_2 {
     string id_device = 1;
     float acc_x = 2;
     float acc_y = 3;

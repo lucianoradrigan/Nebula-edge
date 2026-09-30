@@ -76,8 +76,8 @@ typedef enum {
  * en milisegundos. Con una sola task había que elegir un intervalo único, que
  * sobremuestreaba el ambiente o submuestreaba el movimiento. Ahora cada una
  * corre a lo suyo y ambas escriben en la misma xQueueData. */
-TaskHandle_t xHandleCollectInertial = NULL;       // cada send_interval_s
-TaskHandle_t xHandleCollectEnvironmental = NULL;  // cada env_interval_s
+TaskHandle_t xHandleCollectInertial = NULL;       // Data_2, cada send_interval_s
+TaskHandle_t xHandleCollectEnvironmental = NULL;  // Data_1, cada send_interval_s
 
 /* Un par de tasks por protocolo, indexadas por protocol_t. Antes eran ocho
  * globales sueltas con el protocolo metido en el nombre, que es lo que obligaba
@@ -186,8 +186,8 @@ static void drain_and_free_data_queue(void) {
  * que la propia task eligió. */
 #define GATE_RUN            (1 << 0)  // permiso para correr
 #define GATE_PAUSE_REQ      (1 << 1)  // hay una pausa pedida (despierta los sleeps)
-#define GATE_INERTIAL_IDLE  (1 << 2)  // la task Inertial ya está detenida
-#define GATE_ENV_IDLE       (1 << 3)  // la task Environmental ya está detenida
+#define GATE_INERTIAL_IDLE  (1 << 2)  // la task del flujo rápido (Data_2) ya está detenida
+#define GATE_ENV_IDLE       (1 << 3)  // la task del flujo lento (Data_1) ya está detenida
 /* Un bit por protocolo, no uno para los cuatro.
  *
  * Con un bit compartido la pausa no podía distinguir QUÉ task lo había puesto.
@@ -234,9 +234,12 @@ static void sensor_gate_wait(EventBits_t idle_bit) {
 
 /* Reemplaza a vTaskDelay() para ritmar la producción. Si llega una petición de
  * pausa mientras la task duerme, despierta de inmediato en vez de dejar
- * esperando el intervalo entero: con env_interval_s en 10 s o más, pausar
+ * esperando el intervalo entero: con send_interval_s en 10 s o más, pausar
  * tardaría eso en completarse. */
 static void sensor_gate_sleep(uint32_t ms) {
+    /* El +1 redondea hacia arriba, y con ms = 0 (modo sin espera) deja
+     * exactamente un tick: lo mínimo para ceder la CPU. Ver
+     * packet_interval_s() para por qué no puede ser cero de verdad. */
     TickType_t ticks = pdMS_TO_TICKS(ms) + 1;
 
     if (sensor_gate == NULL) {
@@ -584,7 +587,12 @@ static const protocol_ops_t PROTOCOLS[] = {
          * ble_set_char_with_notify() reintenta por su cuenta si el stack rechaza el
          * envío por congestión. */
         .control_repeats = 1,
-        .pre_send_delay_ms = 1000,
+        /* BANCO: en 0. Este delay se aplica ANTES de cada paquete en modo
+         * discontinuo, así que en 1000 techaba el envío BLE a 1 paquete/s y
+         * hacía ver "lecturas lentísimas" que no eran del sensor ni del
+         * intervalo configurado. El respiro que sí hace falta es el de abajo,
+         * que corre una sola vez por ventana. */
+        .pre_send_delay_ms = 0,
         .last_packet_delay_ms = 3000,
     },
 };
@@ -756,70 +764,66 @@ static void enqueue_packet(packet_t *pkt, const char *tag) {
     }
 }
 
-/* Intervalo del flujo rápido (Inertial). */
-static uint32_t interval_inertial_s(void) {
+/* Intervalo entre paquetes. Lo comparten las dos productoras: Data_1 y Data_2
+ * salen al mismo ritmo, como en el contrato original.
+ *
+ * send_interval_s = 0 significa "sin espera": producir tan rápido como dejen
+ * el bus I2C y el transporte. No es una espera de cero absoluto —
+ * sensor_gate_sleep() siempre cede al menos un tick— porque una task de
+ * prioridad 2 girando sin ceder la CPU mata a la idle de su core y dispara el
+ * watchdog. Con CONFIG_FREERTOS_HZ=100 ese piso son 10 ms, o sea un techo de
+ * ~100 paquetes/s por flujo; en la práctica manda antes la lectura de los
+ * sensores o la contrapresión de xQueueData. */
+static uint32_t packet_interval_s(void) {
     if (!current_config) {
         return 1;
     }
-    uint32_t s = current_config->send_interval_s;
-    return s > 0 ? s : 1;
+    return current_config->send_interval_s;
 }
 
-/* Intervalo del flujo lento. env_interval_s = 0 significa "el mismo que el
- * rápido", para que una config antigua sin ese campo siga comportándose como
- * antes en vez de girar en vacío. */
-static uint32_t environmental_interval_s(void) {
-    if (!current_config) {
-        return 1;
-    }
-    uint32_t env_s = current_config->env_interval_s;
-    if (env_s == 0) {
-        env_s = current_config->send_interval_s;
-    }
-    return env_s > 0 ? env_s : 1;
-}
-
-// GEN_DATA (rápido): BMI270 + BMM350 -> paquete Inertial, cada send_interval_s.
+// GEN_DATA: BMI270 + BMM350 -> paquete Data_2, cada send_interval_s.
 void vTaskCollectInertial(void *pvParameters) {
     for (;;) {
         // Punto seguro: acá no hay memoria reservada ni bus tomado.
         sensor_gate_wait(GATE_INERTIAL_IDLE);
 
-        Inertial inertial = INERTIAL__INIT;
-        inertial.id_device = device_id();
-        inertial.config_version_applied = current_config ? current_config->config_version : 0;
-        inertial.time_client = device_clock_now_s();
+        Data2 data_2 = DATA_2__INIT;
+        data_2.id_device = device_id();
+        data_2.config_version_applied = current_config ? current_config->config_version : 0;
+        data_2.time_client = device_clock_now_s();
 
         /* Recogida de datos inerciales. Cada driver devuelve su propio tipo en
          * unidades físicas; traducirlo al mensaje protobuf es trabajo de acá,
          * que es la única parte que conoce el formato de cable.
          *
-         * El acelerómetro manda: si su lectura falla no se envía el paquete,
-         * porque antes se iba con ceros indistinguibles de reposo real. El
-         * magnetómetro es complementario, así que si falla solo quedan sus
-         * tres ejes en cero y el resto del paquete sigue siendo válido. */
+         * Ningún sensor es obligatorio: el que falla deja sus ejes en cero y
+         * el paquete sale igual, como en el contrato original de Data_2. El
+         * costo es que un cero no se distingue de una medición legítima de
+         * cero, así que si hay un sensor caído hay que saberlo por el log.
+         *
+         * BANCO: esto importa en la IM-V2, que no tiene el BMI270 poblado. Con
+         * el acelerómetro obligatorio no salía NINGÚN Data_2 y el flujo rápido
+         * desaparecía entero. */
         bmi270_reading_t imu;
-        if (bmi270_read(&imu) != ESP_OK) {
-            sensor_gate_sleep(interval_inertial_s() * 1000U);
-            continue;
+        if (bmi270_read(&imu) == ESP_OK) {
+            data_2.acc_x = imu.acc_x_ms2;
+            data_2.acc_y = imu.acc_y_ms2;
+            data_2.acc_z = imu.acc_z_ms2;
+            data_2.gyr_x = imu.gyr_x_rads;
+            data_2.gyr_y = imu.gyr_y_rads;
+            data_2.gyr_z = imu.gyr_z_rads;
         }
-        inertial.acc_x = imu.acc_x_ms2;
-        inertial.acc_y = imu.acc_y_ms2;
-        inertial.acc_z = imu.acc_z_ms2;
-        inertial.gyr_x = imu.gyr_x_rads;
-        inertial.gyr_y = imu.gyr_y_rads;
-        inertial.gyr_z = imu.gyr_z_rads;
 
         bmm350_reading_t mag;
         if (bmm350_read(&mag) == ESP_OK) {
-            inertial.mag_x = mag.mag_x_ut;
-            inertial.mag_y = mag.mag_y_ut;
-            inertial.mag_z = mag.mag_z_ut;
+            data_2.mag_x = mag.mag_x_ut;
+            data_2.mag_y = mag.mag_y_ut;
+            data_2.mag_z = mag.mag_z_ut;
         }
 
         // Serializa el mensaje protobuf, con el byte de tipo por delante
         packet_t packet;
-        packet.size = inertial__get_packed_size(&inertial) + 1;
+        packet.size = data_2__get_packed_size(&data_2) + 1;
         packet.data = malloc(packet.size);
         if (packet.data == NULL) {
             ESP_LOGE(TAG_COLLECT_INERTIAL, "Error: no se pudo reservar memoria para el paquete");
@@ -827,47 +831,49 @@ void vTaskCollectInertial(void *pvParameters) {
             continue;
         }
         packet.data[0] = 0x02;
-        inertial__pack(&inertial, packet.data + 1);
-        ESP_LOGI(TAG_COLLECT_INERTIAL, "Paquete Inertial generado");
+        data_2__pack(&data_2, packet.data + 1);
+        ESP_LOGI(TAG_COLLECT_INERTIAL, "Paquete Data_2 generado");
 
         enqueue_packet(&packet, TAG_COLLECT_INERTIAL);
 
         // Ritma la producción. Despierta antes si se pide una pausa.
-        sensor_gate_sleep(interval_inertial_s() * 1000U);
+        sensor_gate_sleep(packet_interval_s() * 1000U);
     }
 }
 
-// GEN_DATA (lento): BME688 -> paquete Environmental, cada env_interval_s.
+// GEN_DATA: BME688 -> paquete Data_1, cada send_interval_s.
 void vTaskCollectEnvironmental(void *pvParameters) {
     for (;;) {
         // Punto seguro: acá no hay memoria reservada ni bus tomado.
         sensor_gate_wait(GATE_ENV_IDLE);
 
-        Environmental env = ENVIRONMENTAL__INIT;
-        env.id_device = device_id();
-        env.config_version_applied = current_config ? current_config->config_version : 0;
-        env.time_client = device_clock_now_s();
+        Data1 data_1 = DATA_1__INIT;
+        data_1.id_device = device_id();
+        data_1.config_version_applied = current_config ? current_config->config_version : 0;
+        data_1.time_client = device_clock_now_s();
 
         /* Recogida de datos ambientales. El driver devuelve su propio tipo en
          * unidades físicas; traducirlo al mensaje protobuf es trabajo de acá,
          * que es la única parte que conoce el formato de cable.
          *
-         * Si la lectura falla NO se manda el paquete: antes se enviaba con
-         * ceros, indistinguibles de una medición legítima de cero. */
+         * Si la lectura falla el paquete sale igual, con los campos en cero,
+         * igual que en la task rápida y que en el contrato original. El costo
+         * es que ese cero no se distingue de una medición legítima de cero:
+         * el warning de acá es la única señal de que el sensor no respondió. */
         bme688_reading_t ambient;
-        if (bme688_read(&ambient) != ESP_OK) {
-            ESP_LOGW(TAG_COLLECT_ENV, "Lectura del BME688 falló, se omite el paquete");
-            sensor_gate_sleep(environmental_interval_s() * 1000U);
-            continue;
+        if (bme688_read(&ambient) == ESP_OK) {
+            data_1.temperature = ambient.temperature_c;
+            data_1.press       = ambient.pressure_pa;
+            data_1.hum         = ambient.humidity_pct;
+            data_1.co          = ambient.gas_resistance_ohm;
         }
-        env.temperature = ambient.temperature_c;
-        env.press       = ambient.pressure_pa;
-        env.hum         = ambient.humidity_pct;
-        env.co          = ambient.gas_resistance_ohm;
+        else {
+            ESP_LOGW(TAG_COLLECT_ENV, "Lectura del BME688 falló, el paquete va con ceros");
+        }
 
         // Serializa el mensaje protobuf, con el byte de tipo por delante
         packet_t packet;
-        packet.size = environmental__get_packed_size(&env) + 1;
+        packet.size = data_1__get_packed_size(&data_1) + 1;
         packet.data = malloc(packet.size);
         if (packet.data == NULL) {
             ESP_LOGE(TAG_COLLECT_ENV, "Error: no se pudo reservar memoria para el paquete");
@@ -875,13 +881,13 @@ void vTaskCollectEnvironmental(void *pvParameters) {
             continue;
         }
         packet.data[0] = 0x01;
-        environmental__pack(&env, packet.data + 1);
-        ESP_LOGI(TAG_COLLECT_ENV, "Paquete Environmental generado");
+        data_1__pack(&data_1, packet.data + 1);
+        ESP_LOGI(TAG_COLLECT_ENV, "Paquete Data_1 generado");
 
         enqueue_packet(&packet, TAG_COLLECT_ENV);
 
         // Ritma la producción. Despierta antes si se pide una pausa.
-        sensor_gate_sleep(environmental_interval_s() * 1000U);
+        sensor_gate_sleep(packet_interval_s() * 1000U);
     }
 }
 

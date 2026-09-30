@@ -10,7 +10,7 @@ Flujo en runtime:
 2. Busca la configuracion del ESP32 por MAC (`id_device`) en `nebulaedge_schema.config`.
 3. Envia configuracion inicial por BLE.
 4. El ESP32 entra al protocolo indicado (`0 MQTT`, `1 UDP`, `2 TCP`, `3 BLE`).
-5. El ESP32 envia telemetria protobuf: `Inertial` (rapido) y `Environmental` (lento).
+5. El ESP32 envia telemetria protobuf: `Data_2` (inercial) y `Data_1` (ambiental), al mismo ritmo.
 6. La Raspberry persiste en PostgreSQL (`nebulaedge_schema.inertial`, `nebulaedge_schema.environmental`).
 7. Si sube `config_version`, ambos cambian de config/protocolo en caliente (con `ConfigAck`).
 
@@ -138,7 +138,6 @@ SET protocol_conf = 1,
     config_version = config_version + 1,
     udp_port = 1240,
     send_interval_s = 1,
-    env_interval_s = 10
 WHERE id_device = '58:BF:25:99:B4:92';
 ```
 
@@ -156,13 +155,13 @@ La base vive en PostgreSQL y usa el schema `nebulaedge_schema`. Ahí se guardan 
 Tablas principales:
 
 - `nebulaedge_schema.config`: una fila por dispositivo (`id_device`) con la configuracion activa que la Raspberry lee por BLE.
-- `nebulaedge_schema.environmental`: telemetria del BME688 (paquete `Environmental`), al ritmo de `env_interval_s`.
-- `nebulaedge_schema.inertial`: BMI270 + BMM350 (paquete `Inertial`), al ritmo de `send_interval_s`.
+- `nebulaedge_schema.data_1`: telemetria del BME688 (paquete `Data_1`), al ritmo de `send_interval_s`.
+- `nebulaedge_schema.data_2`: BMI270 + BMM350 (paquete `Data_2`), al ritmo de `send_interval_s`.
 - `nebulaedge_schema.log`: eventos de operacion del servidor, como conexion inicial, heartbeat y desconexion.
 
 Qué guarda cada una:
 
-- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `env_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `host_ip_addr`, `ssid`, `passwd`, `mqtt_broker`.
+- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `host_ip_addr`, `ssid`, `passwd`, `mqtt_broker`.
 - `environmental`: `temperature`, `press`, `hum`, `co`, mas `config_version_applied` y `time_client`.
 - `inertial`: `acc_x/y/z`, `gyr_x/y/z`, `mag_x/y/z`, `config_version_applied` y `time_client`.
 - `log`: `status_report`, `protocol_report`, `batt_level`, `time_client`, `time_server`.
@@ -197,8 +196,7 @@ Si quieres modificar los dispositivos que arrancan con datos precargados, edita 
 - `id_device`: MAC Bluetooth del ESP32.
 - `config_version`: incrementa en cada cambio.
 - `protocol_conf`: `0 MQTT`, `1 UDP`, `2 TCP`, `3 BLE`.
-- `send_interval_s`: segundos entre paquetes `Inertial` (flujo rapido).
-- `env_interval_s`: segundos entre paquetes `Environmental` (flujo lento). `0` = usar `send_interval_s`.
+- `send_interval_s`: segundos entre paquetes, para `Data_1` y `Data_2`. `0` = sin espera, tan rapido como dejen el bus y el transporte.
 - `sleep_time_s`: deep sleep en segundos (`0` = continuo).
 - `sleep_window_size`: cantidad de paquetes antes de dormir.
 - `tcp_port`, `udp_port`, `mqtt_broker`.

@@ -4,7 +4,7 @@ UTILIDAD PRINCIPAL
     `PacketRouter.route()` recibe los bytes crudos de un paquete y responde qué
     eran, en forma de `PacketOutcome`:
 
-        TELEMETRY    era Environmental o Inertial; ya quedó insertado en la BD
+        TELEMETRY    era Data_1 o Data_2; ya quedó insertado en la BD
         DEEP_SLEEP   el device avisa que se va a dormir
         IGNORED      no se pudo decodificar, o no es un tipo conocido
 
@@ -34,7 +34,7 @@ from enum import Enum, auto
 from typing import Protocol
 
 from codec import DataCodec
-from models import Environmental, Inertial
+from models import Data_1, Data_2
 from system import log
 
 
@@ -45,12 +45,12 @@ class TelemetryRepository(Protocol):
     de esto. Sirve para poder testear PacketRouter con un stub en memoria,
     sin tocar Postgres.
     """
-    async def insert_environmental_async(self, environmental: Environmental) -> bool: ...
-    async def insert_inertial_async(self, inertial: Inertial) -> bool: ...
+    async def insert_data_1_async(self, data_1: Data_1) -> bool: ...
+    async def insert_data_2_async(self, data_2: Data_2) -> bool: ...
 
 
 class PacketOutcome(Enum):
-    TELEMETRY = auto()    # se decodificó un Environmental/Inertial válido
+    TELEMETRY = auto()    # se decodificó un Data_1/Data_2 válido
     DEEP_SLEEP = auto()   # paquete de aviso de deep sleep (tipo 0x04)
     IGNORED = auto()      # paquete vacío, corrupto o de tipo desconocido
 
@@ -66,7 +66,7 @@ class RoutedPacket:
     device sigue vivo aunque la base esté caída.
     """
     outcome: PacketOutcome
-    data: Environmental | Inertial | None = None
+    data: Data_1 | Data_2 | None = None
     data_type: int | None = None
     persisted: bool = True
 
@@ -93,12 +93,12 @@ class PacketRouter:
         if data_type == self.codec.TYPE_DEEP_SLEEP:
             return RoutedPacket(PacketOutcome.DEEP_SLEEP, data_type=data_type)
 
-        if data_type == self.codec.TYPE_ENVIRONMENTAL:
-            log(f"{prefix}Paquete Environmental recibido de {device_id}")
-            persisted = await self.database_repo.insert_environmental_async(data)
-        elif data_type == self.codec.TYPE_INERTIAL:
-            log(f"{prefix}Paquete Inertial recibido de {device_id}")
-            persisted = await self.database_repo.insert_inertial_async(data)
+        if data_type == self.codec.TYPE_DATA_1:
+            log(f"{prefix}Paquete Data_1 recibido de {device_id}")
+            persisted = await self.database_repo.insert_data_1_async(data)
+        elif data_type == self.codec.TYPE_DATA_2:
+            log(f"{prefix}Paquete Data_2 recibido de {device_id}")
+            persisted = await self.database_repo.insert_data_2_async(data)
         else:
             return RoutedPacket(PacketOutcome.IGNORED)
 

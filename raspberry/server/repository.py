@@ -6,8 +6,8 @@ UTILIDAD PRINCIPAL
 
         config         una fila por device; es la fuente de verdad de qué
                        protocolo y qué parámetros de sensor le tocan
-        environmental  telemetría del BME688, al ritmo de env_interval_s
-        inertial       BMI270 + BMM350, al ritmo de send_interval_s
+        data_1  telemetría del BME688, al ritmo de send_interval_s
+        data_2       BMI270 + BMM350, al ritmo de send_interval_s
         log            eventos de operación: conexión, heartbeat, desconexión
 
 USAR SIEMPRE LOS MÉTODOS *_async DESDE CORUTINAS
@@ -35,7 +35,7 @@ from psycopg2.pool import ThreadedConnectionPool
 import asyncio
 import threading
 
-from models import ConfigData, Environmental, Inertial, Log
+from models import ConfigData, Data_1, Data_2, Log
 from system import utc_epoch_now, log, LocalWifiConfig
 
 
@@ -106,6 +106,11 @@ class DatabaseRepository:
         (calculado en el servidor con `utc_epoch_now()`, system.py) queden en
         la misma escala dentro de una misma fila.
         """
+        if value is None:
+            # El heartbeat manda None cuando no hay telemetría reciente: mejor
+            # dejar la columna vacía que repetir una hora vieja como si fuera
+            # la actual. Ver ProtocolSession._protocol_heartbeat_loop().
+            return None
         return datetime.utcfromtimestamp(int(value))
 
     def get_config(self, device_id: str) -> ConfigData | None:
@@ -114,7 +119,7 @@ class DatabaseRepository:
             with db.cursor() as cursor:
                 cursor.execute("""
                     SELECT id_device, config_version, protocol_conf, acc_sampling, gyro_sensibility,
-                        bme688_sampling, send_interval_s, env_interval_s, sleep_time_s,
+                        bme688_sampling, send_interval_s, sleep_time_s,
                         sleep_window_size, tcp_port, udp_port, mqtt_broker
                     FROM nebulaedge_schema.config
                     WHERE id_device = %s;
@@ -136,21 +141,20 @@ class DatabaseRepository:
                         gyro_sensibility=row[4],
                         bme688_sampling=row[5],
                         send_interval_s=row[6],
-                        env_interval_s=row[7] or 0,
-                        sleep_time_s=row[8],
-                        sleep_window_size=row[9],
-                        tcp_port=row[10],
-                        udp_port=row[11],
+                        sleep_time_s=row[7],
+                        sleep_window_size=row[8],
+                        tcp_port=row[9],
+                        udp_port=row[10],
                         host_ip_addr=host_ip_addr,
                         ssid=ssid,
                         passwd=passwd,
-                        mqtt_broker=row[12],
+                        mqtt_broker=row[11],
                         time_client=time_cli        # Timestamp en segundos
                     )
                 else:
                     return None
 
-    def insert_environmental(self, environmental: Environmental) -> bool:
+    def insert_data_1(self, data_1: Data_1) -> bool:
         """Inserta telemetría ambiental (BME688). True si la fila quedó guardada.
 
         No propaga: un fallo de base no debe cortar la sesión con un device que
@@ -158,23 +162,23 @@ class DatabaseRepository:
         se tragaba cualquier excepción y PacketRouter informaba TELEMETRY -que
         significa "insertado"- igual.
         """
-        _ctx = "environmental"
+        _ctx = "data_1"
         try:
             with self._connection() as db:
                 with db.cursor() as cursor:
                     cursor.execute("""
-                        INSERT INTO nebulaedge_schema.environmental (
+                        INSERT INTO nebulaedge_schema.data_1 (
                             id_device, temperature, press, hum, co,
                             config_version_applied, time_client
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """, (
-                        environmental.id_device,
-                        environmental.temperature,
-                        environmental.press,
-                        environmental.hum,
-                        environmental.co,
-                        environmental.config_version_applied,
-                        self._int_to_db_datetime(environmental.time_client)
+                        data_1.id_device,
+                        data_1.temperature,
+                        data_1.press,
+                        data_1.hum,
+                        data_1.co,
+                        data_1.config_version_applied,
+                        self._int_to_db_datetime(data_1.time_client)
                     ))
                     db.commit()
             return True
@@ -188,34 +192,34 @@ class DatabaseRepository:
             log(f"ERROR de base insertando {_ctx}: {e}")
             return False
 
-    def insert_inertial(self, inertial: "Inertial") -> bool:
+    def insert_data_2(self, data_2: "Data_2") -> bool:
         """Inserta telemetría inercial. True si la fila quedó guardada. Ver
-        insert_environmental para por qué no propaga pero sí reporta.
+        insert_data_1 para por qué no propaga pero sí reporta.
         """
-        _ctx = "inertial"
+        _ctx = "data_2"
         try:
             with self._connection() as db:
                 with db.cursor() as cursor:
                     cursor.execute("""
-                        INSERT INTO nebulaedge_schema.inertial (
+                        INSERT INTO nebulaedge_schema.data_2 (
                             id_device, acc_x, acc_y, acc_z,
                             gyr_x, gyr_y, gyr_z,
                             mag_x, mag_y, mag_z,
                             config_version_applied, time_client
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """, (
-                        inertial.id_device,
-                        inertial.acc_x,
-                        inertial.acc_y,
-                        inertial.acc_z,
-                        inertial.gyr_x,
-                        inertial.gyr_y,
-                        inertial.gyr_z,
-                        inertial.mag_x,
-                        inertial.mag_y,
-                        inertial.mag_z,
-                        inertial.config_version_applied,
-                        self._int_to_db_datetime(inertial.time_client),
+                        data_2.id_device,
+                        data_2.acc_x,
+                        data_2.acc_y,
+                        data_2.acc_z,
+                        data_2.gyr_x,
+                        data_2.gyr_y,
+                        data_2.gyr_z,
+                        data_2.mag_x,
+                        data_2.mag_y,
+                        data_2.mag_z,
+                        data_2.config_version_applied,
+                        self._int_to_db_datetime(data_2.time_client),
                     ))
                     db.commit()
             return True
@@ -267,11 +271,11 @@ class DatabaseRepository:
     async def get_config_async(self, device_id: str) -> ConfigData | None:
         return await asyncio.to_thread(self.get_config, device_id)
 
-    async def insert_environmental_async(self, environmental: "Environmental") -> bool:
-        return await asyncio.to_thread(self.insert_environmental, environmental)
+    async def insert_data_1_async(self, data_1: "Data_1") -> bool:
+        return await asyncio.to_thread(self.insert_data_1, data_1)
 
-    async def insert_inertial_async(self, inertial: "Inertial") -> bool:
-        return await asyncio.to_thread(self.insert_inertial, inertial)
+    async def insert_data_2_async(self, data_2: "Data_2") -> bool:
+        return await asyncio.to_thread(self.insert_data_2, data_2)
 
     async def insert_log_async(self, log: "Log") -> bool:
         return await asyncio.to_thread(self.insert_log, log)

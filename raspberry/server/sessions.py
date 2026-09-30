@@ -72,21 +72,40 @@ class DeviceSession:
         self.timeouts = Timeouts() if timeouts is None else timeouts  # Timeouts centralizados
         self.ble = ble                                  # Contexto BLE, o None en los otros tres
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
-        self._last_client_time: int | None = None       # Último time_client recibido (Environmental/Inertial)
+        self._last_client_time: int | None = None       # Último time_client recibido (Data_1/Data_2)
+        self._last_client_seen_at: float | None = None  # Cuándo llegó, en reloj monótono del server
 
     def _update_last_client_time(self, data: Any):
-        """Actualiza el último timestamp de cliente observado en paquetes de datos."""
+        """Actualiza el último timestamp de cliente observado en paquetes de datos.
+
+        Guarda también CUÁNDO llegó, con el reloj monótono del server. Hace
+        falta para saber si el dato sigue fresco sin usar el reloj del device:
+        ese se atrasa con cada deep sleep, así que restarlo contra el del
+        server no dice nada sobre la antigüedad del paquete.
+        """
         ts = getattr(data, "time_client", None)
         if isinstance(ts, int):
             self._last_client_time = ts
+            self._last_client_seen_at = time.monotonic()
 
     async def _protocol_heartbeat_loop(self, interval_sec: float = 10.0):
-        """Inserta un log periódico mientras el protocolo de sesión está activo."""
+        """Inserta un log periódico mientras el protocolo de sesión está activo.
+
+        `time_client` sale solo si hay telemetría reciente. Antes se escribía
+        siempre el último valor visto, así que mientras el device dormía se
+        repetía la misma hora en varias filas con `time_server` distinto: la
+        resta entre ambas columnas parecía desfase de reloj cuando en realidad
+        era la antigüedad del último paquete. Con NULL, esa resta o es una
+        comparación de relojes válida o no existe, pero nunca es un número
+        equivocado.
+        """
         while True:
             await asyncio.sleep(interval_sec)
             if self._last_client_time is None:
                 continue
             server_time = utc_epoch_now()
+            seen_at = self._last_client_seen_at
+            fresh = seen_at is not None and (time.monotonic() - seen_at) <= interval_sec
             try:
                 await self.database_repo.insert_log_async(
                     Log(
@@ -94,7 +113,7 @@ class DeviceSession:
                         status_report=2,
                         protocol_report=self.config.protocol_conf,
                         batt_level=100,
-                        time_client=self._last_client_time,
+                        time_client=self._last_client_time if fresh else None,
                         time_server=server_time,
                     )
                 )
