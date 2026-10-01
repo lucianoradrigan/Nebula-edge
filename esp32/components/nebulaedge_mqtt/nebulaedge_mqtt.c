@@ -14,6 +14,34 @@
 
 static const char *TAG = "nebulaedge_mqtt";
 
+/* Tópicos suscritos, para poder restaurarlos al reconectar (ver
+ * MQTT_EVENT_CONNECTED). Son pocos y fijos -hoy uno solo, el de configuración
+ * de este device-, así que una tabla chica alcanza y evita reservar memoria en
+ * el camino de un evento. */
+#define MQTT_MAX_SUBS 4
+#define MQTT_TOPIC_MAX 128
+
+static char s_sub_topics[MQTT_MAX_SUBS][MQTT_TOPIC_MAX];
+static int  s_sub_qos[MQTT_MAX_SUBS];
+static int  s_sub_count = 0;
+
+static void remember_subscription(const char *topic, int qos) {
+    for (int i = 0; i < s_sub_count; i++) {
+        if (strcmp(s_sub_topics[i], topic) == 0) {
+            s_sub_qos[i] = qos;     // ya estaba: solo se actualiza el qos
+            return;
+        }
+    }
+    if (s_sub_count >= MQTT_MAX_SUBS) {
+        ESP_LOGW(TAG, "No hay lugar para recordar la suscripcion a %s", topic);
+        return;
+    }
+    snprintf(s_sub_topics[s_sub_count], MQTT_TOPIC_MAX, "%s", topic);
+    s_sub_qos[s_sub_count] = qos;
+    s_sub_count++;
+}
+
+
 /* Cola de configuraciones entrantes. La pone la aplicación con
  * mqtt_set_config_queue(); el componente no la crea ni la conoce por nombre. */
 static QueueHandle_t s_config_queue = NULL;
@@ -24,6 +52,13 @@ void mqtt_set_config_queue(QueueHandle_t queue) {
 
 /* Variable global para el cliente MQTT */
 static esp_mqtt_client_handle_t client = NULL;
+
+static void resubscribe_all(void) {
+    for (int i = 0; i < s_sub_count; i++) {
+        int id = esp_mqtt_client_subscribe(client, s_sub_topics[i], s_sub_qos[i]);
+        ESP_LOGI(TAG, "Re-suscripcion a %s (msg_id=%d)", s_sub_topics[i], id);
+    }
+}
 
 /**
  * @brief Logs an error message if the provided error code is non-zero
@@ -66,6 +101,21 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         // Client is now ready to send and receive data.
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "CONNECTED: succesfully conected to broker");
+            /* Re-suscribe lo que ya estaba suscrito.
+             *
+             * Las suscripciones MQTT son POR SESIÓN y esp-mqtt no las restaura
+             * al reconectar: solo vuelve a abrir la conexión. Antes esto no se
+             * notaba porque el broker era externo y no se caía nunca; desde que
+             * lo hospeda el servidor, el broker muere en cada reinicio del
+             * servidor y el device reconectaba SIN suscripción. Publicar no la
+             * necesita, así que la telemetría seguía saliendo y el fallo era
+             * invisible: el device quedaba sordo a la configuración.
+             *
+             * Medido en banco: el servidor publicó la config 10 veces en un
+             * tópico sin suscriptor (a QoS 0 el broker las descarta), el
+             * handshake agotó sus reintentos y la config terminó entrando por
+             * el canal de rescate BLE a los 50 s. */
+            resubscribe_all();
             break;
 
         // The client has aborted the connection due to being unable to read 
@@ -255,6 +305,7 @@ int mqtt_subscribe(const char *topic, int qos) {
     // Reintenta hasta poder suscribir correctamente
     int msg_id = -1;
     while (msg_id < 0) {
+        remember_subscription(topic, qos);
         msg_id = esp_mqtt_client_subscribe(client, topic, qos); 
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
@@ -268,6 +319,16 @@ void mqtt_finish(void) {
         esp_mqtt_client_stop(client);
         esp_mqtt_client_destroy(client);
         client = NULL;
+        /* Las suscripciones recordadas viven lo que vive el cliente: el que
+         * venga despues las va a pedir de nuevo en mqtt_open().
+         *
+         * Sin esto quedaba suscrito DOS veces al mismo topico tras un cambio de
+         * configuracion: resubscribe_all() las restauraba al reconectar y
+         * mqtt_open() volvia a pedir la suya. El broker entrega el mensaje
+         * retenido una vez por suscripcion, asi que el device recibia la misma
+         * config varias veces y respondia un ACK por cada una. No rompia nada
+         * -una config repetida es idempotente- pero era ruido evitable. */
+        s_sub_count = 0;
         ESP_LOGI(TAG, "MQTT client cerrado correctamente.");
     }
 }

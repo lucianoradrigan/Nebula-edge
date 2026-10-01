@@ -425,7 +425,9 @@ class MqttTransport(Transport):
             await asyncio.sleep(self._QUEUE_POLL_SEC)
 
     async def send(self, data: bytes) -> None:
-        mqtt_publish(self._config_topic, data)
+        # Retenida: ver mqtt_publish(). El device puede no estar suscrito
+        # todavía cuando esto sale, y a QoS 0 eso significa perder el mensaje.
+        mqtt_publish(self._config_topic, data, retain=True)
 
 
 class BleTransport(Transport):

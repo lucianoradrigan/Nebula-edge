@@ -143,11 +143,24 @@ def on_connect(client, userdata, flags, reason_code, properties):
         client.subscribe("/topic/nebulaedge/+/config/ack")
         log("Suscrito a /topic/nebulaedge/+/data, /topic/nebulaedge/+/config y /topic/nebulaedge/+/config/ack")
 
-def mqtt_publish(topic, data):
-    """Publica un payload en el tópico especificado."""
+def mqtt_publish(topic, data, retain: bool = False):
+    """Publica un payload en el tópico especificado.
+
+    `retain` existe para la configuración. Sin él hay una carrera que se pierde
+    siempre: el transporte MQTT del servidor abre al instante y empieza a
+    publicar la config, mientras el device tarda en estar suscrito -su
+    mqtt_open() espera SERVER_READY_MS a propósito-. A QoS 0 y sin retener, un
+    mensaje publicado en un tópico sin suscriptor lo descarta el broker, así que
+    esos envíos se pierden para siempre. Retenida, el broker guarda la última y
+    la entrega en el momento en que el device se suscribe.
+
+    Es seguro repetirla: el device trata una config ya aplicada como idempotente
+    (misma versión -> ACK positivo y descarta) y rechaza con ACK negativo
+    cualquiera más vieja que la que tiene.
+    """
     global mqttc
-    mqttc.publish(topic, data)
-    log(f"Publish en {topic}")
+    mqttc.publish(topic, data, retain=retain)
+    log(f"Publish en {topic}{' (retenida)' if retain else ''}")
 
 
 def get_data_queue(device_id: str) -> queue.Queue:
