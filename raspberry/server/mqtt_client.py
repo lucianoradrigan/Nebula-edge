@@ -35,6 +35,55 @@ packet_queue = queue.Queue()        # Fallback: mensajes cuyo tópico no trae id
 device_queues: Dict[str, queue.Queue] = {}   # Telemetría, por device
 ack_queues: Dict[str, queue.Queue] = {}      # ACK de config, por device
 
+# TOPE DE LAS COLAS POR DEVICE
+#
+# Sin tope, cualquiera que publique en /topic/nebulaedge/<lo que sea>/data hace
+# crecer la memoria del servidor sin límite: la cola se crea a partir del id que
+# venga en el tópico -no se comprueba que ese device exista- y solo la drena la
+# sesión de ese device, que para un id inventado no existe nunca. Medido en
+# banco: 5000 publicaciones a un device inexistente dejaban 5000 mensajes en
+# cola, con maxsize=0 y sin una sola línea en el log. Desde que el servidor
+# hospeda su propio broker con acceso anónimo (mqtt_broker.py), eso es
+# alcanzable desde la red local.
+#
+# 1000 mensajes son unos 8 minutos de telemetría al ritmo normal de un device
+# (2 paquetes/s): mucho más que cualquier hueco legítimo entre dos lecturas de
+# la sesión.
+_QUEUE_MAX = 1000
+
+# Un aviso por device, no uno por mensaje descartado: a 2 paquetes/s, avisar
+# cada vez llenaría el log sin agregar información.
+_dropping_reported: set[str] = set()
+
+
+def _put_drop_oldest(q: queue.Queue, device_id: str, payload: bytes, kind: str) -> None:
+    """Encola descartando el MÁS VIEJO si la cola está llena.
+
+    Se descarta el viejo y no el nuevo, igual que en la cola de configuración de
+    BLE: para telemetría el dato fresco vale más que el atrasado. Que la cola se
+    llene significa que nadie la está drenando, así que guardar lo viejo sería
+    guardar basura.
+    """
+    try:
+        q.put_nowait(payload)
+        return
+    except queue.Full:
+        pass
+
+    try:
+        q.get_nowait()          # hace lugar tirando el más viejo
+    except queue.Empty:
+        pass
+    try:
+        q.put_nowait(payload)
+    except queue.Full:
+        pass
+
+    if device_id not in _dropping_reported:
+        _dropping_reported.add(device_id)
+        log(f"Cola de {kind} de {device_id} llena ({_QUEUE_MAX}): se descarta lo más viejo. "
+            "Nadie la está drenando: o no hay sesión para ese device, o publica más rápido de lo que se lee.")
+
 # El cliente es un único recurso por proceso: el lock protege el arranque
 # contra dos sesiones que lo pidan al mismo tiempo (ver mqtt_start).
 _mqtt_lock = threading.Lock()
@@ -45,7 +94,7 @@ def _get_device_queue(device_id: str) -> queue.Queue:
     """Obtiene/crea la cola de datos por dispositivo."""
     q = device_queues.get(device_id)
     if q is None:
-        q = queue.Queue()
+        q = queue.Queue(maxsize=_QUEUE_MAX)
         device_queues[device_id] = q
     return q
 
@@ -54,7 +103,7 @@ def _get_ack_queue(device_id: str) -> queue.Queue:
     """Obtiene/crea la cola de ACK por dispositivo."""
     q = ack_queues.get(device_id)
     if q is None:
-        q = queue.Queue()
+        q = queue.Queue(maxsize=_QUEUE_MAX)
         ack_queues[device_id] = q
     return q
 
@@ -72,7 +121,7 @@ def on_message_data(client, userdata, message):
     """Callback de mensajes de data: enruta por dispositivo."""
     device_id = _extract_device_id(message.topic)
     if device_id:
-        _get_device_queue(device_id).put(message.payload)
+        _put_drop_oldest(_get_device_queue(device_id), device_id, message.payload, "telemetría")
     else:
         # fallback global
         packet_queue.put(message.payload)
@@ -82,7 +131,7 @@ def on_message_ack(client, userdata, message):
     """Callback de mensajes de ACK de configuración."""
     device_id = _extract_device_id(message.topic)
     if device_id:
-        _get_ack_queue(device_id).put(message.payload)
+        _put_drop_oldest(_get_ack_queue(device_id), device_id, message.payload, "ACK")
 
 def on_connect(client, userdata, flags, reason_code, properties):
     """Callback de conexión: suscribe a tópicos de datos y ACKs."""
