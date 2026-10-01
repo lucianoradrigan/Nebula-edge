@@ -142,6 +142,11 @@ static uint32_t data_window_count = 0;
  * pierde. */
 #define SERVER_READY_MS 5000
 
+/* Intentos de asociación al AP antes de que nebulaedge_wifi reinicie el chip.
+ * Estaba repetido en las tres ramas del switch con el valor 15, y dos de los
+ * tres comentarios decían "después de 10 intentos". */
+#define WIFI_MAX_RETRY  15
+
 /* Reintento de una productora cuando malloc() falla. Corto a propósito: es una
  * condición transitoria y volver a intentar enseguida es mejor que perder el
  * ritmo de muestreo. */
@@ -483,6 +488,20 @@ typedef struct {
      * cola, BLE saca un packet_t crudo de otra, UDP y TCP bloquean en recv()
      * sobre un buffer. Devolver Config* absorbe las tres diferencias, y todo
      * lo que viene después pasa a existir una sola vez. */
+    /* Deja el transporte listo para que arranquen las tasks. Devuelve false si
+     * no se pudo: el bucle de protocolos lo reintenta.
+     *
+     * POR QUÉ ESTÁ EN LA TABLA
+     *     Faltaba, y era lo único que mantenía vivo el switch de cuatro ramas
+     *     en app_main(): 153 líneas que repetían el mismo esqueleto -levantar
+     *     WiFi, abrir, arrancar tasks, bloquearse en el semáforo, bajar WiFi-
+     *     con tres de las cuatro copias idénticas salvo el medio. */
+    bool (*open)(void);
+
+    /* Si el protocolo necesita la radio WiFi arriba. Tres de los cuatro sí;
+     * BLE no, y por eso tampoco se le baja al salir. */
+    bool needs_wifi;
+
     Config *(*recv_config)(void);
 
     /* Cierra el transporte antes de cambiar de protocolo o de dormir.
@@ -552,6 +571,25 @@ static Config *mqtt_recv_config(void) {
     return cfg;
 }
 
+/* Conecta al broker, espera a que el servidor llegue también y se suscribe al
+ * tópico de configuración de este device. */
+static bool mqtt_open(void) {
+    mqtt_config_global mqtt_config = {
+        .broker = current_config->mqtt_broker,
+    };
+    mqtt_start(&mqtt_config);
+
+    // Le da tiempo a la Raspberry para conectarse al broker antes de enviar.
+    vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
+
+    char topic_cfg[128];
+    snprintf(topic_cfg, sizeof(topic_cfg), "/topic/nebulaedge/%s/config", current_config->id_device);
+    ESP_LOGI(TAG_SEND_MQTT, "topic_cfg: %s", topic_cfg);
+    mqtt_subscribe(topic_cfg, 0);
+
+    return true;
+}
+
 /* -------------------------------------------------------------------- UDP */
 
 static esp_err_t udp_send_data(const uint8_t *data, size_t size) {
@@ -578,6 +616,17 @@ static Config *udp_recv_config(void) {
         ESP_LOGI(TAG_GET_RSP_UDP, "UDP: error al desempaquetar");
     }
     return cfg;
+}
+
+/* UDP no conecta: abrir el socket es todo lo que hace falta. */
+static bool udp_open(void) {
+    udp_params_t params = {
+        .ip_host = current_config->host_ip_addr,
+        .port = current_config->udp_port,
+        .ip_version = IPV4,
+    };
+    nebulaedge_udp_open_socket(&params);
+    return true;
 }
 
 /* -------------------------------------------------------------------- TCP */
@@ -623,6 +672,24 @@ static Config *tcp_recv_config(void) {
         ESP_LOGI(TAG_GET_RSP_TCP, "TCP: error al desempaquetar");
     }
     return cfg;
+}
+
+/* El único que puede fallar al abrir: si el servidor no está escuchando, el
+ * connect() no entra y hay que reintentar el protocolo entero. */
+static bool tcp_open(void) {
+    tcp_params_t params = {
+        .ip_host = current_config->host_ip_addr,
+        .port = current_config->tcp_port,
+        .ip_version = IPV4,
+    };
+
+    nebulaedge_tcp_open_socket(&params);
+
+    if (nebulaedge_tcp_connect() != 0) {
+        nebulaedge_tcp_close_socket();
+        return false;
+    }
+    return true;
 }
 
 /* -------------------------------------------------------------------- BLE */
@@ -685,6 +752,22 @@ static Config *ble_recv_config(void) {
 /* El enlace BLE no se cierra al cambiar de protocolo: queda activo siempre. */
 static void ble_close(void) { }
 
+/* BLE no abre nada: el stack y el anuncio ya están arriba desde app_main y no
+ * se deshacen nunca. Lo que hace es ESPERAR a que el servidor escriba en la
+ * característica C, que es lo que libera el semáforo. Es el único protocolo
+ * cuyo open() se bloquea. */
+static bool ble_open(void) {
+    ESP_LOGI(TAG, "esperando conexión BLE para iniciar tasks...");
+
+    if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
+        ESP_LOGI(TAG, "toma semáforo, empieza recepción BLE");
+    }
+
+    // Le da tiempo a la Raspberry para estar lista.
+    vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
+    return true;
+}
+
 /* ----------------------------------------------------------- LA TABLA */
 
 static const protocol_ops_t PROTOCOLS[] = {
@@ -692,6 +775,7 @@ static const protocol_ops_t PROTOCOLS[] = {
         .name = "MQTT", .id = PROTOCOL_MQTT,
         .send_data = mqtt_send_data, .send_ack = mqtt_send_ack,
         .send_tag = TAG_SEND_MQTT, .rsp_tag = TAG_GET_RSP_MQTT,
+        .open = mqtt_open, .needs_wifi = true,
         .recv_config = mqtt_recv_config, .close = mqtt_finish,
         .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
@@ -699,6 +783,7 @@ static const protocol_ops_t PROTOCOLS[] = {
         .name = "UDP", .id = PROTOCOL_UDP,
         .send_data = udp_send_data, .send_ack = udp_send_ack,
         .send_tag = TAG_SEND_UDP, .rsp_tag = TAG_GET_RSP_UDP,
+        .open = udp_open, .needs_wifi = true,
         .recv_config = udp_recv_config, .close = nebulaedge_udp_close_socket,
         .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
@@ -706,6 +791,7 @@ static const protocol_ops_t PROTOCOLS[] = {
         .name = "TCP", .id = PROTOCOL_TCP,
         .send_data = tcp_send_data, .send_ack = tcp_send_ack,
         .send_tag = TAG_SEND_TCP, .rsp_tag = TAG_GET_RSP_TCP,
+        .open = tcp_open, .needs_wifi = true,
         .recv_config = tcp_recv_config, .close = nebulaedge_tcp_close_socket,
         .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
     },
@@ -713,6 +799,7 @@ static const protocol_ops_t PROTOCOLS[] = {
         .name = "BLE", .id = PROTOCOL_BLE,
         .send_data = ble_send_data, .send_ack = ble_send_ack,
         .send_tag = TAG_SEND_BLE, .rsp_tag = TAG_GET_RSP_BLE,
+        .open = ble_open, .needs_wifi = false,
         .recv_config = ble_recv_config, .close = ble_close,
         /* Una sola vez: el link layer de BLE ya retransmite lo que se encoló, y
          * ble_set_char_with_notify() reintenta por su cuenta si el stack rechaza el
@@ -1563,170 +1650,47 @@ void app_main() {
         }
 #endif
     
-        switch (current_config->protocol_conf) {
+        /* El protocolo lo resuelve la tabla, no un switch. Lo único que cambia
+         * entre los cuatro es cómo se abre el transporte, y eso es proto->open();
+         * el resto del ciclo -WiFi arriba, arrancar tasks, bloquearse hasta que
+         * la task de respuesta avise un cambio, WiFi abajo- es idéntico. */
+        if (current_config->protocol_conf < 0 || current_config->protocol_conf > PROTOCOL_BLE) {
+            ESP_LOGE(TAG, "Selección de protocolo inválida: %ld", current_config->protocol_conf);
+            vTaskDelay(pdMS_TO_TICKS(RESTART_LOG_FLUSH_MS));
+            esp_restart();
+        }
 
-            /****************************************************************/
-            /**************************  MQTT *******************************/
-            /****************************************************************/
-            case PROTOCOL_MQTT: {
-                // Estructura de configuración de wifi
-                global_wifi_config wifi_config = {
-                    .ssid = current_config->ssid,
-                    .password = current_config->passwd,
+        const protocol_ops_t *proto = &PROTOCOLS[current_config->protocol_conf];
 
-                    // Hacer enums para simplificar
-                    .auth_mode = WIFI_AUTH_WPA_WPA2_PSK,
-                    .max_retry = 15,                           // Después de 15 intentos reinicia la ESP
-                    .retry_delay_ms = 0,
-                };
-                wifi_start_if_needed(&wifi_config);
+        if (proto->needs_wifi) {
+            global_wifi_config wifi_config = {
+                .ssid = current_config->ssid,
+                .password = current_config->passwd,
+                .auth_mode = WIFI_AUTH_WPA_WPA2_PSK,
+                .max_retry = WIFI_MAX_RETRY,
+                .retry_delay_ms = 0,
+            };
+            wifi_start_if_needed(&wifi_config);
+        }
 
-                // Broker MQTT provisto por configuración
-                const char *broker = current_config->mqtt_broker;
-
-                // Estructura de configuración MQTT: debe ser visible desde main
-                mqtt_config_global mqtt_config = {
-                    .broker = broker,
-                };
-
-                // Empieza la conexión mqtt en el broker configurado: visibilidad main
-                mqtt_start(&mqtt_config);
-
-                // Da tiempo a la Raspberry para conectarse al broker antes de enviar datos
-                vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
-
-                // Suscribe al tópico de configuración por dispositivo
-                char topic_cfg[128];
-                snprintf(topic_cfg, sizeof(topic_cfg), "/topic/nebulaedge/%s/config", current_config->id_device);
-                ESP_LOGI(TAG_SEND_MQTT, "topic_cfg: %s", topic_cfg);
-                mqtt_subscribe(topic_cfg, 0);
-                
-                start_protocol_tasks(&PROTOCOLS[PROTOCOL_MQTT]);
-
-                // Punto de bloqueo
-                if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
-                    ESP_LOGI(TAG, "Se sale de MQTT (cambio de protocolo)");
-                }
-
+        if (!proto->open()) {
+            ESP_LOGI(TAG, "%s: no se pudo abrir el transporte, se reintenta", proto->name);
+            if (proto->needs_wifi) {
                 wifi_deinit_sta();
-
-                break;
             }
+            continue;
+        }
 
-            /****************************************************************/
-            /**************************  UDP  *******************************/
-            /****************************************************************/
-            case PROTOCOL_UDP: {
-                // Estructura de configuración de wifi
-                global_wifi_config wifi_config = {
-                    .ssid = current_config->ssid,
-                    .password = current_config->passwd,
+        start_protocol_tasks(proto);
 
-                    // Hacer enums para simplificar
-                    .auth_mode = WIFI_AUTH_WPA_WPA2_PSK,
-                    .max_retry = 15,                           // Después de 10 intentos reinicia la ESP
-                    .retry_delay_ms = 0,
-                };
-                wifi_start_if_needed(&wifi_config);
-                
-                udp_params_t params = {
-                    .ip_host = current_config->host_ip_addr,
-                    .port = current_config->udp_port,
-                    .ip_version = IPV4,
-                };
+        /* Punto de bloqueo: lo libera la task de respuesta cuando aplica una
+         * configuración que cambia de protocolo. */
+        if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
+            ESP_LOGI(TAG, "%s: se sale por cambio de protocolo", proto->name);
+        }
 
-                nebulaedge_udp_open_socket(&params);
-
-                start_protocol_tasks(&PROTOCOLS[PROTOCOL_UDP]);
-
-                // Punto de bloqueo
-                if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
-                    ESP_LOGI(TAG, "se libera semáforo, se sale de UDP correctamente");
-                }
-
-                wifi_deinit_sta();
-
-                break;
-            }
-
-            /****************************************************************/
-            /**************************  TCP  *******************************/
-            /****************************************************************/
-            case PROTOCOL_TCP: {
-                // Estructura de configuración de wifi
-                global_wifi_config wifi_config = {
-                    .ssid = current_config->ssid,
-                    .password = current_config->passwd,
-
-                    // Hacer enums para simplificar
-                    .auth_mode = WIFI_AUTH_WPA_WPA2_PSK,
-                    .max_retry = 15,                           // Después de 10 intentos reinicia la ESP
-                    .retry_delay_ms = 0,
-                };
-                wifi_start_if_needed(&wifi_config);
-
-                tcp_params_t params = {
-                    .ip_host = current_config->host_ip_addr,
-                    .port = current_config->tcp_port,
-                    .ip_version = IPV4,
-                };
-
-                // Abre socket TCP
-                nebulaedge_tcp_open_socket(&params);
-                // Conecta
-                if (nebulaedge_tcp_connect() != 0) {
-                    // Cierra el socket
-                    nebulaedge_tcp_close_socket();
-                    ESP_LOGI(TAG, "Retrying TCP connection...");
-                    wifi_deinit_sta();
-                    continue;
-                }
-
-                start_protocol_tasks(&PROTOCOLS[PROTOCOL_TCP]);
-
-                // Punto de bloqueo
-                if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
-                    ESP_LOGI(TAG, "Se sale de TCP correctamente");
-                }
-
-                wifi_deinit_sta();
-
-                break;
-            }
-            
-            /****************************************************************/
-            /**************************  BLE  *******************************/
-            /****************************************************************/
-            case PROTOCOL_BLE: {
-                
-                ESP_LOGI(TAG, "esperando conexión BLE para iniciar tasks...");
-
-                // Semáforo se libera cuando se escribe configuración en charact. C de BLE.
-                // Mientras tanto queda bloqueado aquí.
-                if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
-                    ESP_LOGI(TAG, "toma semáforo, empieza recepción BLE");          
-                }
-
-                // Da tiempo a la Raspberry para estar lista
-                vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
-
-                start_protocol_tasks(&PROTOCOLS[PROTOCOL_BLE]);
-
-                // Punto de bloqueo
-                if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
-                    ESP_LOGI(TAG, "se libera semáforo, se sale de BLE correctamente");
-                }
-
-                break;
-            }
-
-            // Protocolo inválido
-            default: {
-                ESP_LOGE(TAG, "Selección de protocolo inválida: %ld", current_config->protocol_conf);
-                vTaskDelay(pdMS_TO_TICKS(RESTART_LOG_FLUSH_MS));
-                esp_restart();
-                break;
-            }
+        if (proto->needs_wifi) {
+            wifi_deinit_sta();
         }
     }
 }
