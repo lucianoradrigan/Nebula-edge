@@ -1472,6 +1472,24 @@ static void start_protocol_tasks(const protocol_ops_t *proto) {
     log_memory(proto->rsp_tag);
 }
 
+/* Credenciales con las que está levantada la WiFi en este momento.
+ *
+ * Se guardan para poder responder una sola pregunta al cerrar el ciclo de
+ * protocolo: ¿la conexión que ya está arriba sirve para la configuración que
+ * sigue? Nunca salen por el log, ni siquiera la longitud. */
+static char s_wifi_ssid_en_uso[33];
+static char s_wifi_pass_en_uso[65];
+
+static void wifi_remember_credentials(const Config *cfg) {
+    snprintf(s_wifi_ssid_en_uso, sizeof s_wifi_ssid_en_uso, "%s", cfg->ssid ? cfg->ssid : "");
+    snprintf(s_wifi_pass_en_uso, sizeof s_wifi_pass_en_uso, "%s", cfg->passwd ? cfg->passwd : "");
+}
+
+static bool wifi_credentials_changed(const Config *cfg) {
+    return strcmp(s_wifi_ssid_en_uso, cfg->ssid ? cfg->ssid : "") != 0
+        || strcmp(s_wifi_pass_en_uso, cfg->passwd ? cfg->passwd : "") != 0;
+}
+
 void app_main() {
 
     /****************************************************************/
@@ -1671,6 +1689,7 @@ void app_main() {
                 .retry_delay_ms = 0,
             };
             wifi_start_if_needed(&wifi_config);
+            wifi_remember_credentials(current_config);
         }
 
         if (!proto->open()) {
@@ -1689,8 +1708,45 @@ void app_main() {
             ESP_LOGI(TAG, "%s: se sale por cambio de protocolo", proto->name);
         }
 
+        /* WiFi abajo SOLO si el protocolo que sigue no la necesita, o si
+         * cambió la red.
+         *
+         * Antes se bajaba siempre, y eso se pagaba en cada cambio de
+         * configuración aunque el protocolo no cambiara: la WiFi se destruía
+         * (wifi:state run -> init) y se volvía a asociar con la MISMA red.
+         * wifi_start_if_needed() ya es idempotente -mira s_wifi_active y
+         * vuelve-, así que dejarla levantada no cuesta nada y el ciclo
+         * siguiente la reusa.
+         *
+         * MEDIDO EN BANCO, cambio UDP -> UDP, hueco del camino de datos (de un
+         * "Paquete Data_N generado" al siguiente): 9,4-10,1 s antes, 8,1 s
+         * después. El rebuild desaparece del log -queda
+         * "wifi_start_if_needed: already active"- pero el ahorro es de ~1,4 s,
+         * no de los ~3,8 s que tarda el rebuild en pared, porque parte se
+         * solapaba con la reinicialización de los sensores.
+         *
+         * Lo que queda del hueco NO es WiFi: 4,2 s son ACK_DRAIN_MS (deliberado,
+         * para que el ACK salga antes de cerrar el socket) y 3,2 s son los tres
+         * reintentos de softreset del BMI270, que en esta placa no está montado.
+         * Ahí no se toca nada: los drivers de sensores los lleva otra persona.
+         *
+         * Las credenciales se comparan porque si cambió la red hay que
+         * reasociarse de verdad: reusar la conexión vieja dejaría al device
+         * mandando a una red que ya no es la del servidor. Y en UDP eso no da
+         * error, así que no se arreglaría solo. */
         if (proto->needs_wifi) {
-            wifi_deinit_sta();
+            bool next_needs_wifi =
+                current_config->protocol_conf >= 0
+                && current_config->protocol_conf <= PROTOCOL_BLE
+                && PROTOCOLS[current_config->protocol_conf].needs_wifi;
+
+            if (!next_needs_wifi || wifi_credentials_changed(current_config)) {
+                wifi_deinit_sta();
+            }
+            else {
+                ESP_LOGI(TAG, "WiFi se mantiene arriba: %s la sigue usando con la misma red",
+                         PROTOCOLS[current_config->protocol_conf].name);
+            }
         }
     }
 }
