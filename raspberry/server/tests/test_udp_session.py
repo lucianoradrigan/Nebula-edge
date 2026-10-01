@@ -120,6 +120,87 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result, "run() debía devolver la config aplicada")
         self.assertEqual(result.config_version, 2)
 
+    def _build_session_at_version(self, repo, port, timeouts, version):
+        """Sesión abierta con una versión concreta, en vez de la 1 del helper."""
+        return sessions.UDPDeviceSession(
+            FakeBLEDevice().address,
+            make_config(version, udp_port=port),
+            repo,
+            timeouts,
+        )
+
+    async def test_config_already_sent_is_not_resent_while_there_is_patience(self):
+        """El device reporta una versión vieja y la sesión no reenvía enseguida.
+
+        Es el comportamiento que hay que conservar: el device puede estar justo
+        en medio de aplicar la config, y reenviar en loop solo pisa el
+        handshake. El test de al lado cubre el otro lado, cuando la espera se
+        hace eterna.
+        """
+        port = free_port()
+        repo = FakeRepo(db_version=2, udp_port=port)
+        # Paciencia larga: nunca se agota dentro de este test.
+        timeouts = quick_timeouts(config_apply_grace_sec=3600.0)
+        task = asyncio.create_task(
+            self._build_session_at_version(repo, port, timeouts, 2).run()
+        )
+        self.addCleanup(task.cancel)
+
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+
+        for _ in range(8):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.3):
+                break
+        self.assertGreaterEqual(len(repo.data_1), 1, "no se insertó la telemetría")
+
+        with self.assertRaises(asyncio.TimeoutError,
+                               msg="no debía reenviar la config todavía"):
+            await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=1.5)
+        self.assertFalse(task.done(), "la sesión no debía cerrar mientras espera")
+
+    async def test_a_config_sent_but_never_applied_is_resent_over_the_live_transport(self):
+        """EL CALLEJÓN SIN SALIDA, visto desde la sesión.
+
+        La sesión se abrió con la v2 -o sea que ya se le entregó al device- y el
+        device sigue reportando la v1. Antes eso era ALREADY_SENT en cada vuelta
+        y nada más: no se reenviaba nunca y tampoco expiraba, porque el timeout
+        de datos se renueva con cada paquete que llega. El device se quedaba con
+        la config vieja indefinidamente.
+
+        Y que la telemetría siga llegando es justo la prueba de que el
+        transporte activo funciona, así que pasada la paciencia hay que reenviar
+        por ahí. El test del resolver cubre la decisión; este cubre el reloj,
+        que vive en la sesión.
+        """
+        port = free_port()
+        repo = FakeRepo(db_version=2, udp_port=port)
+        timeouts = quick_timeouts(config_apply_grace_sec=0.5)
+        task = asyncio.create_task(
+            self._build_session_at_version(repo, port, timeouts, 2).run()
+        )
+        self.addCleanup(task.cancel)
+
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+
+        # El device insiste con la versión vieja, como haría uno que nunca
+        # recibió la config.
+        async def keep_reporting_the_old_version():
+            for _ in range(40):
+                await self._send(dev, data_1_packet(applied_version=1), port)
+                await asyncio.sleep(0.2)
+
+        reporter = asyncio.create_task(keep_reporting_the_old_version())
+        self.addCleanup(reporter.cancel)
+
+        raw = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=8.0)
+        resent = DataCodec.deserialize_config(raw)
+        self.assertIsNotNone(resent, "no llegó el reenvío de la config")
+        self.assertEqual(resent.config_version, 2,
+                         "se esperaba el reenvío de la v2, la que el device nunca aplicó")
+
     async def test_current_config_is_resent_to_put_the_device_clock_on_time(self):
         """El server reenvía la config VIGENTE, con la misma versión, solo para
         poner el reloj del device en hora.

@@ -73,6 +73,7 @@ class DeviceSession:
         self.ble = ble                                  # Contexto BLE, o None en los otros tres
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
         self._last_client_time: int | None = None       # Último time_client recibido (Data_1/Data_2)
+        self._apply_wait_started: float | None = None   # Desde cuándo se espera que el device aplique
         self._last_client_seen_at: float | None = None  # Cuándo llegó, en reloj monótono del server
 
     def _update_last_client_time(self, data: Any):
@@ -429,12 +430,35 @@ class ProtocolSession(DeviceSession):
 
             # Compara versiones actuales de config DEVICE vs versión BD
             applied_version = data.config_version_applied
-            decision = ConfigResolver.evaluate(applied_version, db_config, self.config)
+
+            # La paciencia con un device que no aplica lo que ya se le entregó.
+            # El reloj lo lleva la sesión porque ConfigResolver es una función
+            # pura; ver la nota en evaluate().
+            now = time.monotonic()
+            apply_wait_exhausted = (
+                self._apply_wait_started is not None
+                and now - self._apply_wait_started >= self.timeouts.config_apply_grace_sec
+            )
+
+            decision = ConfigResolver.evaluate(
+                applied_version, db_config, self.config,
+                apply_wait_exhausted=apply_wait_exhausted,
+            )
+
+            if decision.decision == ConfigDecision.ALREADY_SENT:
+                if self._apply_wait_started is None:
+                    self._apply_wait_started = now
+            else:
+                # Cualquier otra decisión significa que ya no se está esperando.
+                self._apply_wait_started = None
+
             if decision.decision == ConfigDecision.APPLIED_NEWER:
                 log(f"Config aplicada detectada en {tx.name} ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
                 return decision.db_config
             elif decision.decision == ConfigDecision.ALREADY_SENT:
-                # Ya se envió esta config en el cambio de protocolo; espera que el device la aplique
+                # Ya se envió esta config; espera que el device la aplique. La
+                # espera tiene tope: pasado config_apply_grace_sec el resolver
+                # devuelve PUSH y se reenvía por el transporte activo.
                 continue
             elif decision.decision == ConfigDecision.PUSH:
                 applied = await self._push_and_wait(tx, decision.db_config)
@@ -443,7 +467,6 @@ class ProtocolSession(DeviceSession):
             # El device está al día de config: es el momento tranquilo para
             # ponerle el reloj en hora. Ver _resync_device_clock().
             if tx.can_send and decision.decision == ConfigDecision.UP_TO_DATE:
-                now = time.monotonic()
                 last = self._clock_resync_at.get(self.device_id)
                 if last is None:
                     # Primera vez que se ve este device en este proceso: solo se

@@ -89,6 +89,9 @@ class Timeouts:
     # --- handshake de configuración (sessions.py) ---
     config_ack_sec: float = 2.0         # Ventana de espera del ACK, por intento
     config_ack_retries: int = 10        # Intentos antes de dar la config por no aplicada
+    config_apply_grace_sec: float = 30.0  # Cuánto se espera a que el device aplique la config que ya
+                                        # se le entregó antes de reenviarla. Ver ConfigResolver.evaluate()
+                                        # y el callejón sin salida que describe.
     ble_ack_short_sec: float = 3.0      # Ventana de ACK propia de BLE; reemplaza a config_ack_sec
                                         # cuando el transporte la declara (Transport.ack_window_sec)
 
