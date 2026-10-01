@@ -36,7 +36,7 @@ import asyncio
 import threading
 
 from models import ConfigData, Data_1, Data_2, Log
-from system import utc_epoch_now, log, LocalWifiConfig
+from system import MQTT_BROKER_PORT, utc_epoch_now, log, LocalWifiConfig
 
 
 class DatabaseRepository:
@@ -133,6 +133,16 @@ class DatabaseRepository:
                     # cambian entre dos lecturas seguidas de la misma tabla.
                     host_ip_addr, ssid, passwd = LocalWifiConfig.get()
                     time_cli = utc_epoch_now()
+
+                    # Columna vacía = "usá el broker del servidor", que es el caso
+                    # normal desde que el servidor hospeda el suyo
+                    # (mqtt_broker.py). Se deriva del host_ip_addr en vez de
+                    # guardarse en la base porque la IP del servidor cambia y una
+                    # IP escrita en la tabla queda mintiendo. La columna sigue
+                    # existiendo para el caso raro de apuntar un device a un
+                    # broker externo a propósito.
+                    mqtt_broker = row[11] or f"mqtt://{host_ip_addr}:{MQTT_BROKER_PORT}"
+
                     return ConfigData(
                         id_device=row[0],
                         config_version=row[1],
@@ -148,7 +158,7 @@ class DatabaseRepository:
                         host_ip_addr=host_ip_addr,
                         ssid=ssid,
                         passwd=passwd,
-                        mqtt_broker=row[11],
+                        mqtt_broker=mqtt_broker,
                         time_client=time_cli        # Timestamp en segundos
                     )
                 else:

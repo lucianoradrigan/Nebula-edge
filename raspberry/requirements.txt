@@ -2,3 +2,4 @@ psycopg2-binary==2.9.10
 protobuf==6.32.1
 bleak==2.0.0
 paho-mqtt==2.1.0
+amqtt==0.12.1

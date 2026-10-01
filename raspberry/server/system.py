@@ -116,6 +116,18 @@ _DB_DEFAULTS = {
 #     Con el tope, el intento falla rápido, el hilo se libera y el siguiente
 #     reintento vuelve a probar: cuando la base vuelve, el servidor la toma
 #     sin necesidad de reiniciarlo.
+# BROKER MQTT PROPIO
+#
+# El servidor hospeda su propio broker (mqtt_broker.py), así que estos tres
+# valores los comparten el broker que escucha, el cliente del servidor que se
+# suscribe y la URL que se le manda al device en la configuración. Están acá y
+# no en mqtt_broker.py para que repository.py pueda armar esa URL sin importar
+# amqtt.
+MQTT_BROKER_PORT = int(os.environ.get("MQTT_PORT", "1883"))
+MQTT_BROKER_BIND = os.environ.get("MQTT_BIND", "0.0.0.0")
+# El cliente del servidor no sale a la red: el broker es este mismo proceso.
+MQTT_LOCAL_HOST = os.environ.get("MQTT_LOCAL_HOST", "127.0.0.1")
+
 _DB_CONNECT_TIMEOUT_S = 5
 
 

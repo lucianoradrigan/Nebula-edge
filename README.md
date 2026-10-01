@@ -106,7 +106,7 @@ En el paso 2, al imprimirse los logs de la ESP32-S3 en consola, se debe buscar l
 Luego, editar [raspberry/db_init/03_seed.sql](raspberry/db_init/03_seed.sql) añadiendo la nueva tupla asociada al nuevo dispositivo. Ahí se encuentran los valores iniciales de las configuraciones de dispositivos. Ejemplo:
 
 ```sql
-('C0:49:EF:08:CE:82', 0, 1, 400, 500, 8, 1, 1, 10, 1827, 1243, 'mqtt://broker.hivemq.com:1883')
+('C0:49:EF:08:CE:82', 0, 1, 400, 500, 8, 1, 1, 10, 1827, 1243, '')
 ```
 
 Para que este cambio sea efectivo se debe hacer rebuild de la componente docker nebulaedge_db con los siguientes comandos:

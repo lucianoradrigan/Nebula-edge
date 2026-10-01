@@ -28,7 +28,7 @@ import paho.mqtt.client as mqtt
 import queue
 import threading
 from typing import Dict
-from system import log
+from system import MQTT_BROKER_PORT, MQTT_LOCAL_HOST, log
 
 mqttc = None
 packet_queue = queue.Queue()        # Fallback: mensajes cuyo tópico no trae id_device
@@ -134,7 +134,10 @@ def mqtt_start():
         mqttc.on_connect = on_connect
         mqttc.message_callback_add("/topic/nebulaedge/+/data", on_message_data)
         mqttc.message_callback_add("/topic/nebulaedge/+/config/ack", on_message_ack)
-        mqttc.connect("broker.hivemq.com", 1883, 60)
+        # El broker es este mismo proceso (mqtt_broker.py): el cliente del
+        # servidor se conecta a loopback. Antes acá estaba broker.hivemq.com,
+        # un broker público de terceros por el que pasaba toda la telemetría.
+        mqttc.connect(MQTT_LOCAL_HOST, MQTT_BROKER_PORT, 60)
         mqttc.loop_start()
         _mqtt_started = True
 
