@@ -1,8 +1,9 @@
 /* Escaneo de buses para bring-up. Ver nebulaedge_busscan.h para el motivo y
  * para la advertencia del relé en cs_mask. */
 
+#include <string.h>
 #include "nebulaedge_busscan.h"
-#include "nebulaedge_spi.h"
+#include "driver/spi_master.h"
 #include "fxl6408.h"
 #include "esp_log.h"
 
@@ -19,6 +20,50 @@ static const char *TAG = "busscan";
 #define SPI_PROBE_BITS      16
 #define SPI_PROBE_MODE      0
 #define SPI_PROBE_HZ        1000000
+
+/* Prepara el bus y agrega un dispositivo SIN chip select automático: acá el CS
+ * lo mueve el expansor a mano, que es el punto del escaneo.
+ *
+ * Estas dos cosas vivían en un componente aparte, nebulaedge_spi, cuyo único
+ * cliente era este archivo y que traía su propia copia del pinout. Al estar
+ * acá, el pinout entra por parámetro y no hay copia que desincronizar. */
+static esp_err_t probe_device_open(const busscan_spi_pins_t *pins, spi_device_handle_t *out_dev) {
+    const spi_bus_config_t buscfg = {
+        .mosi_io_num   = pins->mosi_io,
+        .miso_io_num   = pins->miso_io,
+        .sclk_io_num   = pins->sclk_io,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = sizeof(uint8_t) * 2,
+    };
+
+    esp_err_t ret = spi_bus_initialize(pins->host, &buscfg, SPI_DMA_DISABLED);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "  no se pudo inicializar el bus SPI: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    const spi_device_interface_config_t devcfg = {
+        .clock_speed_hz = SPI_PROBE_HZ,
+        .mode           = SPI_PROBE_MODE,
+        .spics_io_num   = -1,       // sin CS automático: lo mueve el expansor
+        .queue_size     = 1,
+    };
+
+    ret = spi_bus_add_device(pins->host, &devcfg, out_dev);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "  no se pudo agregar el dispositivo de sondeo: %s", esp_err_to_name(ret));
+        spi_bus_free(pins->host);
+    }
+    return ret;
+}
+
+/* Deja el bus como estaba: el escaneo es diagnóstico de arranque y después la
+ * microSD necesita inicializar el mismo host por su cuenta. */
+static void probe_device_close(const busscan_spi_pins_t *pins, spi_device_handle_t dev) {
+    spi_bus_remove_device(dev);
+    spi_bus_free(pins->host);
+}
 
 esp_err_t nebulaedge_busscan_i2c(i2c_master_bus_handle_t bus) {
     if (!bus) {
@@ -39,8 +84,10 @@ esp_err_t nebulaedge_busscan_i2c(i2c_master_bus_handle_t bus) {
     return ESP_OK;
 }
 
-esp_err_t nebulaedge_busscan_spi(i2c_master_bus_handle_t bus, uint8_t cs_mask) {
-    if (!bus) {
+esp_err_t nebulaedge_busscan_spi(i2c_master_bus_handle_t bus,
+                                 const busscan_spi_pins_t *pins,
+                                 uint8_t cs_mask) {
+    if (!bus || !pins) {
         return ESP_ERR_INVALID_ARG;
     }
     if (cs_mask == 0) {
@@ -63,12 +110,7 @@ esp_err_t nebulaedge_busscan_spi(i2c_master_bus_handle_t bus, uint8_t cs_mask) {
         return ESP_ERR_NOT_FOUND;
     }
 
-    /* CS = -1: dispositivo SIN chip select automático. Acá lo maneja el
-     * expansor a mano, que es justamente el punto del escaneo. Antes esto usaba
-     * spi_bus_add_max6675_device_ext_cs(), que ya no existe en el componente. */
-    if (spi_bus_init() != ESP_OK ||
-        spi_bus_add_device_direct_cs(-1, SPI_PROBE_MODE, SPI_PROBE_HZ, &dev) != ESP_OK) {
-        ESP_LOGE(TAG, "  no se pudo preparar el bus SPI");
+    if (probe_device_open(pins, &dev) != ESP_OK) {
         fxl6408_del(expander);
         return ESP_FAIL;
     }
@@ -84,7 +126,7 @@ esp_err_t nebulaedge_busscan_spi(i2c_master_bus_handle_t bus, uint8_t cs_mask) {
     spi_transaction_t probe = { .length = SPI_PROBE_BITS, .tx_buffer = tx, .rx_buffer = base };
     if (spi_device_polling_transmit(dev, &probe) != ESP_OK) {
         ESP_LOGE(TAG, "  no se pudo medir la línea base");
-        spi_bus_remove_device(dev);
+        probe_device_close(pins, dev);
         fxl6408_del(expander);
         return ESP_FAIL;
     }
@@ -117,7 +159,7 @@ esp_err_t nebulaedge_busscan_spi(i2c_master_bus_handle_t bus, uint8_t cs_mask) {
         }
     }
 
-    spi_bus_remove_device(dev);
+    probe_device_close(pins, dev);
     fxl6408_del(expander);
     ESP_LOGW(TAG, "===== %d CS con respuesta distinta a la base =====", found);
 

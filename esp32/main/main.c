@@ -222,8 +222,18 @@ static void drain_and_free_data_queue(void) {
  * sondeos con su timeout, varios segundos con el bus vacío, y el SPI baja chip
  * selects del expansor de a uno.
  *
- * BUS_SCAN_CS_MASK excluye el IO1 a propósito: en la im-v2 va a un RELÉ, y
- * bajarlo lo acciona de verdad. 0xFD son los otros siete IO. */
+ * BUS_SCAN_CS_MASK deja fuera DOS IO a propósito, y los dos por motivos
+ * medidos en banco:
+ *
+ *     IO1  va a un RELÉ en la im-v2, y bajarlo lo acciona de verdad.
+ *     IO0  es el chip select de la microSD. Incluirlo hace que el escaneo le
+ *          hable a la tarjeta y la deje a mitad de comando: el montaje
+ *          posterior falla con ESP_ERR_INVALID_CRC (0x109) y la SD queda sin
+ *          servir hasta el siguiente arranque. Verificado: con 0xFD no monta,
+ *          con 0xFC monta. Para diagnosticar la tarjeta está sd_selftest(),
+ *          que es lo que corresponde.
+ *
+ * Quedan los seis IO restantes: 0xFC. */
 /* Persistencia local en microSD. ENCENDIDA.
  *
  * El pinout es el del bringup de la IM-V2 (CS en el IO0 del expansor FXL6408).
@@ -246,7 +256,7 @@ static void drain_and_free_data_queue(void) {
 #define SD_PERSISTENCE      1
 
 #define BUS_SCAN_AT_BOOT    0
-#define BUS_SCAN_CS_MASK    0xFD
+#define BUS_SCAN_CS_MASK    0xFC
 
 /* Prueba de banco de la microSD al arrancar. APAGADA.
  *
@@ -1521,8 +1531,14 @@ void app_main() {
         /* Diagnóstico de bring-up, apagado por defecto. Ver nebulaedge_busscan.h.
          * El escaneo SPI mueve IO del expansor, y en la im-v2 el IO1 va a un
          * relé: por eso la máscara es explícita y excluye ese bit. */
+        const busscan_spi_pins_t scan_spi_pins = {
+            .host    = SD_SPI_HOST,
+            .mosi_io = PIN_NUM_MOSI,
+            .miso_io = PIN_NUM_MISO,
+            .sclk_io = PIN_NUM_CLK,
+        };
         nebulaedge_busscan_i2c(bus_handle);
-        nebulaedge_busscan_spi(bus_handle, BUS_SCAN_CS_MASK);
+        nebulaedge_busscan_spi(bus_handle, &scan_spi_pins, BUS_SCAN_CS_MASK);
 #endif
 
         /* Cada driver se agrega al bus y se configura. La dirección I2C la

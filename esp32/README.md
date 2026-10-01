@@ -117,7 +117,7 @@ Componentes, por rol:
 | Rol | Componentes |
 |---|---|
 | Drivers de sensor | `bme688` (ambiental), `bmi270` (IMU), `bmm350` (magnetómetro). Portables: solo dependen de `nebulaedge_i2c`. |
-| Buses | `nebulaedge_i2c` (sensores), `nebulaedge_spi` (genérico, hoy sin uso) |
+| Buses | `nebulaedge_i2c` (sensores). El SPI lo inicializa cada cliente: `nebulaedge_microsd` y `nebulaedge_busscan` |
 | Protocolos de salida | `nebulaedge_mqtt`, `nebulaedge_udp`, `nebulaedge_tcp`, `nebulaedge_ble` |
 | Red | `nebulaedge_wifi` |
 | Datos | `nebulaedge_proto_schema` (schema.proto + código generado) |

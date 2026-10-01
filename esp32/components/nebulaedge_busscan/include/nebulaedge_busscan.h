@@ -20,7 +20,18 @@
  */
 
 #include "driver/i2c_master.h"
+#include "driver/spi_master.h"
 #include "esp_err.h"
+
+/* Pines del bus SPI a escanear. Van por parámetro, como en sd_pins_t: el
+ * componente no conoce la placa, y así no hay una segunda copia del pinout que
+ * se pueda desincronizar de board_pinout.h. */
+typedef struct {
+    spi_host_device_t host;
+    int mosi_io;
+    int miso_io;
+    int sclk_io;
+} busscan_spi_pins_t;
 
 /* Barre las 112 direcciones válidas de I2C e informa cuáles responden.
  *
@@ -37,11 +48,13 @@ esp_err_t nebulaedge_busscan_i2c(i2c_master_bus_handle_t bus);
  * todos los CS en alto y después bajar uno por uno: si MISO cambia respecto de
  * la base, hay algo escuchando ahí. Es un INDICIO, no una prueba.
  *
- * `cs_mask` dice qué IO del expansor probar, un bit por IO. Es parámetro y no
- * constante porque es lo único que depende de la placa, y equivocarse tiene
+ * `cs_mask` dice qué IO del expansor probar, un bit por IO. Es parámetro, como
+ * `pins`, porque depende de la placa, y equivocarse tiene
  * consecuencias físicas: bajar un IO que no sea un chip select acciona lo que
  * tenga conectado, y en la im-v2 el IO1 va a un RELÉ. Por eso no hay valor por
  * defecto: el caller tiene que decir qué está dispuesto a mover. */
-esp_err_t nebulaedge_busscan_spi(i2c_master_bus_handle_t bus, uint8_t cs_mask);
+esp_err_t nebulaedge_busscan_spi(i2c_master_bus_handle_t bus,
+                                 const busscan_spi_pins_t *pins,
+                                 uint8_t cs_mask);
 
 #endif // NEBULAEDGE_BUSSCAN

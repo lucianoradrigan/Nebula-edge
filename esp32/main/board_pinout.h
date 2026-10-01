@@ -32,7 +32,8 @@
  * nebulaedge_microsd.c se definía los suyos con los valores de im-v1
  * (MOSI GPIO_NUM_2, MISO GPIO_NUM_44, CLK GPIO_NUM_43) y nunca incluyó
  * nebulaedge_defs.h, así que la microSD quedó compilando contra el pinout de
- * la placa vieja. Queda una cuarta copia sin usar en nebulaedge_spi.h.
+ * la placa vieja. Había una cuarta copia en nebulaedge_spi.h; ese componente se
+ * borró y el escaneo de buses ahora recibe estos pines por parámetro.
  *
  * Los tres valores de abajo coinciden con los del proyecto de bringup de la
  * IM-V2, que es el único código de la microSD probado contra la placa.
