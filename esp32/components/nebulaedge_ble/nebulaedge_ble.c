@@ -702,69 +702,6 @@ esp_err_t ble_set_char_with_notify(uint8_t char_index, const uint8_t *value, uin
     return notify_ret;
 }
 
-// Lee el valor de cualquier característica dado su índice.
-// Retorna el número de bytes leídos, o 0 en caso de error.
-size_t ble_get_char(uint8_t char_index, uint8_t *out_buffer, size_t max_len) {
-    if (char_index >= IDX_NB) {
-        ESP_LOGE(GATTS_TABLE_TAG, "ble_get_char: índice inválido %u", char_index);
-        return 0;
-    }
-    
-    uint16_t len = 0;
-    const uint8_t *value = NULL;
-    esp_err_t ret = esp_ble_gatts_get_attr_value(ble_handle_table[char_index], &len, &value);
-    if (ret != ESP_OK || !value) {
-        ESP_LOGE(GATTS_TABLE_TAG, "ble_get_char: error leyendo índice %u: %s", char_index, esp_err_to_name(ret));
-        return 0;
-    }
-    
-    size_t copy_len = (len > max_len) ? max_len : len;
-    memcpy(out_buffer, value, copy_len);
-    ESP_LOGI(GATTS_TABLE_TAG, "ble_get_char: leídos %u bytes de índice %u (handle=%u)", 
-             (unsigned)copy_len, char_index, ble_handle_table[char_index]);
-    return copy_len;
-}
-
-// Detiene el advertising BLE. Retorna ESP_OK si se detiene correctamente.
-esp_err_t ble_stop_advertising(void) {
-    esp_err_t ret = esp_ble_gap_stop_advertising();
-    if (ret == ESP_OK) {
-        ESP_LOGI(GATTS_TABLE_TAG, "ble_stop_advertising: advertising detenido correctamente");
-    } else {
-        ESP_LOGE(GATTS_TABLE_TAG, "ble_stop_advertising: falló: %s", esp_err_to_name(ret));
-    }
-    return ret;
-}
-
-void ble_deinit(void) {
-    esp_err_t ret;
-
-    ret = esp_ble_gap_stop_advertising();
-    if (ret != ESP_OK) {
-        ESP_LOGW(GATTS_TABLE_TAG, "ble_deinit: stop advertising falló: %s", esp_err_to_name(ret));
-    }
-
-    ret = esp_bluedroid_disable();
-    if (ret != ESP_OK) {
-        ESP_LOGW(GATTS_TABLE_TAG, "ble_deinit: bluedroid disable falló: %s", esp_err_to_name(ret));
-    }
-
-    ret = esp_bluedroid_deinit();
-    if (ret != ESP_OK) {
-        ESP_LOGW(GATTS_TABLE_TAG, "ble_deinit: bluedroid deinit falló: %s", esp_err_to_name(ret));
-    }
-
-    ret = esp_bt_controller_disable();
-    if (ret != ESP_OK) {
-        ESP_LOGW(GATTS_TABLE_TAG, "ble_deinit: controller disable falló: %s", esp_err_to_name(ret));
-    }
-
-    ret = esp_bt_controller_deinit();
-    if (ret != ESP_OK) {
-        ESP_LOGW(GATTS_TABLE_TAG, "ble_deinit: controller deinit falló: %s", esp_err_to_name(ret));
-    }
-}
-
 void ble_init(void) {
     
     esp_err_t ret;

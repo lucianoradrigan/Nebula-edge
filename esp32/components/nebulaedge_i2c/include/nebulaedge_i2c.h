@@ -50,6 +50,5 @@ esp_err_t i2c_device_write(i2c_master_dev_handle_t device, uint8_t *data_address
 
 /* Fuerza SDA en LOW con GPIO open-drain, para destrabar un bus colgado.
  * Hay que liberar el driver I2C antes de llamarla. */
-esp_err_t i2c_force_sda_low(int sda_io);
 
 #endif

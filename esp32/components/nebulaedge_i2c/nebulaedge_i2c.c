@@ -169,16 +169,6 @@ esp_err_t i2c_master_deinit(i2c_master_bus_handle_t *bus_handle) {
     return ESP_OK;
 }
 
-esp_err_t i2c_force_sda_low(int sda_io) {
-    // Tras liberar el driver I2C, forzar SDA en LOW con GPIO open-drain.
-    gpio_reset_pin((gpio_num_t)sda_io);
-    gpio_set_direction((gpio_num_t)sda_io, GPIO_MODE_OUTPUT_OD);
-    gpio_set_pull_mode((gpio_num_t)sda_io, GPIO_FLOATING);
-    gpio_set_level((gpio_num_t)sda_io, 0);
-    return ESP_OK;
-}
-
-
 /* Lee un registro en un device cualquiera vía I2C. Análogo a funciones bmm_read 
  * y bmi_read, pero para cualquier sensor. Device representa al sensor. */
 esp_err_t i2c_device_read(i2c_master_dev_handle_t device, uint8_t *data_address, uint8_t *data_rd, size_t size, const char *tag) {

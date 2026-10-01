@@ -105,15 +105,6 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-/* Función para consultar si el wifi funciona. 
- * Retorna un bool si está conectado. */
-bool wifi_check_connection(void) {
-    EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
-    bool connected = (bits & WIFI_CONNECTED_BIT) != 0;
-    ESP_LOGI("nebulaedge_wifi", "wifi_check_connection: %s", connected ? "connected" : "NOT connected");
-    return connected;
-}
-
 /**
  * @brief Initializes the Wi-Fi station (STA) mode with the provided configuration.
  *
@@ -125,7 +116,7 @@ bool wifi_check_connection(void) {
  *
  * @param global_wifi_config Pointer to the global Wi-Fi configuration structure.
  */
-void wifi_init_sta(global_wifi_config *global_wifi_config) {
+static void wifi_init_sta(global_wifi_config *global_wifi_config) {
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
 
     // Create an event group to handle Wi-Fi connection states
