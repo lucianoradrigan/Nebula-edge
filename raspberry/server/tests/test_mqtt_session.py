@@ -43,14 +43,18 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
         # Colas del device (las llenaría el hilo de paho al llegar mensajes)
         self.data_queue: queue.Queue = queue.Queue()
         self.ack_queue: queue.Queue = queue.Queue()
-        self.published: list[tuple[str, bytes]] = []
+        # (tópico, payload, retain). El retain se guarda porque es parte del
+        # contrato: la config va retenida para que el device la reciba aunque
+        # todavía no estuviera suscrito cuando se publicó. Ver mqtt_publish().
+        self.published: list[tuple[str, bytes, bool]] = []
 
         patches = [
             mock.patch.object(transport, "mqtt_start", lambda: None),
             mock.patch.object(transport, "get_data_queue", lambda _id: self.data_queue),
             mock.patch.object(transport, "get_ack_queue", lambda _id: self.ack_queue),
             mock.patch.object(transport, "mqtt_publish",
-                              lambda topic, data: self.published.append((topic, data))),
+                              lambda topic, data, retain=False:
+                                  self.published.append((topic, data, retain))),
         ]
         for p in patches:
             p.start()
@@ -102,7 +106,8 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await self._wait_until(lambda: len(self.published) >= 1),
                         "no se publicó la config nueva")
-        topic, payload = self.published[0]
+        topic, payload, retain = self.published[0]
+        self.assertTrue(retain, "la config tiene que ir retenida: ver mqtt_publish()")
         self.assertEqual(topic, f"/topic/nebulaedge/{DEVICE_ID}/config")
         pushed = DataCodec.deserialize_config(payload)
         self.assertIsNotNone(pushed)
