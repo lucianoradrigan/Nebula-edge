@@ -232,54 +232,6 @@ class LocalWifiConfig:
         except Exception:
             return ""
 
-    @staticmethod
-    def _run_cmd_with_status(args: list[str]) -> tuple[bool, str, str]:
-        """Ejecuta comando y retorna (ok, stdout, stderr)."""
-        try:
-            result = subprocess.run(args, capture_output=True, text=True, check=True)
-            return True, result.stdout.rstrip("\n"), result.stderr.rstrip("\n")
-        except subprocess.CalledProcessError as e:
-            return False, (e.stdout or "").rstrip("\n"), (e.stderr or "").rstrip("\n")
-        except Exception as e:
-            return False, "", str(e)
-
-    @classmethod
-    def _wifi_ssids_available(cls) -> set[str]:
-        """Retorna SSIDs detectados por scan de nmcli."""
-        output = cls._run_cmd(["sudo", "nmcli", "-t", "-f", "SSID", "dev", "wifi", "list", "--rescan", "auto"])
-        return {line.strip() for line in output.splitlines() if line.strip()}
-
-    @classmethod
-    def connect_specific_network(cls, ssid: str, passwd: str = "", device: str | None = None) -> str:
-        """Conecta a un SSID específico.
-
-        Retornos:
-        - "connected": conectado correctamente.
-        - "not_found": el SSID no aparece en el scan.
-        - "error": fallo al intentar conectar.
-        """
-        target_ssid = (ssid or "").strip()
-        if not target_ssid:
-            return "not_found"
-
-        available = cls._wifi_ssids_available()
-        if target_ssid not in available:
-            return "not_found"
-
-        cmd = ["sudo", "nmcli", "dev", "wifi", "connect", target_ssid]
-        if passwd:
-            cmd.extend(["password", passwd])
-        if device:
-            cmd.extend(["ifname", device])
-
-        ok, _, err = cls._run_cmd_with_status(cmd)
-        if not ok:
-            log(f"[WiFi] Error conectando a '{target_ssid}': {err}")
-            return "error"
-
-        cls._CACHE["ts"] = 0.0
-        return "connected"
-
     @classmethod
     def active_wifi_device(cls) -> str:
         """Detecta el dispositivo WiFi activo conectado (ej: wlan0)."""
@@ -293,57 +245,6 @@ class LocalWifiConfig:
                 log(f"Adaptador WIFI a usar: {device}")
                 return device
         return ""
-
-    @classmethod
-    def activate_wpa2_ap(cls, ssid: str, passwd: str, device: str) -> str:
-        """Activa un Access Point WPA2 (WPA-PSK + RSN) con SSID y password.
-
-        Retornos:
-        - "ap_active": AP levantado correctamente.
-        - "invalid_args": password inválido (<8 chars) o ssid vacío.
-        - "error": fallo al crear/activar el AP.
-        """
-        target_ssid = (ssid or "").strip()
-        if len(passwd) < 8 or target_ssid == "":
-            return "invalid_args"
-
-        conn_name = f"ap-{target_ssid}"
-
-        # Limpia perfil previo si existe para evitar conflictos de propiedades.
-        cls._run_cmd(["sudo", "nmcli", "connection", "delete", conn_name])
-
-        ok, _, err = cls._run_cmd_with_status([
-            "sudo", "nmcli", "connection", "add",
-            "type", "wifi",
-            "ifname", device,
-            "con-name", conn_name,
-            "autoconnect", "no",
-            "ssid", target_ssid,
-        ])
-        if not ok:
-            log(f"[WiFi] Error creando perfil AP '{conn_name}': {err}")
-            return "error"
-
-        ok, _, err = cls._run_cmd_with_status([
-            "sudo", "nmcli", "connection", "modify", conn_name,
-            "802-11-wireless.mode", "ap",
-            "802-11-wireless-security.key-mgmt", "wpa-psk",
-            "802-11-wireless-security.proto", "rsn",
-            "802-11-wireless-security.psk", passwd,
-            "ipv4.method", "shared",
-            "ipv6.method", "ignore",
-        ])
-        if not ok:
-            log(f"[WiFi] Error configurando WPA2 AP '{conn_name}': {err}")
-            return "error"
-
-        ok, _, err = cls._run_cmd_with_status(["sudo", "nmcli", "connection", "up", conn_name])
-        if not ok:
-            log(f"[WiFi] Error activando AP '{conn_name}': {err}")
-            return "error"
-
-        cls._CACHE["ts"] = 0.0
-        return "ap_active"
 
     @classmethod
     def _active_connection_name(cls, device: str) -> str:
