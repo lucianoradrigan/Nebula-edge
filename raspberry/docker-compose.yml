@@ -15,6 +15,12 @@ services:
       PG_DB: ${PG_DB:-nebulaedge}
       PG_USER: ${PG_USER:-nebulaedge}
       PG_PASSWORD: ${PG_PASSWORD:-1234}
+      # La red que el servidor le entrega a los devices. Vacías = la lee nmcli
+      # de la WiFi de la Pi (cliente o AP). Ver system.py -> LocalWifiConfig.
+      WIFI_SSID: ${WIFI_SSID:-}
+      WIFI_PASSWD: ${WIFI_PASSWD:-}
+      HOST_IP: ${HOST_IP:-}
+      WIFI_DEVICE: ${WIFI_DEVICE:-wlan0}
     restart: unless-stopped
     privileged: true
     network_mode: host

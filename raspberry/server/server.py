@@ -36,8 +36,9 @@ CONFIGURACIÓN
         MQTT_HOST / MQTT_PORT                     broker MQTT (servicio `mqtt`)
         BLE_ADAPTER                               adaptador BLE a usar
         HOST_IP / WIFI_SSID / WIFI_PASSWD         credenciales que van al device
+        WIFI_DEVICE                               interfaz WiFi que lee nmcli (wlan0)
 
-    Las cuatro primeras las pone docker-compose.yml a partir de un .env
+    Las de Postgres y las de WiFi las pone docker-compose.yml a partir de un .env
     opcional (plantilla en raspberry/.env.example); sin él caen a los valores
     de desarrollo. El nombre BLE objetivo sigue siendo un parámetro por defecto
     de `DeviceDiscovery.__init__`.

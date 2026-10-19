@@ -345,9 +345,9 @@ class LocalWifiConfig:
         if env_ip and env_ssid and env_passwd:
             ssid, passwd, host_ip_addr = env_ssid, env_passwd, env_ip
         else:
-            # device = cls.active_wifi_device()
-            device = "wlan0"
-            # device = "wlan1"
+            # Fija y no detectada con active_wifi_device(): esa solo encuentra
+            # interfaces en modo cliente, y la Pi puede estar levantando un AP.
+            device = os.getenv("WIFI_DEVICE", "").strip() or "wlan0"
             conn_name = cls._active_connection_name(device)
             ssid = env_ssid or cls._active_wifi_ssid(device, conn_name)
             passwd = env_passwd or cls._active_wifi_psk(conn_name)
