@@ -48,3 +48,6 @@ ml/*_data.h
 # hex, o miles de ventanas crudas (testset_*.sql pesa ~20 MB).
 ml/*_v*.sql
 ml/testset_*.sql
+
+# Herramienta local: compila en el Mac y flashea las placas de la Raspberry.
+esp32/flash_remote.sh
