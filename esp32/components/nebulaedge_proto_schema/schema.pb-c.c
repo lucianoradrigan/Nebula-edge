@@ -97,6 +97,186 @@ void   config_ack__free_unpacked
   assert(message->base.descriptor == &config_ack__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
+void   model_manifest__init
+                     (ModelManifest         *message)
+{
+  static const ModelManifest init_value = MODEL_MANIFEST__INIT;
+  *message = init_value;
+}
+size_t model_manifest__get_packed_size
+                     (const ModelManifest *message)
+{
+  assert(message->base.descriptor == &model_manifest__descriptor);
+  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
+}
+size_t model_manifest__pack
+                     (const ModelManifest *message,
+                      uint8_t       *out)
+{
+  assert(message->base.descriptor == &model_manifest__descriptor);
+  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
+}
+size_t model_manifest__pack_to_buffer
+                     (const ModelManifest *message,
+                      ProtobufCBuffer *buffer)
+{
+  assert(message->base.descriptor == &model_manifest__descriptor);
+  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
+}
+ModelManifest *
+       model_manifest__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data)
+{
+  return (ModelManifest *)
+     protobuf_c_message_unpack (&model_manifest__descriptor,
+                                allocator, len, data);
+}
+void   model_manifest__free_unpacked
+                     (ModelManifest *message,
+                      ProtobufCAllocator *allocator)
+{
+  if(!message)
+    return;
+  assert(message->base.descriptor == &model_manifest__descriptor);
+  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+}
+void   model_chunk_request__init
+                     (ModelChunkRequest         *message)
+{
+  static const ModelChunkRequest init_value = MODEL_CHUNK_REQUEST__INIT;
+  *message = init_value;
+}
+size_t model_chunk_request__get_packed_size
+                     (const ModelChunkRequest *message)
+{
+  assert(message->base.descriptor == &model_chunk_request__descriptor);
+  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
+}
+size_t model_chunk_request__pack
+                     (const ModelChunkRequest *message,
+                      uint8_t       *out)
+{
+  assert(message->base.descriptor == &model_chunk_request__descriptor);
+  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
+}
+size_t model_chunk_request__pack_to_buffer
+                     (const ModelChunkRequest *message,
+                      ProtobufCBuffer *buffer)
+{
+  assert(message->base.descriptor == &model_chunk_request__descriptor);
+  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
+}
+ModelChunkRequest *
+       model_chunk_request__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data)
+{
+  return (ModelChunkRequest *)
+     protobuf_c_message_unpack (&model_chunk_request__descriptor,
+                                allocator, len, data);
+}
+void   model_chunk_request__free_unpacked
+                     (ModelChunkRequest *message,
+                      ProtobufCAllocator *allocator)
+{
+  if(!message)
+    return;
+  assert(message->base.descriptor == &model_chunk_request__descriptor);
+  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+}
+void   model_chunk__init
+                     (ModelChunk         *message)
+{
+  static const ModelChunk init_value = MODEL_CHUNK__INIT;
+  *message = init_value;
+}
+size_t model_chunk__get_packed_size
+                     (const ModelChunk *message)
+{
+  assert(message->base.descriptor == &model_chunk__descriptor);
+  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
+}
+size_t model_chunk__pack
+                     (const ModelChunk *message,
+                      uint8_t       *out)
+{
+  assert(message->base.descriptor == &model_chunk__descriptor);
+  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
+}
+size_t model_chunk__pack_to_buffer
+                     (const ModelChunk *message,
+                      ProtobufCBuffer *buffer)
+{
+  assert(message->base.descriptor == &model_chunk__descriptor);
+  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
+}
+ModelChunk *
+       model_chunk__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data)
+{
+  return (ModelChunk *)
+     protobuf_c_message_unpack (&model_chunk__descriptor,
+                                allocator, len, data);
+}
+void   model_chunk__free_unpacked
+                     (ModelChunk *message,
+                      ProtobufCAllocator *allocator)
+{
+  if(!message)
+    return;
+  assert(message->base.descriptor == &model_chunk__descriptor);
+  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+}
+void   model_status__init
+                     (ModelStatus         *message)
+{
+  static const ModelStatus init_value = MODEL_STATUS__INIT;
+  *message = init_value;
+}
+size_t model_status__get_packed_size
+                     (const ModelStatus *message)
+{
+  assert(message->base.descriptor == &model_status__descriptor);
+  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
+}
+size_t model_status__pack
+                     (const ModelStatus *message,
+                      uint8_t       *out)
+{
+  assert(message->base.descriptor == &model_status__descriptor);
+  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
+}
+size_t model_status__pack_to_buffer
+                     (const ModelStatus *message,
+                      ProtobufCBuffer *buffer)
+{
+  assert(message->base.descriptor == &model_status__descriptor);
+  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
+}
+ModelStatus *
+       model_status__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data)
+{
+  return (ModelStatus *)
+     protobuf_c_message_unpack (&model_status__descriptor,
+                                allocator, len, data);
+}
+void   model_status__free_unpacked
+                     (ModelStatus *message,
+                      ProtobufCAllocator *allocator)
+{
+  if(!message)
+    return;
+  assert(message->base.descriptor == &model_status__descriptor);
+  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+}
 void   data_1__init
                      (Data1         *message)
 {
@@ -187,7 +367,97 @@ void   data_2__free_unpacked
   assert(message->base.descriptor == &data_2__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor config__field_descriptors[16] =
+void   infer_request__init
+                     (InferRequest         *message)
+{
+  static const InferRequest init_value = INFER_REQUEST__INIT;
+  *message = init_value;
+}
+size_t infer_request__get_packed_size
+                     (const InferRequest *message)
+{
+  assert(message->base.descriptor == &infer_request__descriptor);
+  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
+}
+size_t infer_request__pack
+                     (const InferRequest *message,
+                      uint8_t       *out)
+{
+  assert(message->base.descriptor == &infer_request__descriptor);
+  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
+}
+size_t infer_request__pack_to_buffer
+                     (const InferRequest *message,
+                      ProtobufCBuffer *buffer)
+{
+  assert(message->base.descriptor == &infer_request__descriptor);
+  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
+}
+InferRequest *
+       infer_request__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data)
+{
+  return (InferRequest *)
+     protobuf_c_message_unpack (&infer_request__descriptor,
+                                allocator, len, data);
+}
+void   infer_request__free_unpacked
+                     (InferRequest *message,
+                      ProtobufCAllocator *allocator)
+{
+  if(!message)
+    return;
+  assert(message->base.descriptor == &infer_request__descriptor);
+  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+}
+void   infer_result__init
+                     (InferResult         *message)
+{
+  static const InferResult init_value = INFER_RESULT__INIT;
+  *message = init_value;
+}
+size_t infer_result__get_packed_size
+                     (const InferResult *message)
+{
+  assert(message->base.descriptor == &infer_result__descriptor);
+  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
+}
+size_t infer_result__pack
+                     (const InferResult *message,
+                      uint8_t       *out)
+{
+  assert(message->base.descriptor == &infer_result__descriptor);
+  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
+}
+size_t infer_result__pack_to_buffer
+                     (const InferResult *message,
+                      ProtobufCBuffer *buffer)
+{
+  assert(message->base.descriptor == &infer_result__descriptor);
+  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
+}
+InferResult *
+       infer_result__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data)
+{
+  return (InferResult *)
+     protobuf_c_message_unpack (&infer_result__descriptor,
+                                allocator, len, data);
+}
+void   infer_result__free_unpacked
+                     (InferResult *message,
+                      ProtobufCAllocator *allocator)
+{
+  if(!message)
+    return;
+  assert(message->base.descriptor == &infer_result__descriptor);
+  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+}
+static const ProtobufCFieldDescriptor config__field_descriptors[18] =
 {
   {
     "id_device",
@@ -381,6 +651,30 @@ static const ProtobufCFieldDescriptor config__field_descriptors[16] =
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "model_version",
+    18,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(Config, model_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "infer_source",
+    19,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(Config, infer_source),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned config__field_indices_by_name[] = {
   3,   /* field[3] = acc_sampling */
@@ -389,6 +683,8 @@ static const unsigned config__field_indices_by_name[] = {
   4,   /* field[4] = gyro_sensibility */
   11,   /* field[11] = host_ip_addr */
   0,   /* field[0] = id_device */
+  17,   /* field[17] = infer_source */
+  16,   /* field[16] = model_version */
   14,   /* field[14] = mqtt_broker */
   13,   /* field[13] = passwd */
   2,   /* field[2] = protocol_conf */
@@ -400,10 +696,11 @@ static const unsigned config__field_indices_by_name[] = {
   15,   /* field[15] = time_client */
   10,   /* field[10] = udp_port */
 };
-static const ProtobufCIntRange config__number_ranges[1 + 1] =
+static const ProtobufCIntRange config__number_ranges[2 + 1] =
 {
   { 1, 0 },
-  { 0, 16 }
+  { 18, 16 },
+  { 0, 18 }
 };
 const ProtobufCMessageDescriptor config__descriptor =
 {
@@ -413,14 +710,14 @@ const ProtobufCMessageDescriptor config__descriptor =
   "Config",
   "",
   sizeof(Config),
-  16,
+  18,
   config__field_descriptors,
   config__field_indices_by_name,
-  1,  config__number_ranges,
+  2,  config__number_ranges,
   (ProtobufCMessageInit) config__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor config_ack__field_descriptors[4] =
+static const ProtobufCFieldDescriptor config_ack__field_descriptors[5] =
 {
   {
     "id_device",
@@ -470,17 +767,30 @@ static const ProtobufCFieldDescriptor config_ack__field_descriptors[4] =
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "model_version_active",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(ConfigAck, model_version_active),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned config_ack__field_indices_by_name[] = {
   2,   /* field[2] = applied */
   1,   /* field[1] = config_version */
   0,   /* field[0] = id_device */
+  4,   /* field[4] = model_version_active */
   3,   /* field[3] = time_client */
 };
 static const ProtobufCIntRange config_ack__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 4 }
+  { 0, 5 }
 };
 const ProtobufCMessageDescriptor config_ack__descriptor =
 {
@@ -490,11 +800,566 @@ const ProtobufCMessageDescriptor config_ack__descriptor =
   "ConfigAck",
   "",
   sizeof(ConfigAck),
-  4,
+  5,
   config_ack__field_descriptors,
   config_ack__field_indices_by_name,
   1,  config_ack__number_ranges,
   (ProtobufCMessageInit) config_ack__init,
+  NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCFieldDescriptor model_manifest__field_descriptors[17] =
+{
+  {
+    "id_device",
+    1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, id_device),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "model_version",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, model_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "size_bytes",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, size_bytes),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "chunk_size",
+    4,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, chunk_size),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "n_chunks",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, n_chunks),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "sha256",
+    6,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_BYTES,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, sha256),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "n_features",
+    7,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, n_features),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "n_classes",
+    8,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, n_classes),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "window_size",
+    9,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, window_size),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "fs_hz",
+    10,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FLOAT,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, fs_hz),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "feature_set_version",
+    11,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, feature_set_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "output_severity_index",
+    12,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, output_severity_index),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "output_fault_index",
+    13,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelManifest, output_fault_index),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "feat_mean",
+    14,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_FLOAT,
+    offsetof(ModelManifest, n_feat_mean),
+    offsetof(ModelManifest, feat_mean),
+    NULL,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "feat_std",
+    15,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_FLOAT,
+    offsetof(ModelManifest, n_feat_std),
+    offsetof(ModelManifest, feat_std),
+    NULL,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "test_input",
+    16,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_FLOAT,
+    offsetof(ModelManifest, n_test_input),
+    offsetof(ModelManifest, test_input),
+    NULL,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "test_output",
+    17,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_FLOAT,
+    offsetof(ModelManifest, n_test_output),
+    offsetof(ModelManifest, test_output),
+    NULL,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+};
+static const unsigned model_manifest__field_indices_by_name[] = {
+  3,   /* field[3] = chunk_size */
+  13,   /* field[13] = feat_mean */
+  14,   /* field[14] = feat_std */
+  10,   /* field[10] = feature_set_version */
+  9,   /* field[9] = fs_hz */
+  0,   /* field[0] = id_device */
+  1,   /* field[1] = model_version */
+  4,   /* field[4] = n_chunks */
+  7,   /* field[7] = n_classes */
+  6,   /* field[6] = n_features */
+  12,   /* field[12] = output_fault_index */
+  11,   /* field[11] = output_severity_index */
+  5,   /* field[5] = sha256 */
+  2,   /* field[2] = size_bytes */
+  15,   /* field[15] = test_input */
+  16,   /* field[16] = test_output */
+  8,   /* field[8] = window_size */
+};
+static const ProtobufCIntRange model_manifest__number_ranges[1 + 1] =
+{
+  { 1, 0 },
+  { 0, 17 }
+};
+const ProtobufCMessageDescriptor model_manifest__descriptor =
+{
+  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
+  "ModelManifest",
+  "ModelManifest",
+  "ModelManifest",
+  "",
+  sizeof(ModelManifest),
+  17,
+  model_manifest__field_descriptors,
+  model_manifest__field_indices_by_name,
+  1,  model_manifest__number_ranges,
+  (ProtobufCMessageInit) model_manifest__init,
+  NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCFieldDescriptor model_chunk_request__field_descriptors[3] =
+{
+  {
+    "id_device",
+    1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(ModelChunkRequest, id_device),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "model_version",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelChunkRequest, model_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "chunk_index",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelChunkRequest, chunk_index),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+};
+static const unsigned model_chunk_request__field_indices_by_name[] = {
+  2,   /* field[2] = chunk_index */
+  0,   /* field[0] = id_device */
+  1,   /* field[1] = model_version */
+};
+static const ProtobufCIntRange model_chunk_request__number_ranges[1 + 1] =
+{
+  { 1, 0 },
+  { 0, 3 }
+};
+const ProtobufCMessageDescriptor model_chunk_request__descriptor =
+{
+  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
+  "ModelChunkRequest",
+  "ModelChunkRequest",
+  "ModelChunkRequest",
+  "",
+  sizeof(ModelChunkRequest),
+  3,
+  model_chunk_request__field_descriptors,
+  model_chunk_request__field_indices_by_name,
+  1,  model_chunk_request__number_ranges,
+  (ProtobufCMessageInit) model_chunk_request__init,
+  NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCFieldDescriptor model_chunk__field_descriptors[4] =
+{
+  {
+    "model_version",
+    1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelChunk, model_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "chunk_index",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelChunk, chunk_index),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "offset",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelChunk, offset),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "data",
+    4,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_BYTES,
+    0,   /* quantifier_offset */
+    offsetof(ModelChunk, data),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+};
+static const unsigned model_chunk__field_indices_by_name[] = {
+  1,   /* field[1] = chunk_index */
+  3,   /* field[3] = data */
+  0,   /* field[0] = model_version */
+  2,   /* field[2] = offset */
+};
+static const ProtobufCIntRange model_chunk__number_ranges[1 + 1] =
+{
+  { 1, 0 },
+  { 0, 4 }
+};
+const ProtobufCMessageDescriptor model_chunk__descriptor =
+{
+  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
+  "ModelChunk",
+  "ModelChunk",
+  "ModelChunk",
+  "",
+  sizeof(ModelChunk),
+  4,
+  model_chunk__field_descriptors,
+  model_chunk__field_indices_by_name,
+  1,  model_chunk__number_ranges,
+  (ProtobufCMessageInit) model_chunk__init,
+  NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCFieldDescriptor model_status__field_descriptors[11] =
+{
+  {
+    "id_device",
+    1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, id_device),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "model_version",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, model_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "state",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_ENUM,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, state),
+    &model_state__descriptor,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "chunks_received",
+    4,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, chunks_received),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "error",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_ENUM,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, error),
+    &model_error__descriptor,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "config_version_applied",
+    6,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, config_version_applied),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "time_client",
+    7,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, time_client),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "model_version_active",
+    8,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, model_version_active),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "selftest_max_error",
+    9,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FLOAT,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, selftest_max_error),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "arena_used_bytes",
+    10,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, arena_used_bytes),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "invoke_us",
+    11,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(ModelStatus, invoke_us),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+};
+static const unsigned model_status__field_indices_by_name[] = {
+  9,   /* field[9] = arena_used_bytes */
+  3,   /* field[3] = chunks_received */
+  5,   /* field[5] = config_version_applied */
+  4,   /* field[4] = error */
+  0,   /* field[0] = id_device */
+  10,   /* field[10] = invoke_us */
+  1,   /* field[1] = model_version */
+  7,   /* field[7] = model_version_active */
+  8,   /* field[8] = selftest_max_error */
+  2,   /* field[2] = state */
+  6,   /* field[6] = time_client */
+};
+static const ProtobufCIntRange model_status__number_ranges[1 + 1] =
+{
+  { 1, 0 },
+  { 0, 11 }
+};
+const ProtobufCMessageDescriptor model_status__descriptor =
+{
+  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
+  "ModelStatus",
+  "ModelStatus",
+  "ModelStatus",
+  "",
+  sizeof(ModelStatus),
+  11,
+  model_status__field_descriptors,
+  model_status__field_indices_by_name,
+  1,  model_status__number_ranges,
+  (ProtobufCMessageInit) model_status__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
 static const ProtobufCFieldDescriptor data_1__field_descriptors[7] =
@@ -793,4 +1658,396 @@ const ProtobufCMessageDescriptor data_2__descriptor =
   1,  data_2__number_ranges,
   (ProtobufCMessageInit) data_2__init,
   NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCFieldDescriptor infer_request__field_descriptors[6] =
+{
+  {
+    "request_id",
+    1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(InferRequest, request_id),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "model_version",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(InferRequest, model_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "features",
+    3,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_FLOAT,
+    offsetof(InferRequest, n_features),
+    offsetof(InferRequest, features),
+    NULL,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "window",
+    4,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_FLOAT,
+    offsetof(InferRequest, n_window),
+    offsetof(InferRequest, window),
+    NULL,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "rpm",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FLOAT,
+    0,   /* quantifier_offset */
+    offsetof(InferRequest, rpm),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "fs_hz",
+    6,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FLOAT,
+    0,   /* quantifier_offset */
+    offsetof(InferRequest, fs_hz),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+};
+static const unsigned infer_request__field_indices_by_name[] = {
+  2,   /* field[2] = features */
+  5,   /* field[5] = fs_hz */
+  1,   /* field[1] = model_version */
+  0,   /* field[0] = request_id */
+  4,   /* field[4] = rpm */
+  3,   /* field[3] = window */
+};
+static const ProtobufCIntRange infer_request__number_ranges[1 + 1] =
+{
+  { 1, 0 },
+  { 0, 6 }
+};
+const ProtobufCMessageDescriptor infer_request__descriptor =
+{
+  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
+  "InferRequest",
+  "InferRequest",
+  "InferRequest",
+  "",
+  sizeof(InferRequest),
+  6,
+  infer_request__field_descriptors,
+  infer_request__field_indices_by_name,
+  1,  infer_request__number_ranges,
+  (ProtobufCMessageInit) infer_request__init,
+  NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCFieldDescriptor infer_result__field_descriptors[12] =
+{
+  {
+    "id_device",
+    1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_STRING,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, id_device),
+    NULL,
+    &protobuf_c_empty_string,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "request_id",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, request_id),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "model_version",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, model_version),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "status",
+    4,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_ENUM,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, status),
+    &infer_status__descriptor,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "severity",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FLOAT,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, severity),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "probs",
+    6,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_FLOAT,
+    offsetof(InferResult, n_probs),
+    offsetof(InferResult, probs),
+    NULL,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "pred_fault",
+    7,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, pred_fault),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "feature_us",
+    8,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, feature_us),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "inference_us",
+    9,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, inference_us),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "config_version_applied",
+    10,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT32,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, config_version_applied),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "time_client",
+    11,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, time_client),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "features",
+    12,
+    PROTOBUF_C_LABEL_REPEATED,
+    PROTOBUF_C_TYPE_FLOAT,
+    offsetof(InferResult, n_features),
+    offsetof(InferResult, features),
+    NULL,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+};
+static const unsigned infer_result__field_indices_by_name[] = {
+  9,   /* field[9] = config_version_applied */
+  7,   /* field[7] = feature_us */
+  11,   /* field[11] = features */
+  0,   /* field[0] = id_device */
+  8,   /* field[8] = inference_us */
+  2,   /* field[2] = model_version */
+  6,   /* field[6] = pred_fault */
+  5,   /* field[5] = probs */
+  1,   /* field[1] = request_id */
+  4,   /* field[4] = severity */
+  3,   /* field[3] = status */
+  10,   /* field[10] = time_client */
+};
+static const ProtobufCIntRange infer_result__number_ranges[1 + 1] =
+{
+  { 1, 0 },
+  { 0, 12 }
+};
+const ProtobufCMessageDescriptor infer_result__descriptor =
+{
+  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
+  "InferResult",
+  "InferResult",
+  "InferResult",
+  "",
+  sizeof(InferResult),
+  12,
+  infer_result__field_descriptors,
+  infer_result__field_indices_by_name,
+  1,  infer_result__number_ranges,
+  (ProtobufCMessageInit) infer_result__init,
+  NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCEnumValue model_state__enum_values_by_number[5] =
+{
+  { "MODEL_STATE_NONE", "MODEL_STATE__MODEL_STATE_NONE", 0 },
+  { "MODEL_STATE_RECEIVING", "MODEL_STATE__MODEL_STATE_RECEIVING", 1 },
+  { "MODEL_STATE_VERIFYING", "MODEL_STATE__MODEL_STATE_VERIFYING", 2 },
+  { "MODEL_STATE_READY", "MODEL_STATE__MODEL_STATE_READY", 3 },
+  { "MODEL_STATE_FAILED", "MODEL_STATE__MODEL_STATE_FAILED", 4 },
+};
+static const ProtobufCIntRange model_state__value_ranges[] = {
+{0, 0},{0, 5}
+};
+static const ProtobufCEnumValueIndex model_state__enum_values_by_name[5] =
+{
+  { "MODEL_STATE_FAILED", 4 },
+  { "MODEL_STATE_NONE", 0 },
+  { "MODEL_STATE_READY", 3 },
+  { "MODEL_STATE_RECEIVING", 1 },
+  { "MODEL_STATE_VERIFYING", 2 },
+};
+const ProtobufCEnumDescriptor model_state__descriptor =
+{
+  PROTOBUF_C__ENUM_DESCRIPTOR_MAGIC,
+  "ModelState",
+  "ModelState",
+  "ModelState",
+  "",
+  5,
+  model_state__enum_values_by_number,
+  5,
+  model_state__enum_values_by_name,
+  1,
+  model_state__value_ranges,
+  NULL,NULL,NULL,NULL   /* reserved[1234] */
+};
+static const ProtobufCEnumValue model_error__enum_values_by_number[8] =
+{
+  { "MODEL_ERROR_NONE", "MODEL_ERROR__MODEL_ERROR_NONE", 0 },
+  { "MODEL_ERROR_TOO_BIG", "MODEL_ERROR__MODEL_ERROR_TOO_BIG", 1 },
+  { "MODEL_ERROR_INCOMPATIBLE", "MODEL_ERROR__MODEL_ERROR_INCOMPATIBLE", 2 },
+  { "MODEL_ERROR_FLASH", "MODEL_ERROR__MODEL_ERROR_FLASH", 3 },
+  { "MODEL_ERROR_HASH", "MODEL_ERROR__MODEL_ERROR_HASH", 4 },
+  { "MODEL_ERROR_LOAD", "MODEL_ERROR__MODEL_ERROR_LOAD", 5 },
+  { "MODEL_ERROR_ARENA", "MODEL_ERROR__MODEL_ERROR_ARENA", 6 },
+  { "MODEL_ERROR_SELFTEST", "MODEL_ERROR__MODEL_ERROR_SELFTEST", 7 },
+};
+static const ProtobufCIntRange model_error__value_ranges[] = {
+{0, 0},{0, 8}
+};
+static const ProtobufCEnumValueIndex model_error__enum_values_by_name[8] =
+{
+  { "MODEL_ERROR_ARENA", 6 },
+  { "MODEL_ERROR_FLASH", 3 },
+  { "MODEL_ERROR_HASH", 4 },
+  { "MODEL_ERROR_INCOMPATIBLE", 2 },
+  { "MODEL_ERROR_LOAD", 5 },
+  { "MODEL_ERROR_NONE", 0 },
+  { "MODEL_ERROR_SELFTEST", 7 },
+  { "MODEL_ERROR_TOO_BIG", 1 },
+};
+const ProtobufCEnumDescriptor model_error__descriptor =
+{
+  PROTOBUF_C__ENUM_DESCRIPTOR_MAGIC,
+  "ModelError",
+  "ModelError",
+  "ModelError",
+  "",
+  8,
+  model_error__enum_values_by_number,
+  8,
+  model_error__enum_values_by_name,
+  1,
+  model_error__value_ranges,
+  NULL,NULL,NULL,NULL   /* reserved[1234] */
+};
+static const ProtobufCEnumValue infer_status__enum_values_by_number[5] =
+{
+  { "INFER_STATUS_OK", "INFER_STATUS__INFER_STATUS_OK", 0 },
+  { "INFER_STATUS_NO_MODEL", "INFER_STATUS__INFER_STATUS_NO_MODEL", 1 },
+  { "INFER_STATUS_WRONG_MODEL", "INFER_STATUS__INFER_STATUS_WRONG_MODEL", 2 },
+  { "INFER_STATUS_BAD_INPUT", "INFER_STATUS__INFER_STATUS_BAD_INPUT", 3 },
+  { "INFER_STATUS_FAILED", "INFER_STATUS__INFER_STATUS_FAILED", 4 },
+};
+static const ProtobufCIntRange infer_status__value_ranges[] = {
+{0, 0},{0, 5}
+};
+static const ProtobufCEnumValueIndex infer_status__enum_values_by_name[5] =
+{
+  { "INFER_STATUS_BAD_INPUT", 3 },
+  { "INFER_STATUS_FAILED", 4 },
+  { "INFER_STATUS_NO_MODEL", 1 },
+  { "INFER_STATUS_OK", 0 },
+  { "INFER_STATUS_WRONG_MODEL", 2 },
+};
+const ProtobufCEnumDescriptor infer_status__descriptor =
+{
+  PROTOBUF_C__ENUM_DESCRIPTOR_MAGIC,
+  "InferStatus",
+  "InferStatus",
+  "InferStatus",
+  "",
+  5,
+  infer_status__enum_values_by_number,
+  5,
+  infer_status__enum_values_by_name,
+  1,
+  infer_status__value_ranges,
+  NULL,NULL,NULL,NULL   /* reserved[1234] */
 };

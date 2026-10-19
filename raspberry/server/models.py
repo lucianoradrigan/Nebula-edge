@@ -12,6 +12,9 @@ UTILIDAD PRINCIPAL
         Data_2        acelerómetro, giroscopio y magnetómetro (ritmo rápido)
         ConfigAckData   confirmación del device de que aplicó una versión
         Log             evento de operación (conexión, heartbeat, desconexión)
+        ModelInfo       un modelo del catálogo, para transferirlo en INFER
+        ModelChunkRequestData / ModelStatusData
+                        lo que el device manda en INFER
 
 POR QUÉ DOS MENSAJES DE TELEMETRÍA Y NO UNO
     Porque los dos grupos de sensores tienen ritmos naturales distintos. La
@@ -33,6 +36,7 @@ AJUSTAR LOS TIEMPOS
 """
 from __future__ import annotations
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Any
 
 
@@ -147,6 +151,11 @@ class ConfigData:
     passwd: str
     mqtt_broker: str
     time_client: int
+    # Solo en INFER. Con valor por defecto para que los otros cuatro
+    # protocolos -y los tests que arman ConfigData a mano- no tengan que saber
+    # que existen.
+    model_version: int = 0      # 0 = ninguno
+    infer_source: int = 0       # 0 = features del dataset (C1), 1 = ventanas del dataset (C2), 2 = sensores
 
 @dataclass
 class ConfigAckData:
@@ -155,6 +164,98 @@ class ConfigAckData:
     config_version: int
     applied: bool
     time_client: int
+    model_version_active: int = 0
+
+class ModelState(IntEnum):
+    """Espejo del enum ModelState de schema.proto. Mismos números."""
+    NONE = 0
+    RECEIVING = 1
+    VERIFYING = 2
+    READY = 3
+    FAILED = 4
+
+@dataclass
+class ModelInfo:
+    """Un modelo del catálogo (tabla `model`), listo para transferir."""
+    model_version: int
+    tflite: bytes
+    sha256: bytes                   # 32 bytes crudos, no el hex de la tabla
+    n_features: int
+    n_classes: int
+    window_size: int
+    fs_hz: float
+    feature_set_version: int
+    output_severity_index: int
+    output_fault_index: int
+    feat_mean: list[float]
+    feat_std: list[float]
+    test_input: list[float]
+    test_output: list[float]
+
+@dataclass
+class ModelChunkRequestData:
+    """El device pide un trozo del modelo (protobuf ModelChunkRequest)."""
+    id_device: str
+    model_version: int
+    chunk_index: int
+
+@dataclass
+class ModelStatusData:
+    """Estado del device en INFER (protobuf ModelStatus).
+
+    Hace en INFER el papel que la telemetría hace en los otros protocolos:
+    prueba de vida y portador de `config_version_applied` y `time_client`.
+    """
+    id_device: str
+    model_version: int
+    state: int
+    chunks_received: int
+    error: int
+    config_version_applied: int
+    time_client: int
+    model_version_active: int = 0
+    # Del modelo cargado en TFLM (fase B); 0 mientras no haya uno.
+    selftest_max_error: float = 0.0
+    arena_used_bytes: int = 0
+    invoke_us: int = 0
+
+class InferStatus(IntEnum):
+    """Espejo del enum InferStatus de schema.proto."""
+    OK = 0
+    NO_MODEL = 1
+    WRONG_MODEL = 2
+    BAD_INPUT = 3
+    FAILED = 4
+
+@dataclass
+class InferSample:
+    """Una ventana del set de test (tabla infer_sample), con su verdad."""
+    dataset: str
+    sample_index: int
+    source_file: str
+    window_index: int
+    true_fault: int
+    true_severity: float
+    rpm: float
+    fs_hz: float
+    features: list[float]           # sin estandarizar (C1)
+    window: list[float]             # muestras crudas (C2)
+
+@dataclass
+class InferResultData:
+    """Lo que el device respondió a un InferRequest (protobuf InferResult)."""
+    id_device: str
+    request_id: int
+    model_version: int
+    status: int
+    severity: float
+    probs: list[float]
+    pred_fault: int
+    feature_us: int
+    inference_us: int
+    config_version_applied: int
+    time_client: int
+    features: list[float]           # C2: las que calculó el device; vacía en C1
 
 @dataclass
 class Log:

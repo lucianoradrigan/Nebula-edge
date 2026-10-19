@@ -16,6 +16,9 @@ PAQUETES TIPADOS
         0x01  Data_1  BME688: temperatura, presión, humedad, gas
         0x02  Data_2       BMI270 + BMM350: acelerómetro, giroscopio, magnetómetro
         0x04  deep sleep     aviso de que el device se va a dormir
+        0x05  ModelStatus        INFER: estado del modelo y prueba de vida
+        0x06  ModelChunkRequest  INFER: el device pide un trozo del modelo
+        0x07  InferResult        INFER: la respuesta a un pedido de inferencia
 
     Este byte es lo ÚNICO del framing que es igual en los cuatro protocolos:
     dónde empieza y termina cada mensaje lo resuelve cada Transport a su manera
@@ -34,7 +37,11 @@ SINCRONIZACIÓN CON EL FIRMWARE
 from __future__ import annotations
 import schema_pb2
 
-from models import Data_1, Data_2, ConfigData, ConfigAckData
+from models import (
+    Data_1, Data_2, ConfigData, ConfigAckData,
+    ModelInfo, ModelChunkRequestData, ModelStatusData,
+    InferSample, InferResultData,
+)
 from system import log
 
 
@@ -46,11 +53,16 @@ class DataCodec:
     TYPE_DATA_2 = 0x02
     # TYPE_ACK = 0x03 sería bueno implementarlo
     TYPE_DEEP_SLEEP = 0x04
+    # Los dos que manda el device en INFER (ver schema.proto).
+    TYPE_MODEL_STATUS = 0x05
+    TYPE_MODEL_CHUNK_REQUEST = 0x06
+    TYPE_INFER_RESULT = 0x07
 
-    # Los tres tipos que llevan byte de prefijo, para poder descartar de una
-    # que un paquete sea un ACK sin intentar decodificarlo (ver
-    # is_typed_packet).
-    TYPED_PREFIXES = frozenset({TYPE_DATA_1, TYPE_DATA_2, TYPE_DEEP_SLEEP})
+    # Los tipos que llevan byte de prefijo, para poder descartar de una que un
+    # paquete sea un ACK sin intentar decodificarlo (ver is_typed_packet).
+    TYPED_PREFIXES = frozenset({TYPE_DATA_1, TYPE_DATA_2, TYPE_DEEP_SLEEP,
+                                TYPE_MODEL_STATUS, TYPE_MODEL_CHUNK_REQUEST,
+                                TYPE_INFER_RESULT})
 
     @staticmethod
     def is_typed_packet(packet: bytes) -> bool:
@@ -81,6 +93,12 @@ class DataCodec:
             return DataCodec.deserialize_data_2(payload), DataCodec.TYPE_DATA_2
         if pkt_type == DataCodec.TYPE_DEEP_SLEEP:
             return payload, DataCodec.TYPE_DEEP_SLEEP
+        if pkt_type == DataCodec.TYPE_MODEL_STATUS:
+            return DataCodec.deserialize_model_status(payload), DataCodec.TYPE_MODEL_STATUS
+        if pkt_type == DataCodec.TYPE_MODEL_CHUNK_REQUEST:
+            return DataCodec.deserialize_model_chunk_request(payload), DataCodec.TYPE_MODEL_CHUNK_REQUEST
+        if pkt_type == DataCodec.TYPE_INFER_RESULT:
+            return DataCodec.deserialize_infer_result(payload), DataCodec.TYPE_INFER_RESULT
         return None, -1
 
     @staticmethod
@@ -180,6 +198,8 @@ class DataCodec:
         pb.passwd = config.passwd
         pb.mqtt_broker = config.mqtt_broker
         pb.time_client = config.time_client
+        pb.model_version = config.model_version
+        pb.infer_source = config.infer_source
         return pb.SerializeToString()
 
     @staticmethod
@@ -208,7 +228,9 @@ class DataCodec:
             ssid=pb.ssid,
             passwd=pb.passwd,
             mqtt_broker=pb.mqtt_broker,
-            time_client=pb.time_client
+            time_client=pb.time_client,
+            model_version=pb.model_version,
+            infer_source=pb.infer_source,
         )
 
     @staticmethod
@@ -219,6 +241,7 @@ class DataCodec:
         pb.config_version = ack.config_version
         pb.applied = ack.applied
         pb.time_client = ack.time_client
+        pb.model_version_active = ack.model_version_active
         return pb.SerializeToString()
 
     @staticmethod
@@ -236,4 +259,196 @@ class DataCodec:
             config_version=pb.config_version,
             applied=pb.applied,
             time_client=pb.time_client,
+            model_version_active=pb.model_version_active,
         )
+
+    # ------------------------------------------------------------- INFER
+
+    @staticmethod
+    def model_n_chunks(model: ModelInfo, chunk_size: int) -> int:
+        return (len(model.tflite) + chunk_size - 1) // chunk_size
+
+    @staticmethod
+    def serialize_model_manifest(device_id: str, model: ModelInfo | None, chunk_size: int) -> bytes:
+        """Manifiesto del modelo que le toca al device.
+
+        Con `model` None sale un manifiesto con model_version 0: "no hay nada
+        que bajar". Se publica igual, y no se omite, porque va retenido: si no
+        se reemplazara, el device seguiría viendo el de un modelo anterior.
+        """
+        pb = schema_pb2.ModelManifest()
+        pb.id_device = device_id
+        if model is None:
+            return pb.SerializeToString()
+
+        pb.model_version = model.model_version
+        pb.size_bytes = len(model.tflite)
+        pb.chunk_size = chunk_size
+        pb.n_chunks = DataCodec.model_n_chunks(model, chunk_size)
+        pb.sha256 = model.sha256
+        pb.n_features = model.n_features
+        pb.n_classes = model.n_classes
+        pb.window_size = model.window_size
+        pb.fs_hz = model.fs_hz
+        pb.feature_set_version = model.feature_set_version
+        pb.output_severity_index = model.output_severity_index
+        pb.output_fault_index = model.output_fault_index
+        pb.feat_mean.extend(model.feat_mean)
+        pb.feat_std.extend(model.feat_std)
+        pb.test_input.extend(model.test_input)
+        pb.test_output.extend(model.test_output)
+        return pb.SerializeToString()
+
+    @staticmethod
+    def serialize_model_chunk(model: ModelInfo, chunk_index: int, chunk_size: int) -> bytes:
+        """Trozo `chunk_index` del .tflite. El caller valida que exista."""
+        offset = chunk_index * chunk_size
+        pb = schema_pb2.ModelChunk()
+        pb.model_version = model.model_version
+        pb.chunk_index = chunk_index
+        pb.offset = offset
+        pb.data = model.tflite[offset:offset + chunk_size]
+        return pb.SerializeToString()
+
+    @staticmethod
+    def deserialize_model_chunk_request(packet: bytes) -> ModelChunkRequestData | None:
+        try:
+            pb = schema_pb2.ModelChunkRequest()
+            pb.ParseFromString(packet)
+        except Exception as e:
+            log(f"Error al desempaquetar el pedido de trozo: {e}")
+            return None
+        return ModelChunkRequestData(
+            id_device=pb.id_device,
+            model_version=pb.model_version,
+            chunk_index=pb.chunk_index,
+        )
+
+    @staticmethod
+    def deserialize_model_status(packet: bytes) -> ModelStatusData | None:
+        try:
+            pb = schema_pb2.ModelStatus()
+            pb.ParseFromString(packet)
+        except Exception as e:
+            log(f"Error al desempaquetar el ModelStatus: {e}")
+            return None
+        return ModelStatusData(
+            id_device=pb.id_device,
+            model_version=pb.model_version,
+            state=pb.state,
+            chunks_received=pb.chunks_received,
+            error=pb.error,
+            config_version_applied=pb.config_version_applied,
+            time_client=pb.time_client,
+            model_version_active=pb.model_version_active,
+            selftest_max_error=pb.selftest_max_error,
+            arena_used_bytes=pb.arena_used_bytes,
+            invoke_us=pb.invoke_us,
+        )
+
+    # Los dos que siguen arman lo que manda el DEVICE. El servidor no los
+    # usa: existen para que los tests construyan esos paquetes con el codec
+    # real, igual que con serialize_data_1().
+
+    @staticmethod
+    def serialize_model_chunk_request(req: ModelChunkRequestData) -> bytes:
+        pb = schema_pb2.ModelChunkRequest()
+        pb.id_device = req.id_device
+        pb.model_version = req.model_version
+        pb.chunk_index = req.chunk_index
+        return pb.SerializeToString()
+
+    @staticmethod
+    def serialize_model_status(st: ModelStatusData) -> bytes:
+        pb = schema_pb2.ModelStatus()
+        pb.id_device = st.id_device
+        pb.model_version = st.model_version
+        pb.state = st.state
+        pb.chunks_received = st.chunks_received
+        pb.error = st.error
+        pb.config_version_applied = st.config_version_applied
+        pb.time_client = st.time_client
+        pb.model_version_active = st.model_version_active
+        pb.selftest_max_error = st.selftest_max_error
+        pb.arena_used_bytes = st.arena_used_bytes
+        pb.invoke_us = st.invoke_us
+        return pb.SerializeToString()
+
+    @staticmethod
+    def serialize_infer_request(request_id: int, model_version: int, sample: InferSample,
+                                raw_window: bool) -> bytes:
+        """Pedido de inferencia: features (C1) o la ventana cruda (C2), nunca
+        las dos. Con la ventana van rpm y fs_hz, que el device necesita para
+        calcular las bandas de orden."""
+        pb = schema_pb2.InferRequest()
+        pb.request_id = request_id
+        pb.model_version = model_version
+        if raw_window:
+            pb.window.extend(sample.window)
+            pb.rpm = sample.rpm
+            pb.fs_hz = sample.fs_hz
+        else:
+            pb.features.extend(sample.features)
+        return pb.SerializeToString()
+
+    @staticmethod
+    def deserialize_infer_result(packet: bytes) -> InferResultData | None:
+        try:
+            pb = schema_pb2.InferResult()
+            pb.ParseFromString(packet)
+        except Exception as e:
+            log(f"Error al desempaquetar el InferResult: {e}")
+            return None
+        return InferResultData(
+            id_device=pb.id_device,
+            request_id=pb.request_id,
+            model_version=pb.model_version,
+            status=pb.status,
+            severity=pb.severity,
+            probs=list(pb.probs),
+            pred_fault=pb.pred_fault,
+            feature_us=pb.feature_us,
+            inference_us=pb.inference_us,
+            config_version_applied=pb.config_version_applied,
+            time_client=pb.time_client,
+            features=list(pb.features),
+        )
+
+    @staticmethod
+    def serialize_infer_result(r: InferResultData) -> bytes:
+        """Lo arma el DEVICE; existe para los tests."""
+        pb = schema_pb2.InferResult()
+        pb.id_device = r.id_device
+        pb.request_id = r.request_id
+        pb.model_version = r.model_version
+        pb.status = r.status
+        pb.severity = r.severity
+        pb.probs.extend(r.probs)
+        pb.pred_fault = r.pred_fault
+        pb.feature_us = r.feature_us
+        pb.inference_us = r.inference_us
+        pb.config_version_applied = r.config_version_applied
+        pb.time_client = r.time_client
+        pb.features.extend(r.features)
+        return pb.SerializeToString()
+
+    @staticmethod
+    def deserialize_infer_request(packet: bytes):
+        """Para los tests: devuelve el protobuf tal cual."""
+        pb = schema_pb2.InferRequest()
+        pb.ParseFromString(packet)
+        return pb
+
+    @staticmethod
+    def deserialize_model_manifest(packet: bytes):
+        """Para los tests: devuelve el protobuf tal cual."""
+        pb = schema_pb2.ModelManifest()
+        pb.ParseFromString(packet)
+        return pb
+
+    @staticmethod
+    def deserialize_model_chunk(packet: bytes):
+        """Para los tests: devuelve el protobuf tal cual."""
+        pb = schema_pb2.ModelChunk()
+        pb.ParseFromString(packet)
+        return pb

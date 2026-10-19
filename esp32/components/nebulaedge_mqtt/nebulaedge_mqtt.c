@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -18,7 +19,7 @@ static const char *TAG = "nebulaedge_mqtt";
  * MQTT_EVENT_CONNECTED). Son pocos y fijos -hoy uno solo, el de configuración
  * de este device-, así que una tabla chica alcanza y evita reservar memoria en
  * el camino de un evento. */
-#define MQTT_MAX_SUBS 4
+#define MQTT_MAX_SUBS 6     // config + manifest + chunk + infer/req en INFER, con margen
 #define MQTT_TOPIC_MAX 128
 
 static char s_sub_topics[MQTT_MAX_SUBS][MQTT_TOPIC_MAX];
@@ -50,8 +51,141 @@ void mqtt_set_config_queue(QueueHandle_t queue) {
     s_config_queue = queue;
 }
 
+/* Cola de lo que llega por /model/manifest y /model/chunk (INFER). */
+static QueueHandle_t s_model_queue = NULL;
+
+void mqtt_set_model_queue(QueueHandle_t queue) {
+    s_model_queue = queue;
+}
+
 /* Variable global para el cliente MQTT */
 static esp_mqtt_client_handle_t client = NULL;
+
+/* REARMADO DE MENSAJES PARTIDOS
+ *
+ * esp-mqtt entrega un mensaje más grande que su buffer (1 KB por defecto) en
+ * VARIOS MQTT_EVENT_DATA: el primero trae el tópico y current_data_offset 0,
+ * los siguientes solo trozos de datos, y total_data_len dice cuánto mide el
+ * mensaje entero. Antes cada evento se trataba como un mensaje completo. No se
+ * notaba porque una config pesa menos de 1 KB, pero un trozo de modelo (2 KB)
+ * llegaba cortado en dos mensajes inválidos.
+ *
+ * Los eventos de un mismo mensaje llegan seguidos y desde la única task del
+ * cliente, así que alcanza con un buffer en curso. */
+#define MQTT_RX_MAX_BYTES  (10 * 1024)   // un trozo de modelo, o una ventana cruda de 8 KB
+
+static uint8_t *s_rx_buf = NULL;
+static size_t   s_rx_total = 0;
+static size_t   s_rx_got = 0;
+static char     s_rx_topic[MQTT_TOPIC_MAX];
+
+static bool topic_ends_with(const char *topic, const char *suffix) {
+    size_t t = strlen(topic), s = strlen(suffix);
+    return t >= s && strcmp(topic + t - s, suffix) == 0;
+}
+
+/* Entrega un mensaje completo. Toma posesión de `buf`.
+ *
+ * `buf` trae UN BYTE LIBRE al principio y el mensaje desde buf[1]: ahí va el
+ * tipo de los mensajes de modelo sin tener que copiarlos. Una ventana cruda de
+ * la fase C2 mide 8 KB, y copiarla para anteponerle un byte pedía otros 8 KB
+ * contiguos justo cuando menos hay. */
+static void rx_dispatch(const char *topic, uint8_t *buf, size_t len) {
+    if (strncmp(topic, "/topic/nebulaedge/", 18) != 0) {
+        free(buf);
+        return;
+    }
+
+    if (topic_ends_with(topic, "/config")) {
+        ESP_LOGI(TAG, "MQTT config topic: %s", topic);
+        /* Se encolan los bytes crudos, sin desempaquetar. Este componente mueve
+         * bytes y no tiene por qué conocer el formato de cable; la aplicación,
+         * que sí lo conoce, hace el config__unpack en su recv_config. Es el
+         * mismo contrato que ya usaba BLE. */
+        if (s_config_queue == NULL) {
+            ESP_LOGW(TAG, "Sin cola de config (mqtt_set_config_queue no fue llamada), se descarta");
+            free(buf);
+            return;
+        }
+        // La config va sin el byte de tipo: se corre el mensaje un lugar.
+        memmove(buf, buf + 1, len);
+        packet_t pkt = { .size = len, .data = buf };
+        if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
+            ESP_LOGW(TAG, "Cola de config llena, configuración descartada");
+            free(buf);
+        }
+        return;
+    }
+
+    char kind = 0;
+    if (topic_ends_with(topic, "/model/manifest")) kind = MQTT_MODEL_MSG_MANIFEST;
+    else if (topic_ends_with(topic, "/model/chunk")) kind = MQTT_MODEL_MSG_CHUNK;
+    else if (topic_ends_with(topic, "/infer/req")) kind = MQTT_MODEL_MSG_INFER;
+
+    if (kind == 0 || s_model_queue == NULL) {
+        free(buf);
+        return;
+    }
+
+    /* El tipo va en el primer byte, como en los paquetes de telemetría: la
+     * cola es de packet_t y así no hace falta otra estructura. */
+    buf[0] = (uint8_t)kind;
+    packet_t pkt = { .size = len + 1, .data = buf };
+    if (xQueueSend(s_model_queue, &pkt, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "Cola de modelo llena, mensaje descartado");
+        free(pkt.data);
+    }
+}
+
+static void rx_fragment(esp_mqtt_event_handle_t event) {
+    if (event->current_data_offset == 0) {
+        // Empieza un mensaje nuevo. Uno anterior incompleto se descarta.
+        free(s_rx_buf);
+        s_rx_buf = NULL;
+        s_rx_got = 0;
+        s_rx_total = (size_t)event->total_data_len;
+
+        snprintf(s_rx_topic, sizeof s_rx_topic, "%.*s", event->topic_len, event->topic);
+
+        if (s_rx_total == 0) {
+            ESP_LOGW(TAG, "Mensaje vacío en %s, se descarta", s_rx_topic);
+            return;
+        }
+        if (s_rx_total > MQTT_RX_MAX_BYTES) {
+            ESP_LOGW(TAG, "Mensaje de %u B en %s supera el tope de %u B, se descarta",
+                     (unsigned)s_rx_total, s_rx_topic, (unsigned)MQTT_RX_MAX_BYTES);
+            s_rx_total = 0;
+            return;
+        }
+        s_rx_buf = malloc(s_rx_total + 1);    // +1: el byte libre de rx_dispatch()
+        if (s_rx_buf == NULL) {
+            ESP_LOGE(TAG, "Sin memoria para un mensaje de %u B", (unsigned)s_rx_total);
+            s_rx_total = 0;
+            return;
+        }
+    }
+
+    if (s_rx_buf == NULL) {
+        return;     // es parte de un mensaje que ya se decidió descartar
+    }
+
+    size_t off = (size_t)event->current_data_offset;
+    size_t len = (size_t)event->data_len;
+    if (off != s_rx_got || off + len > s_rx_total) {
+        ESP_LOGW(TAG, "Fragmento fuera de orden en %s, se descarta el mensaje", s_rx_topic);
+        free(s_rx_buf);
+        s_rx_buf = NULL;
+        return;
+    }
+    memcpy(s_rx_buf + 1 + off, event->data, len);
+    s_rx_got += len;
+
+    if (s_rx_got == s_rx_total) {
+        uint8_t *done = s_rx_buf;
+        s_rx_buf = NULL;
+        rx_dispatch(s_rx_topic, done, s_rx_total);
+    }
+}
 
 static void resubscribe_all(void) {
     for (int i = 0; i < s_sub_count; i++) {
@@ -149,47 +283,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         // current_data_offset and total_data_len from event data updated to keep track of 
         // the fragmented message.
         case MQTT_EVENT_DATA:
-
-            size_t topic_len = (size_t)event->topic_len;
-            const char *prefix = "/topic/nebulaedge/";
-            size_t prefix_len = strlen(prefix);
-            if (topic_len >= prefix_len &&
-                strncmp(event->topic, prefix, prefix_len) == 0) {
-                const char *suffix = "/config";
-                size_t suffix_len = strlen(suffix);
-                if (topic_len >= suffix_len &&
-                    strncmp(event->topic + (topic_len - suffix_len), suffix, suffix_len) == 0) {
-                    ESP_LOGI(TAG, "MQTT config topic: %.*s", (int)topic_len, event->topic);
-
-                    /* Se encolan los bytes crudos, sin desempaquetar. Este
-                     * componente mueve bytes y no tiene por qué conocer el
-                     * formato de cable; la aplicación, que sí lo conoce, hace
-                     * el config__unpack en su recv_config. Es el mismo
-                     * contrato que ya usaba BLE. */
-                    if (s_config_queue == NULL) {
-                        ESP_LOGW(TAG, "Sin cola de config (mqtt_set_config_queue no fue llamada), se descarta");
-                    }
-                    else if (event->data_len <= 0) {
-                        ESP_LOGW(TAG, "Config MQTT vacía, se descarta");
-                    }
-                    else {
-                        packet_t pkt = {
-                            .size = (size_t)event->data_len,
-                            .data = malloc((size_t)event->data_len),
-                        };
-                        if (pkt.data == NULL) {
-                            ESP_LOGE(TAG, "Sin memoria para la config MQTT entrante");
-                        }
-                        else {
-                            memcpy(pkt.data, event->data, (size_t)event->data_len);
-                            if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
-                                ESP_LOGW(TAG, "Cola de config llena, configuración descartada");
-                                free(pkt.data);
-                            }
-                        }
-                    }
-                }
-            }
+            rx_fragment(event);
             break;
 
         // The client has found an error. The field error_handle in the event data 
@@ -329,6 +423,9 @@ void mqtt_finish(void) {
          * config varias veces y respondia un ACK por cada una. No rompia nada
          * -una config repetida es idempotente- pero era ruido evitable. */
         s_sub_count = 0;
+        // Un mensaje a medio rearmar no le sirve al cliente que venga después.
+        free(s_rx_buf);
+        s_rx_buf = NULL;
         ESP_LOGI(TAG, "MQTT client cerrado correctamente.");
     }
 }

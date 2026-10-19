@@ -430,6 +430,39 @@ class MqttTransport(Transport):
         mqtt_publish(self._config_topic, data, retain=True)
 
 
+class InferTransport(MqttTransport):
+    """INFER: el mismo transporte MQTT, con dos canales de salida más.
+
+    Config, ACK y la cola de entrada son los de MqttTransport sin cambios: lo
+    que el device manda en INFER llega tipado por la cola de datos (ver
+    mqtt_client.py). Lo nuevo es solo lo que sale hacia el device.
+    """
+    name = "INFER"
+
+    def __init__(self, config: ConfigData, connect_timeout_sec: float):
+        super().__init__(config, connect_timeout_sec)
+        base = f"/topic/nebulaedge/{config.id_device}/model"
+        self._manifest_topic = f"{base}/manifest"
+        self._chunk_topic = f"{base}/chunk"
+        self._infer_topic = f"/topic/nebulaedge/{config.id_device}/infer/req"
+
+    async def send_infer_request(self, data: bytes) -> None:
+        # Sin retener, como los trozos: un pedido viejo entregado a un device
+        # que se reconecta sería una respuesta a destiempo.
+        mqtt_publish(self._infer_topic, data, qos=1)
+
+    async def send_manifest(self, data: bytes) -> None:
+        # Retenido por lo mismo que la config: un device que se suscribe tarde,
+        # o que se reconecta, lo recibe igual. QoS 1 porque perderlo deja al
+        # device sin saber qué bajar hasta el siguiente envío.
+        mqtt_publish(self._manifest_topic, data, retain=True, qos=1)
+
+    async def send_chunk(self, data: bytes) -> None:
+        # Sin retener: cada trozo es respuesta a un pedido puntual. Si se
+        # pierde, el device lo vuelve a pedir.
+        mqtt_publish(self._chunk_topic, data, qos=1)
+
+
 class BleTransport(Transport):
     """BLE: conexión GATT persistente con el device.
 

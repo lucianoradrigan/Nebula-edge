@@ -7,7 +7,7 @@ UTILIDAD PRINCIPAL
     permite cambiar de protocolo en caliente sin reiniciar el servidor ni el
     device.
 
-        protocol_conf:   0 MQTT    1 UDP    2 TCP    3 BLE
+        protocol_conf:   0 MQTT    1 UDP    2 TCP    3 BLE    4 INFER
 
 DAR DE ALTA UN PROTOCOLO NUEVO
     `session_classes` es, junto con escribir el `Transport` (transport.py) y su
@@ -30,7 +30,10 @@ from dataclasses import replace
 
 from models import BleContext, ConfigData, Timeouts
 from repository import DatabaseRepository
-from sessions import MQTTDeviceSession, UDPDeviceSession, TCPDeviceSession, BLEDeviceSession
+from sessions import (
+    MQTTDeviceSession, UDPDeviceSession, TCPDeviceSession, BLEDeviceSession,
+    InferDeviceSession,
+)
 from system import log
 
 # Valores de `protocol_conf` en la tabla config. Son parte del contrato con el
@@ -39,6 +42,10 @@ PROTOCOL_MQTT = 0
 PROTOCOL_UDP = 1
 PROTOCOL_TCP = 2
 PROTOCOL_BLE = 3
+# No es un transporte nuevo: es MQTT con otro uso (transferir un modelo e
+# inferir, sin telemetría). Va en la misma numeración para reusar el cambio de
+# protocolo en caliente tal cual.
+PROTOCOL_INFER = 4
 
 
 async def handle_protocol(
@@ -58,6 +65,7 @@ async def handle_protocol(
         PROTOCOL_UDP: UDPDeviceSession,
         PROTOCOL_TCP: TCPDeviceSession,
         PROTOCOL_BLE: BLEDeviceSession,
+        PROTOCOL_INFER: InferDeviceSession,
     }
 
     while True:

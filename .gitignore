@@ -11,6 +11,9 @@ esp32/sdkconfig
 esp32/sdkconfig.old
 esp32/components/**/build/
 esp32/components/**/log/
+# Los baja idf.py desde el registro de componentes (esp-tflite-micro, esp-nn).
+# La versión exacta queda fijada en esp32/dependencies.lock, que sí se versiona.
+esp32/managed_components/
 
 # Server
 # Credenciales reales de la base. La plantilla versionada es raspberry/.env.example

@@ -6,6 +6,9 @@ UTILIDAD PRINCIPAL
 
         /topic/nebulaedge/{id}/data         -> cola de datos de ese device
         /topic/nebulaedge/{id}/config/ack   -> cola de ACK de ese device
+        /topic/nebulaedge/{id}/model/status    \\
+        /topic/nebulaedge/{id}/model/chunk/req  -> cola de datos (INFER; van tipados)
+        /topic/nebulaedge/{id}/infer/result    /
 
     `MqttTransport` (transport.py) es el único consumidor: llama a
     `mqtt_start()` y después lee de las dos colas de su device.
@@ -141,9 +144,15 @@ def on_connect(client, userdata, flags, reason_code, properties):
         client.subscribe("/topic/nebulaedge/+/data")
         client.subscribe("/topic/nebulaedge/+/config")
         client.subscribe("/topic/nebulaedge/+/config/ack")
-        log("Suscrito a /topic/nebulaedge/+/data, /topic/nebulaedge/+/config y /topic/nebulaedge/+/config/ack")
+        # INFER. QoS 1 en la suscripción para que el broker entregue a QoS 1
+        # lo que el device publique a QoS 1: se entrega al MENOR de los dos.
+        client.subscribe("/topic/nebulaedge/+/model/status", qos=1)
+        client.subscribe("/topic/nebulaedge/+/model/chunk/req", qos=1)
+        client.subscribe("/topic/nebulaedge/+/infer/result", qos=1)
+        log("Suscrito a /topic/nebulaedge/+/data, /config, /config/ack, /model/status, "
+            "/model/chunk/req y /infer/result")
 
-def mqtt_publish(topic, data, retain: bool = False):
+def mqtt_publish(topic, data, retain: bool = False, qos: int = 0):
     """Publica un payload en el tópico especificado.
 
     `retain` existe para la configuración. Sin él hay una carrera que se pierde
@@ -159,7 +168,7 @@ def mqtt_publish(topic, data, retain: bool = False):
     cualquiera más vieja que la que tiene.
     """
     global mqttc
-    mqttc.publish(topic, data, retain=retain)
+    mqttc.publish(topic, data, qos=qos, retain=retain)
     log(f"Publish en {topic}{' (retenida)' if retain else ''}")
 
 
@@ -196,6 +205,13 @@ def mqtt_start():
         mqttc.on_connect = on_connect
         mqttc.message_callback_add("/topic/nebulaedge/+/data", on_message_data)
         mqttc.message_callback_add("/topic/nebulaedge/+/config/ack", on_message_ack)
+        # Lo que el device manda en INFER va a la MISMA cola que la telemetría:
+        # trae byte de tipo (0x05, 0x06), así que la sesión lo distingue igual
+        # que distingue Data_1 de Data_2. Tópicos propios igual, para poder
+        # mirarlos por separado con mosquitto_sub.
+        mqttc.message_callback_add("/topic/nebulaedge/+/model/status", on_message_data)
+        mqttc.message_callback_add("/topic/nebulaedge/+/model/chunk/req", on_message_data)
+        mqttc.message_callback_add("/topic/nebulaedge/+/infer/result", on_message_data)
         # Al broker propio (servicio `mqtt` de docker-compose), no a uno
         # ajeno: antes acá estaba broker.hivemq.com, un broker público de
         # terceros por el que pasaba toda la telemetría.

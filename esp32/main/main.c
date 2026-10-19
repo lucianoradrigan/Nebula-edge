@@ -31,12 +31,15 @@
 #include "bmi270.h"
 #include "nebulaedge_microsd.h"
 #include "nebulaedge_sdstorage.h"
+#include "nebulaedge_model_store.h"
+#include "infer.h"
 
 #include "schema.pb-c.h"
 
 QueueHandle_t xQueueConfig = NULL;
 QueueHandle_t xQueueData = NULL;
 QueueHandle_t xQueueConfigBle = NULL;
+QueueHandle_t xQueueModel = NULL;       // manifiesto y trozos del modelo (INFER)
 
 /* Semáforo de arranque: lo da la task que recibe la primera configuración y lo
  * toman las tasks de envío para no mandar nada antes de estar configuradas.
@@ -68,6 +71,9 @@ typedef enum {
     PROTOCOL_UDP  = 1,
     PROTOCOL_TCP  = 2,
     PROTOCOL_BLE  = 3,
+    /* No es un transporte nuevo: es MQTT con otro uso. Baja un modelo e infiere,
+     * sin telemetría. Ver infer.c. */
+    PROTOCOL_INFER = 4,
 
     PROTOCOL_COUNT   // cuántos hay; no es un protocolo
 } protocol_t;
@@ -99,6 +105,8 @@ TaskHandle_t response_task[PROTOCOL_COUNT] = {NULL};
 #define TAG_GET_RSP_BLE "task_get_rsp_ble"
 #define TAG_GET_RSP_TCP "task_get_rsp_tcp"
 #define TAG_GET_RSP_UDP "task_get_rsp_udp"
+#define TAG_SEND_INFER "task_send_infer"
+#define TAG_GET_RSP_INFER "task_get_rsp_infer"
 
 static uint32_t data_window_count = 0;
 
@@ -202,10 +210,15 @@ static void drain_and_free_data_queue(void) {
  * task ACTIVA ya se había detenido y cerraba el transporte por debajo de ella.
  * Con un bit propio cada una, el estado de una task suspendida no le miente a
  * nadie. */
-#define GATE_SEND_IDLE(id)  ((EventBits_t)1 << (4 + (id)))   // bits 4..7
-#define GATE_RSP_IDLE(id)   ((EventBits_t)1 << (8 + (id)))   // bits 8..11
-#define GATE_ALL_SEND_IDLE  ((EventBits_t)0x0F << 4)
-#define GATE_ALL_RSP_IDLE   ((EventBits_t)0x0F << 8)
+/* El ancho sale de PROTOCOL_COUNT y no de un 4 fijo: con el bloque de envío en
+ * los bits 4..7, el bit de envío de un quinto protocolo caía encima del de
+ * respuesta de MQTT. Un event group tiene 24 bits, así que entran hasta 10. */
+#define GATE_PROTO_MASK     (((EventBits_t)1 << PROTOCOL_COUNT) - 1)
+#define GATE_SEND_IDLE(id)  ((EventBits_t)1 << (4 + (id)))
+#define GATE_RSP_IDLE(id)   ((EventBits_t)1 << (4 + PROTOCOL_COUNT + (id)))
+#define GATE_ALL_SEND_IDLE  (GATE_PROTO_MASK << 4)
+#define GATE_ALL_RSP_IDLE   (GATE_PROTO_MASK << (4 + PROTOCOL_COUNT))
+_Static_assert(4 + 2 * PROTOCOL_COUNT <= 24, "los bits de la compuerta no entran en un event group");
 
 /* Cuánto se espera a que lleguen a la compuerta. Una lectura de sensor a medio
  * hacer puede tardar lo suyo si el bus está lento; pasado esto se sigue igual,
@@ -768,6 +781,41 @@ static bool ble_open(void) {
     return true;
 }
 
+/* ------------------------------------------------------------------ INFER */
+
+/* MQTT de siempre (config, ACK, canal de rescate) más los dos tópicos del
+ * modelo y la task que los atiende. */
+static bool infer_open(void) {
+    if (!mqtt_open()) {
+        return false;
+    }
+
+    char topic[128];
+    /* QoS 1: un trozo perdido se vuelve a pedir igual, pero así casi nunca
+     * hace falta. */
+    snprintf(topic, sizeof topic, "/topic/nebulaedge/%s/model/manifest", current_config->id_device);
+    mqtt_subscribe(topic, 1);
+    snprintf(topic, sizeof topic, "/topic/nebulaedge/%s/model/chunk", current_config->id_device);
+    mqtt_subscribe(topic, 1);
+    snprintf(topic, sizeof topic, "/topic/nebulaedge/%s/infer/req", current_config->id_device);
+    mqtt_subscribe(topic, 1);
+
+    infer_start();
+    return true;
+}
+
+static void infer_close(void) {
+    infer_stop();       // antes que el cliente: la task publica por él
+    mqtt_finish();
+}
+
+/* En INFER las productoras de telemetría no producen. Siguen existiendo
+ * (son de todos los protocolos) y respetan la compuerta, pero no leen
+ * sensores ni encolan. */
+static bool telemetry_enabled(void) {
+    return current_config && current_config->protocol_conf != PROTOCOL_INFER;
+}
+
 /* ----------------------------------------------------------- LA TABLA */
 
 static const protocol_ops_t PROTOCOLS[] = {
@@ -813,7 +861,19 @@ static const protocol_ops_t PROTOCOLS[] = {
         .pre_send_delay_ms = 0,
         .last_packet_delay_ms = 3000,
     },
+    [PROTOCOL_INFER] = {
+        .name = "INFER", .id = PROTOCOL_INFER,
+        /* send_data no se usa: sin telemetría la cola de datos queda vacía.
+         * Está para que la tabla no tenga huecos. */
+        .send_data = mqtt_send_data, .send_ack = mqtt_send_ack,
+        .send_tag = TAG_SEND_INFER, .rsp_tag = TAG_GET_RSP_INFER,
+        .open = infer_open, .needs_wifi = true,
+        .recv_config = mqtt_recv_config, .close = infer_close,
+        .control_repeats = CONTROL_PKT_REDUNDANCY, .ack_drain_ms = ACK_DRAIN_MS,
+    },
 };
+_Static_assert(sizeof PROTOCOLS / sizeof PROTOCOLS[0] == PROTOCOL_COUNT,
+               "falta un protocolo en la tabla");
 
 /* Deep sleep helper para modo discontinuo.
  * Se llama en la función de envío de cada protocolo. */
@@ -948,6 +1008,7 @@ static void send_config_ack(protocol_t over, const Config *cfg, bool applied) {
     ack.config_version = cfg->config_version;
     ack.applied = applied;
     ack.time_client = device_clock_now_s();
+    ack.model_version_active = model_store_active_version();
 
     size_t size = config_ack__get_packed_size(&ack);
     uint8_t *buf = malloc(size);
@@ -1015,6 +1076,11 @@ void vTaskCollectInertial(void *pvParameters) {
         // Punto seguro: acá no hay memoria reservada ni bus tomado.
         sensor_gate_wait(GATE_INERTIAL_IDLE);
 
+        if (!telemetry_enabled()) {
+            sensor_gate_sleep(TASK_POLL_MS);
+            continue;
+        }
+
         Data2 data_2 = DATA_2__INIT;
         data_2.id_device = device_id();
         data_2.config_version_applied = current_config ? current_config->config_version : 0;
@@ -1074,6 +1140,11 @@ void vTaskCollectEnvironmental(void *pvParameters) {
     for (;;) {
         // Punto seguro: acá no hay memoria reservada ni bus tomado.
         sensor_gate_wait(GATE_ENV_IDLE);
+
+        if (!telemetry_enabled()) {
+            sensor_gate_sleep(TASK_POLL_MS);
+            continue;
+        }
 
         Data1 data_1 = DATA_1__INIT;
         data_1.id_device = device_id();
@@ -1295,6 +1366,11 @@ void vTaskGetResponse(void *pvParameters) {
         }
 
         ESP_LOGI(proto->rsp_tag, "Configuración cambiada!");
+
+        /* Antes de liberar current_config: la task de INFER corre en paralelo
+         * y no debe seguir trabajando sobre un transporte que se va a cerrar.
+         * Ver infer_freeze(). */
+        infer_freeze();
 
         // Reemplaza la configuración global y reinicia la ventana de deep sleep.
         if (current_config) config__free_unpacked(current_config, NULL);
@@ -1528,6 +1604,9 @@ void app_main() {
     xQueueData = xQueueCreate(100, sizeof(packet_t));
     xQueueConfig = xQueueCreate(5, sizeof(packet_t));
     xQueueConfigBle = xQueueCreate(5, sizeof(packet_t));
+    /* Pocos lugares a propósito: el device pide un trozo a la vez, así que en
+     * régimen nunca hay más de uno o dos esperando. */
+    xQueueModel = xQueueCreate(4, sizeof(packet_t));
 
     /* Entrega a los componentes lo que necesitan para avisar hacia acá.
      *
@@ -1540,7 +1619,13 @@ void app_main() {
      * componentes los alcanzaban con `extern` por nombre, lo que impedía
      * copiarlos a otro proyecto sin arrastrar esas globales. */
     mqtt_set_config_queue(xQueueConfig);
+    mqtt_set_model_queue(xQueueModel);
     ble_set_config_queue(xQueueConfigBle);
+
+    /* El modelo vive en su propia partición y su estado en NVS; sobrevive a
+     * cualquier reinicio, a diferencia de la config. */
+    model_store_init();
+    infer_init(xQueueModel);
     ble_set_start_semaphore(semaphore);
 
     /********************************************************************/
@@ -1672,7 +1757,7 @@ void app_main() {
          * entre los cuatro es cómo se abre el transporte, y eso es proto->open();
          * el resto del ciclo -WiFi arriba, arrancar tasks, bloquearse hasta que
          * la task de respuesta avise un cambio, WiFi abajo- es idéntico. */
-        if (current_config->protocol_conf < 0 || current_config->protocol_conf > PROTOCOL_BLE) {
+        if (current_config->protocol_conf < 0 || current_config->protocol_conf >= PROTOCOL_COUNT) {
             ESP_LOGE(TAG, "Selección de protocolo inválida: %ld", current_config->protocol_conf);
             vTaskDelay(pdMS_TO_TICKS(RESTART_LOG_FLUSH_MS));
             esp_restart();
@@ -1737,7 +1822,7 @@ void app_main() {
         if (proto->needs_wifi) {
             bool next_needs_wifi =
                 current_config->protocol_conf >= 0
-                && current_config->protocol_conf <= PROTOCOL_BLE
+                && current_config->protocol_conf < PROTOCOL_COUNT
                 && PROTOCOLS[current_config->protocol_conf].needs_wifi;
 
             if (!next_needs_wifi || wifi_credentials_changed(current_config)) {

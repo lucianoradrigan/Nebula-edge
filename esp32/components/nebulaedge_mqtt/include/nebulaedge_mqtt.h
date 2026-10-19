@@ -16,6 +16,14 @@
  * el log: el componente sigue publicando y suscribiendo igual. */
 void mqtt_set_config_queue(QueueHandle_t queue);
 
+/* Cola para lo que llega por /model/manifest, /model/chunk e /infer/req (modo INFER).
+ * Cada packet_t trae en data[0] uno de estos tres tipos y desde data[1] el
+ * protobuf tal cual. Sin cola, se descartan. */
+#define MQTT_MODEL_MSG_MANIFEST 'M'
+#define MQTT_MODEL_MSG_CHUNK    'C'
+#define MQTT_MODEL_MSG_INFER    'R'
+void mqtt_set_model_queue(QueueHandle_t queue);
+
 /* Broker al que conectarse. Vivía en nebulaedge_defs.h; es parte de la API de
  * este componente. Se puede extender muchísimo: mirar los campos de
  * esp_mqtt_client_config_t. Por ahora, por simpleza, solo el broker. */

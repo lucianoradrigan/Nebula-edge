@@ -17,12 +17,81 @@ PROTOBUF_C__BEGIN_DECLS
 
 typedef struct Config Config;
 typedef struct ConfigAck ConfigAck;
+typedef struct ModelManifest ModelManifest;
+typedef struct ModelChunkRequest ModelChunkRequest;
+typedef struct ModelChunk ModelChunk;
+typedef struct ModelStatus ModelStatus;
 typedef struct Data1 Data1;
 typedef struct Data2 Data2;
+typedef struct InferRequest InferRequest;
+typedef struct InferResult InferResult;
 
 
 /* --- enums --- */
 
+typedef enum _ModelState {
+  /*
+   * Sin modelo activo ni en curso.
+   */
+  MODEL_STATE__MODEL_STATE_NONE = 0,
+  MODEL_STATE__MODEL_STATE_RECEIVING = 1,
+  MODEL_STATE__MODEL_STATE_VERIFYING = 2,
+  /*
+   * model_version es el ACTIVO.
+   */
+  MODEL_STATE__MODEL_STATE_READY = 3,
+  /*
+   * El nuevo se descartó; sigue el anterior, si había.
+   */
+  MODEL_STATE__MODEL_STATE_FAILED = 4
+    PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(MODEL_STATE)
+} ModelState;
+typedef enum _ModelError {
+  MODEL_ERROR__MODEL_ERROR_NONE = 0,
+  /*
+   * No cabe en la ranura.
+   */
+  MODEL_ERROR__MODEL_ERROR_TOO_BIG = 1,
+  /*
+   * features, forma o feature_set_version no calzan.
+   */
+  MODEL_ERROR__MODEL_ERROR_INCOMPATIBLE = 2,
+  MODEL_ERROR__MODEL_ERROR_FLASH = 3,
+  MODEL_ERROR__MODEL_ERROR_HASH = 4,
+  /*
+   * TFLM no lo pudo cargar (versión, op no registrada).
+   */
+  MODEL_ERROR__MODEL_ERROR_LOAD = 5,
+  /*
+   * AllocateTensors no cupo en la arena.
+   */
+  MODEL_ERROR__MODEL_ERROR_ARENA = 6,
+  /*
+   * La salida no calza con test_output.
+   */
+  MODEL_ERROR__MODEL_ERROR_SELFTEST = 7
+    PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(MODEL_ERROR)
+} ModelError;
+typedef enum _InferStatus {
+  INFER_STATUS__INFER_STATUS_OK = 0,
+  /*
+   * No hay modelo cargado en TFLM.
+   */
+  INFER_STATUS__INFER_STATUS_NO_MODEL = 1,
+  /*
+   * El cargado no es el que pide el servidor.
+   */
+  INFER_STATUS__INFER_STATUS_WRONG_MODEL = 2,
+  /*
+   * Ni features ni ventana de la forma esperada.
+   */
+  INFER_STATUS__INFER_STATUS_BAD_INPUT = 3,
+  /*
+   * TFLM falló al invocar.
+   */
+  INFER_STATUS__INFER_STATUS_FAILED = 4
+    PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(INFER_STATUS)
+} InferStatus;
 
 /* --- messages --- */
 
@@ -84,10 +153,22 @@ struct  Config
    * Hora
    */
   uint32_t time_client;
+  /*
+   * Solo en INFER (protocol_conf = 4). Cambiar de modelo es cambiar de
+   * config: se sube config_version y el handshake de siempre lo entrega.
+   */
+  /*
+   * Modelo que debe tener activo. 0 = ninguno.
+   */
+  int32_t model_version;
+  /*
+   * Qué se infiere: 0 -> features del dataset (fase C1),
+   */
+  int32_t infer_source;
 };
 #define CONFIG__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&config__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, 0 }
 
 
 /*
@@ -100,10 +181,143 @@ struct  ConfigAck
   int32_t config_version;
   protobuf_c_boolean applied;
   uint32_t time_client;
+  /*
+   * Modelo activo en el device al responder. 0 = ninguno.
+   */
+  int32_t model_version_active;
 };
 #define CONFIG_ACK__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&config_ack__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0 }
+
+
+/*
+ * La ficha del modelo que le corresponde al device. Todo lo que el device
+ * necesita para bajarlo, verificarlo y usarlo.
+ */
+struct  ModelManifest
+{
+  ProtobufCMessage base;
+  char *id_device;
+  /*
+   * 0 = no hay modelo que bajar.
+   */
+  int32_t model_version;
+  uint32_t size_bytes;
+  /*
+   * Bytes por trozo; el último puede ser más corto.
+   */
+  uint32_t chunk_size;
+  uint32_t n_chunks;
+  /*
+   * 32 bytes, del .tflite completo.
+   */
+  ProtobufCBinaryData sha256;
+  /*
+   * Compatibilidad: si el firmware no sabe calcular estas features, o la
+   * forma no calza, el device rechaza el modelo en vez de inferir basura.
+   */
+  uint32_t n_features;
+  uint32_t n_classes;
+  uint32_t window_size;
+  float fs_hz;
+  uint32_t feature_set_version;
+  /*
+   * El conversor de TFLite no respeta el orden de salidas de Keras: van
+   * verificadas por modelo, no supuestas.
+   */
+  uint32_t output_severity_index;
+  uint32_t output_fault_index;
+  /*
+   * Estandarización (feature - mean) / std, antes de invocar el modelo.
+   */
+  size_t n_feat_mean;
+  float *feat_mean;
+  size_t n_feat_std;
+  float *feat_std;
+  /*
+   * Autotest: features SIN estandarizar y la salida que dio el int8 en
+   * Python, como [severidad, prob_0, ..., prob_{n_classes-1}].
+   */
+  size_t n_test_input;
+  float *test_input;
+  size_t n_test_output;
+  float *test_output;
+};
+#define MODEL_MANIFEST__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&model_manifest__descriptor) \
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, {0,NULL}, 0, 0, 0, 0, 0, 0, 0, 0,NULL, 0,NULL, 0,NULL, 0,NULL }
+
+
+struct  ModelChunkRequest
+{
+  ProtobufCMessage base;
+  char *id_device;
+  int32_t model_version;
+  uint32_t chunk_index;
+};
+#define MODEL_CHUNK_REQUEST__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&model_chunk_request__descriptor) \
+, (char *)protobuf_c_empty_string, 0, 0 }
+
+
+struct  ModelChunk
+{
+  ProtobufCMessage base;
+  int32_t model_version;
+  uint32_t chunk_index;
+  /*
+   * chunk_index * chunk_size: escribir ahí es idempotente.
+   */
+  uint32_t offset;
+  ProtobufCBinaryData data;
+};
+#define MODEL_CHUNK__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&model_chunk__descriptor) \
+, 0, 0, 0, {0,NULL} }
+
+
+/*
+ * Estado del device en INFER. Se manda en cada cambio de estado y también
+ * periódicamente: en INFER no hay telemetría, así que es esto lo que le dice
+ * al servidor que el device sigue vivo y qué config tiene aplicada.
+ */
+struct  ModelStatus
+{
+  ProtobufCMessage base;
+  char *id_device;
+  /*
+   * El que se está bajando, o el activo si READY.
+   */
+  int32_t model_version;
+  ModelState state;
+  uint32_t chunks_received;
+  ModelError error;
+  int32_t config_version_applied;
+  uint32_t time_client;
+  /*
+   * El que se usa para inferir. 0 = ninguno.
+   */
+  int32_t model_version_active;
+  /*
+   * Del modelo cargado en TFLM (fase B). En 0 mientras no haya uno cargado.
+   */
+  /*
+   * Mayor |salida device - salida Python| en el autotest.
+   */
+  float selftest_max_error;
+  /*
+   * Lo que de verdad usó AllocateTensors.
+   */
+  uint32_t arena_used_bytes;
+  /*
+   * Lo que tardó la última inferencia.
+   */
+  uint32_t invoke_us;
+};
+#define MODEL_STATUS__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&model_status__descriptor) \
+, (char *)protobuf_c_empty_string, 0, MODEL_STATE__MODEL_STATE_NONE, 0, MODEL_ERROR__MODEL_ERROR_NONE, 0, 0, 0, 0, 0, 0 }
 
 
 /*
@@ -160,6 +374,70 @@ struct  Data2
 , (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 
+struct  InferRequest
+{
+  ProtobufCMessage base;
+  uint64_t request_id;
+  /*
+   * El que el servidor espera activo; si no es, el device no infiere.
+   */
+  int32_t model_version;
+  /*
+   * C1: features SIN estandarizar (las estandariza el device).
+   */
+  size_t n_features;
+  float *features;
+  /*
+   * C2: muestras crudas; el device calcula las features.
+   */
+  size_t n_window;
+  float *window;
+  /*
+   * C2: para las bandas de orden.
+   */
+  float rpm;
+  /*
+   * C2.
+   */
+  float fs_hz;
+};
+#define INFER_REQUEST__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&infer_request__descriptor) \
+, 0, 0, 0,NULL, 0,NULL, 0, 0 }
+
+
+struct  InferResult
+{
+  ProtobufCMessage base;
+  char *id_device;
+  uint64_t request_id;
+  int32_t model_version;
+  InferStatus status;
+  float severity;
+  size_t n_probs;
+  float *probs;
+  /*
+   * argmax de probs.
+   */
+  uint32_t pred_fault;
+  /*
+   * C2: cálculo de features en el device. 0 en C1.
+   */
+  uint32_t feature_us;
+  uint32_t inference_us;
+  int32_t config_version_applied;
+  uint32_t time_client;
+  /*
+   * C2: las que calculó el device, para compararlas con Python.
+   */
+  size_t n_features;
+  float *features;
+};
+#define INFER_RESULT__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&infer_result__descriptor) \
+, (char *)protobuf_c_empty_string, 0, 0, INFER_STATUS__INFER_STATUS_OK, 0, 0,NULL, 0, 0, 0, 0, 0, 0,NULL }
+
+
 /* Config methods */
 void   config__init
                      (Config         *message);
@@ -197,6 +475,82 @@ ConfigAck *
                       const uint8_t       *data);
 void   config_ack__free_unpacked
                      (ConfigAck *message,
+                      ProtobufCAllocator *allocator);
+/* ModelManifest methods */
+void   model_manifest__init
+                     (ModelManifest         *message);
+size_t model_manifest__get_packed_size
+                     (const ModelManifest   *message);
+size_t model_manifest__pack
+                     (const ModelManifest   *message,
+                      uint8_t             *out);
+size_t model_manifest__pack_to_buffer
+                     (const ModelManifest   *message,
+                      ProtobufCBuffer     *buffer);
+ModelManifest *
+       model_manifest__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   model_manifest__free_unpacked
+                     (ModelManifest *message,
+                      ProtobufCAllocator *allocator);
+/* ModelChunkRequest methods */
+void   model_chunk_request__init
+                     (ModelChunkRequest         *message);
+size_t model_chunk_request__get_packed_size
+                     (const ModelChunkRequest   *message);
+size_t model_chunk_request__pack
+                     (const ModelChunkRequest   *message,
+                      uint8_t             *out);
+size_t model_chunk_request__pack_to_buffer
+                     (const ModelChunkRequest   *message,
+                      ProtobufCBuffer     *buffer);
+ModelChunkRequest *
+       model_chunk_request__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   model_chunk_request__free_unpacked
+                     (ModelChunkRequest *message,
+                      ProtobufCAllocator *allocator);
+/* ModelChunk methods */
+void   model_chunk__init
+                     (ModelChunk         *message);
+size_t model_chunk__get_packed_size
+                     (const ModelChunk   *message);
+size_t model_chunk__pack
+                     (const ModelChunk   *message,
+                      uint8_t             *out);
+size_t model_chunk__pack_to_buffer
+                     (const ModelChunk   *message,
+                      ProtobufCBuffer     *buffer);
+ModelChunk *
+       model_chunk__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   model_chunk__free_unpacked
+                     (ModelChunk *message,
+                      ProtobufCAllocator *allocator);
+/* ModelStatus methods */
+void   model_status__init
+                     (ModelStatus         *message);
+size_t model_status__get_packed_size
+                     (const ModelStatus   *message);
+size_t model_status__pack
+                     (const ModelStatus   *message,
+                      uint8_t             *out);
+size_t model_status__pack_to_buffer
+                     (const ModelStatus   *message,
+                      ProtobufCBuffer     *buffer);
+ModelStatus *
+       model_status__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   model_status__free_unpacked
+                     (ModelStatus *message,
                       ProtobufCAllocator *allocator);
 /* Data1 methods */
 void   data_1__init
@@ -236,6 +590,44 @@ Data2 *
 void   data_2__free_unpacked
                      (Data2 *message,
                       ProtobufCAllocator *allocator);
+/* InferRequest methods */
+void   infer_request__init
+                     (InferRequest         *message);
+size_t infer_request__get_packed_size
+                     (const InferRequest   *message);
+size_t infer_request__pack
+                     (const InferRequest   *message,
+                      uint8_t             *out);
+size_t infer_request__pack_to_buffer
+                     (const InferRequest   *message,
+                      ProtobufCBuffer     *buffer);
+InferRequest *
+       infer_request__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   infer_request__free_unpacked
+                     (InferRequest *message,
+                      ProtobufCAllocator *allocator);
+/* InferResult methods */
+void   infer_result__init
+                     (InferResult         *message);
+size_t infer_result__get_packed_size
+                     (const InferResult   *message);
+size_t infer_result__pack
+                     (const InferResult   *message,
+                      uint8_t             *out);
+size_t infer_result__pack_to_buffer
+                     (const InferResult   *message,
+                      ProtobufCBuffer     *buffer);
+InferResult *
+       infer_result__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   infer_result__free_unpacked
+                     (InferResult *message,
+                      ProtobufCAllocator *allocator);
 /* --- per-message closures --- */
 
 typedef void (*Config_Closure)
@@ -244,11 +636,29 @@ typedef void (*Config_Closure)
 typedef void (*ConfigAck_Closure)
                  (const ConfigAck *message,
                   void *closure_data);
+typedef void (*ModelManifest_Closure)
+                 (const ModelManifest *message,
+                  void *closure_data);
+typedef void (*ModelChunkRequest_Closure)
+                 (const ModelChunkRequest *message,
+                  void *closure_data);
+typedef void (*ModelChunk_Closure)
+                 (const ModelChunk *message,
+                  void *closure_data);
+typedef void (*ModelStatus_Closure)
+                 (const ModelStatus *message,
+                  void *closure_data);
 typedef void (*Data1_Closure)
                  (const Data1 *message,
                   void *closure_data);
 typedef void (*Data2_Closure)
                  (const Data2 *message,
+                  void *closure_data);
+typedef void (*InferRequest_Closure)
+                 (const InferRequest *message,
+                  void *closure_data);
+typedef void (*InferResult_Closure)
+                 (const InferResult *message,
                   void *closure_data);
 
 /* --- services --- */
@@ -256,10 +666,19 @@ typedef void (*Data2_Closure)
 
 /* --- descriptors --- */
 
+extern const ProtobufCEnumDescriptor    model_state__descriptor;
+extern const ProtobufCEnumDescriptor    model_error__descriptor;
+extern const ProtobufCEnumDescriptor    infer_status__descriptor;
 extern const ProtobufCMessageDescriptor config__descriptor;
 extern const ProtobufCMessageDescriptor config_ack__descriptor;
+extern const ProtobufCMessageDescriptor model_manifest__descriptor;
+extern const ProtobufCMessageDescriptor model_chunk_request__descriptor;
+extern const ProtobufCMessageDescriptor model_chunk__descriptor;
+extern const ProtobufCMessageDescriptor model_status__descriptor;
 extern const ProtobufCMessageDescriptor data_1__descriptor;
 extern const ProtobufCMessageDescriptor data_2__descriptor;
+extern const ProtobufCMessageDescriptor infer_request__descriptor;
+extern const ProtobufCMessageDescriptor infer_result__descriptor;
 
 PROTOBUF_C__END_DECLS
 

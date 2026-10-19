@@ -25,6 +25,12 @@ message Config {
     // número no se reuse con otro significado: si el intervalo separado vuelve,
     // vuelve acá.
     reserved 17;
+
+    // Solo en INFER (protocol_conf = 4). Cambiar de modelo es cambiar de
+    // config: se sube config_version y el handshake de siempre lo entrega.
+    int32 model_version = 18;               // Modelo que debe tener activo. 0 = ninguno.
+    int32 infer_source = 19;                // Qué se infiere: 0 -> features del dataset (fase C1),
+                                            // 1 -> ventanas crudas del dataset (C2), 2 -> sensores propios.
 }
 
 // ACK de configuración
@@ -33,6 +39,103 @@ message ConfigAck {
     int32 config_version = 2;
     bool applied = 3;
     uint32 time_client = 4;
+    int32 model_version_active = 5;         // Modelo activo en el device al responder. 0 = ninguno.
+}
+
+// ---------------------------------------------------------------- INFER
+//
+// Transferencia del modelo por MQTT. La conduce el DEVICE: lee el manifiesto
+// y pide los trozos de a uno. Así controla el ritmo (nunca recibe más de lo
+// que alcanza a escribir en flash) y retoma después de un reinicio pidiendo
+// el siguiente al último que guardó.
+//
+//   servidor -> device   /topic/nebulaedge/{id}/model/manifest   ModelManifest, retenido
+//   device -> servidor   /topic/nebulaedge/{id}/model/chunk/req  [0x06][ModelChunkRequest]
+//   servidor -> device   /topic/nebulaedge/{id}/model/chunk      ModelChunk
+//   device -> servidor   /topic/nebulaedge/{id}/model/status     [0x05][ModelStatus]
+
+// La ficha del modelo que le corresponde al device. Todo lo que el device
+// necesita para bajarlo, verificarlo y usarlo.
+message ModelManifest {
+    string id_device = 1;
+    int32 model_version = 2;                // 0 = no hay modelo que bajar.
+    uint32 size_bytes = 3;
+    uint32 chunk_size = 4;                  // Bytes por trozo; el último puede ser más corto.
+    uint32 n_chunks = 5;
+    bytes sha256 = 6;                       // 32 bytes, del .tflite completo.
+
+    // Compatibilidad: si el firmware no sabe calcular estas features, o la
+    // forma no calza, el device rechaza el modelo en vez de inferir basura.
+    uint32 n_features = 7;
+    uint32 n_classes = 8;
+    uint32 window_size = 9;
+    float fs_hz = 10;
+    uint32 feature_set_version = 11;
+
+    // El conversor de TFLite no respeta el orden de salidas de Keras: van
+    // verificadas por modelo, no supuestas.
+    uint32 output_severity_index = 12;
+    uint32 output_fault_index = 13;
+
+    // Estandarización (feature - mean) / std, antes de invocar el modelo.
+    repeated float feat_mean = 14;
+    repeated float feat_std = 15;
+
+    // Autotest: features SIN estandarizar y la salida que dio el int8 en
+    // Python, como [severidad, prob_0, ..., prob_{n_classes-1}].
+    repeated float test_input = 16;
+    repeated float test_output = 17;
+}
+
+message ModelChunkRequest {
+    string id_device = 1;
+    int32 model_version = 2;
+    uint32 chunk_index = 3;
+}
+
+message ModelChunk {
+    int32 model_version = 1;
+    uint32 chunk_index = 2;
+    uint32 offset = 3;                      // chunk_index * chunk_size: escribir ahí es idempotente.
+    bytes data = 4;
+}
+
+enum ModelState {
+    MODEL_STATE_NONE = 0;                   // Sin modelo activo ni en curso.
+    MODEL_STATE_RECEIVING = 1;
+    MODEL_STATE_VERIFYING = 2;
+    MODEL_STATE_READY = 3;                  // model_version es el ACTIVO.
+    MODEL_STATE_FAILED = 4;                 // El nuevo se descartó; sigue el anterior, si había.
+}
+
+enum ModelError {
+    MODEL_ERROR_NONE = 0;
+    MODEL_ERROR_TOO_BIG = 1;                // No cabe en la ranura.
+    MODEL_ERROR_INCOMPATIBLE = 2;           // features, forma o feature_set_version no calzan.
+    MODEL_ERROR_FLASH = 3;
+    MODEL_ERROR_HASH = 4;
+    MODEL_ERROR_LOAD = 5;                   // TFLM no lo pudo cargar (versión, op no registrada).
+    MODEL_ERROR_ARENA = 6;                  // AllocateTensors no cupo en la arena.
+    MODEL_ERROR_SELFTEST = 7;               // La salida no calza con test_output.
+}
+
+// Estado del device en INFER. Se manda en cada cambio de estado y también
+// periódicamente: en INFER no hay telemetría, así que es esto lo que le dice
+// al servidor que el device sigue vivo y qué config tiene aplicada.
+message ModelStatus {
+    string id_device = 1;
+    int32 model_version = 2;                // El que se está bajando, o el activo si READY.
+    ModelState state = 3;
+    uint32 chunks_received = 4;
+    ModelError error = 5;
+    int32 config_version_applied = 6;
+    uint32 time_client = 7;
+    int32 model_version_active = 8;         // El que se usa para inferir. 0 = ninguno.
+
+    // Del modelo cargado en TFLM (fase B). En 0 mientras no haya uno cargado.
+    float selftest_max_error = 9;           // Mayor |salida device - salida Python| en el autotest.
+    uint32 arena_used_bytes = 10;           // Lo que de verdad usó AllocateTensors.
+    uint32 invoke_us = 11;                  // Lo que tardó la última inferencia.
 }
 
 // Paquete de datos 1: telemetría ambiental (BME688).
@@ -70,4 +173,47 @@ message Data_2 {
     float mag_z = 10;
     int32 config_version_applied = 11;
     uint32 time_client = 12;
+}
+
+// ------------------------------------------------- INFER: inferencia (fase C)
+//
+// Para probar el modelo EN el device con datos que no vio al entrenar: el
+// servidor manda una ventana del set de test, el device infiere y responde, y
+// el servidor guarda la respuesta junto a la verdad (tabla inference_result).
+// Uno a la vez: el servidor no manda el siguiente hasta tener la respuesta o
+// darla por perdida.
+//
+//   servidor -> device   /topic/nebulaedge/{id}/infer/req     InferRequest
+//   device -> servidor   /topic/nebulaedge/{id}/infer/result  [0x07][InferResult]
+
+message InferRequest {
+    uint64 request_id = 1;
+    int32 model_version = 2;                // El que el servidor espera activo; si no es, el device no infiere.
+    repeated float features = 3;            // C1: features SIN estandarizar (las estandariza el device).
+    repeated float window = 4;              // C2: muestras crudas; el device calcula las features.
+    float rpm = 5;                          // C2: para las bandas de orden.
+    float fs_hz = 6;                        // C2.
+}
+
+enum InferStatus {
+    INFER_STATUS_OK = 0;
+    INFER_STATUS_NO_MODEL = 1;              // No hay modelo cargado en TFLM.
+    INFER_STATUS_WRONG_MODEL = 2;           // El cargado no es el que pide el servidor.
+    INFER_STATUS_BAD_INPUT = 3;             // Ni features ni ventana de la forma esperada.
+    INFER_STATUS_FAILED = 4;                // TFLM falló al invocar.
+}
+
+message InferResult {
+    string id_device = 1;
+    uint64 request_id = 2;
+    int32 model_version = 3;
+    InferStatus status = 4;
+    float severity = 5;
+    repeated float probs = 6;
+    uint32 pred_fault = 7;                  // argmax de probs.
+    uint32 feature_us = 8;                  // C2: cálculo de features en el device. 0 en C1.
+    uint32 inference_us = 9;
+    int32 config_version_applied = 10;
+    uint32 time_client = 11;
+    repeated float features = 12;           // C2: las que calculó el device, para compararlas con Python.
 }

@@ -17,4 +17,9 @@ phy_init,   data, phy,      ,        0x1000,
 otadata,    data, ota,      ,        0x2000,
 ota_0,      app,  ota_0,    ,        4M,
 ota_1,      app,  ota_1,    ,        4M,
-model,      data, 0x40,     ,        1M,
+# Dos ranuras para el modelo de INFER, con el mismo esquema que ota_0/ota_1:
+# el nuevo se escribe en la que no está activa y solo se cambia de ranura
+# cuando su sha256 calza (ver nebulaedge_model_store). Antes era una sola
+# partición `model` de 1M, sin uso.
+model_a,    data, 0x40,     ,        512K,
+model_b,    data, 0x40,     ,        512K,
