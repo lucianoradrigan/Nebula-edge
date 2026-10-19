@@ -229,11 +229,14 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         dev = await self._device_socket()
         loop = asyncio.get_running_loop()
 
-        for _ in range(5):
+        # La hora sale recién con _CLOCK_RESYNC_MIN_PACKETS paquetes al día en
+        # la sesión (ver el test siguiente).
+        need = sessions.ProtocolSession._CLOCK_RESYNC_MIN_PACKETS
+        for _ in range(need + 5):
             await self._send(dev, data_1_packet(applied_version=1), port)
-            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
+            if await self._wait_until(lambda: len(repo.data_1) >= need, timeout=0.5):
                 break
-        self.assertGreaterEqual(len(repo.data_1), 1, "no se insertó la telemetría")
+        self.assertGreaterEqual(len(repo.data_1), need, "no se insertó la telemetría")
 
         raw = await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=5.0)
         resent = DataCodec.deserialize_config(raw)
@@ -242,6 +245,38 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
                          "el resync no debe cambiar la versión: el device rearmaría todo por nada")
         self.assertGreater(resent.time_client, 0, "el resync tiene que traer hora")
         self.assertFalse(task.done(), "el reenvío de hora no debía cerrar la sesión")
+
+    async def test_clock_is_not_resent_right_after_the_session_opens(self):
+        """Recién abierta la sesión no se reenvía la hora, aunque toque.
+
+        El device puede seguir cambiando de protocolo: la config llegaría por
+        el enlace que se cierra, esperaría en su cola mientras abre el nuevo y
+        al aplicarla le atrasaría el reloj lo que esperó. Medido en banco en la
+        prueba nocturna (ronda v2008): 14 s.
+        """
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        session = self._build_session(repo, port, quick_timeouts(clock_resync_sec=0.3))
+        # Hace rato que no se le pone la hora: con la regla vieja saldría ya.
+        type(session)._clock_resync_at[session.device_id] = time.monotonic() - 10.0
+        self.addCleanup(type(session)._clock_resync_at.pop, session.device_id, None)
+
+        task = asyncio.create_task(session.run())
+        self.addCleanup(task.cancel)
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+
+        need = sessions.ProtocolSession._CLOCK_RESYNC_MIN_PACKETS
+        for _ in range(need + 5):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
+                break
+        for _ in range(need - 2):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= need - 1, timeout=2.0))
+
+        with self.assertRaises(asyncio.TimeoutError, msg="la hora salió antes de tiempo"):
+            await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=0.8)
 
     async def test_config_is_resent_until_the_device_acks(self):
         """El device pierde el primer envío de config y el server reintenta.

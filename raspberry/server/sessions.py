@@ -148,6 +148,17 @@ class DeviceSession:
     #     acumula error de reloj al dormir.
     _clock_resync_at: dict[str, float] = {}
 
+    # Paquetes al día que tienen que llegar en ESTA sesión antes de reenviar
+    # la hora. Recién abierta, el device puede seguir cambiando de protocolo:
+    # medido en banco (prueba nocturna, ronda v2008), la hora salió en el
+    # primer paquete de la sesión MQTT, llegó por la conexión INFER que se
+    # estaba cerrando, esperó ~14 s en la cola del device mientras abría MQTT,
+    # y al aplicarla le atrasó el reloj esos 14 s. Que lleguen paquetes del
+    # transporte nuevo prueba que ya terminó. Es un conteo y no un tiempo
+    # porque en deep sleep la sesión se rehace en cada despertar y la ventana
+    # despierta es de sleep_window_size paquetes.
+    _CLOCK_RESYNC_MIN_PACKETS = 5
+
     async def _resync_device_clock(self, tx: Transport, db_config: "ConfigData") -> None:
         """Reenvía la config VIGENTE, sin cambiarle la versión, para poner el
         reloj del device en hora.
@@ -391,6 +402,7 @@ class ProtocolSession(DeviceSession):
 
     async def _session_loop(self, tx: Transport) -> "ConfigData | None":
         """Recibe telemetría y aplica cambios de config sobre un transporte ya abierto."""
+        up_to_date_packets = 0      # ver _CLOCK_RESYNC_MIN_PACKETS
         while True:
             # Espera un paquete, sondeando la BD proactivamente en ventanas
             # cortas mientras no llega nada (no depende de que llegue
@@ -470,7 +482,10 @@ class ProtocolSession(DeviceSession):
 
             # El device está al día de config: es el momento tranquilo para
             # ponerle el reloj en hora. Ver _resync_device_clock().
-            if tx.can_send and decision.decision == ConfigDecision.UP_TO_DATE:
+            if decision.decision == ConfigDecision.UP_TO_DATE:
+                up_to_date_packets += 1
+            if (tx.can_send and decision.decision == ConfigDecision.UP_TO_DATE
+                    and up_to_date_packets >= self._CLOCK_RESYNC_MIN_PACKETS):
                 last = self._clock_resync_at.get(self.device_id)
                 if last is None:
                     # Primera vez que se ve este device en este proceso: solo se
