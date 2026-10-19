@@ -114,4 +114,14 @@ extern TaskHandle_t response_task[PROTOCOL_COUNT];
  * salir por el puerto serie. */
 #define RESTART_LOG_FLUSH_MS 1000
 
+
+/* Cada cuánto vuelven al punto seguro las tasks de envío y respuesta.
+ *
+ * Las dos se bloqueaban para siempre esperando (una la cola de datos, la otra
+ * el transporte). Con un bloqueo infinito no hay forma de pedirles que paren:
+ * por eso ahora esperan con timeout y, si no llegó nada, vuelven al tope del
+ * bucle y miran la compuerta. El costo es despertar unas pocas veces por
+ * segundo sin hacer nada; a cambio, nadie tiene que congelarlas desde afuera. */
+#define TASK_POLL_MS 250
+
 #endif
