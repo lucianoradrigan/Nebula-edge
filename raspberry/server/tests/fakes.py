@@ -84,7 +84,7 @@ def make_config(version: int, *, udp_port: int = 0, tcp_port: int = 0,
     )
 
 
-def make_model(version: int = 1, size: int = 5000) -> ModelInfo:
+def make_model(version: int = 1, size: int = 5000, test_dataset: str | None = "cwru_3hp") -> ModelInfo:
     """Modelo de prueba. Los bytes siguen un patrón para que un trozo
     desplazado se note al comparar."""
     tflite = bytes(i % 251 for i in range(size))
@@ -95,6 +95,7 @@ def make_model(version: int = 1, size: int = 5000) -> ModelInfo:
         feature_set_version=1, output_severity_index=1, output_fault_index=0,
         feat_mean=[0.0] * 20, feat_std=[1.0] * 20,
         test_input=[0.5] * 20, test_output=[0.25, 0.7, 0.1, 0.1, 0.1],
+        test_dataset=test_dataset,
     )
 
 
@@ -129,12 +130,13 @@ def make_sample(index: int, true_fault: int = 1) -> InferSample:
 
 
 def infer_result_packet(request_id: int, pred_fault: int, status: int = 0, model_version: int = 1,
-                        device_id: str = DEVICE_ID) -> bytes:
+                        device_id: str = DEVICE_ID, input_kind: int = 0) -> bytes:
     """Respuesta tal como la arma el firmware: [0x07][protobuf]."""
     r = InferResultData(
         id_device=device_id, request_id=request_id, model_version=model_version, status=status,
         severity=0.33, probs=[0.1, 0.7, 0.1, 0.1], pred_fault=pred_fault, feature_us=0,
         inference_us=1000, config_version_applied=1, time_client=1_735_000_005, features=[],
+        input_kind=input_kind,
     )
     return bytes([DataCodec.TYPE_INFER_RESULT]) + DataCodec.serialize_infer_result(r)
 
@@ -224,6 +226,12 @@ class FakeRepo:
     async def complete_inference_async(self, device_id, result, time_server):
         self._ensure_infer_tables()
         self.inference_rows[result.request_id]["result"] = result
+        return True
+
+    async def insert_unsolicited_inference_async(self, device_id, result, time_server):
+        if not hasattr(self, "unsolicited_rows"):
+            self.unsolicited_rows: list = []
+        self.unsolicited_rows.append(result)
         return True
 
     async def inference_run_summary_async(self, run_id):

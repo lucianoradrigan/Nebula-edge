@@ -40,7 +40,7 @@ from typing import Callable, Any
 from models import (
     BleContext, Timeouts, ConfigData, Log,
     ModelInfo, ModelChunkRequestData, ModelStatusData, ModelState,
-    InferSample, InferResultData, InferStatus,
+    InferSample, InferResultData, InferStatus, InferInput,
 )
 from codec import DataCodec
 from system import utc_epoch_now, log
@@ -520,12 +520,15 @@ class InferDeviceSession(ProtocolSession):
     # hasta enterarse. Se le republica el manifiesto, pero no por cada pedido.
     _MANIFEST_REPUBLISH_SEC = 2.0
 
-    # FASE C: de dónde salen las ventanas y cuánto se espera cada respuesta.
-    # El set de test es la carga que el modelo no vio al entrenar.
-    DATASET = "cwru_3hp"
+    # FASE C: cuánto se espera cada respuesta. De dónde salen las ventanas lo
+    # dice el modelo (ModelInfo.test_dataset): cada modelo trae su set de test.
     INFER_RESULT_TIMEOUT_SEC = 5.0
-    # infer_source de la config -> input_kind de inference_result.
-    _INPUT_KIND = {0: 0, 1: 1}      # 0 features (C1), 1 ventana cruda (C2); 2 = sensores, sin corrida
+    # infer_source de la config -> input_kind de inference_result. Con
+    # sensores (2) no hay corrida: el device clasifica sus propias ventanas y
+    # publica los resultados sin pedido (ver _on_unsolicited_result).
+    _INPUT_KIND = {0: InferInput.FEATURES, 1: InferInput.WINDOW}
+    # Resultados sin pedido: uno por ventana, así que el log va resumido.
+    _UNSOLICITED_LOG_EVERY = 100
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -540,6 +543,7 @@ class InferDeviceSession(ProtocolSession):
         self._run_idx = 0
         self._run_done = False
         self._pending: tuple[int, float] | None = None     # (request_id, monotonic al enviar)
+        self._unsolicited = 0
 
     async def _load_model(self) -> ModelInfo | None:
         version = self.config.model_version
@@ -625,24 +629,29 @@ class InferDeviceSession(ProtocolSession):
                 or not self._device_ready or self._model is None):
             return
 
+        dataset = self._model.test_dataset
+        if not dataset:
+            log(f"INFER: el modelo v{self._model.model_version} no tiene test_dataset: no se corre nada")
+            self._run_done = True
+            return
         if self._run_samples is None:
-            self._run_samples = await self.database_repo.get_infer_samples_async(self.DATASET)
+            self._run_samples = await self.database_repo.get_infer_samples_async(dataset)
         if not self._run_samples:
-            log(f"INFER: no hay ventanas del dataset {self.DATASET} en infer_sample: no se corre nada")
+            log(f"INFER: no hay ventanas del dataset {dataset} en infer_sample: no se corre nada")
             self._run_done = True
             return
 
         done = await self.database_repo.count_completed_inferences_async(
-            self.device_id, self._model.model_version, kind, self.config.config_version, self.DATASET)
+            self.device_id, self._model.model_version, kind, self.config.config_version, dataset)
         if done >= len(self._run_samples):
-            log(f"INFER: {self.device_id} ya tiene una corrida completa de {self.DATASET} con "
+            log(f"INFER: {self.device_id} ya tiene una corrida completa de {dataset} con "
                 f"v{self._model.model_version} y config v{self.config.config_version}: no se repite")
             self._run_done = True
             return
 
         self._run_id = int(time.time() * 1000)
         self._run_idx = 0
-        log(f"INFER: corrida {self._run_id} empieza: {len(self._run_samples)} ventanas de {self.DATASET} "
+        log(f"INFER: corrida {self._run_id} empieza: {len(self._run_samples)} ventanas de {dataset} "
             f"({'features' if kind == 0 else 'ventanas crudas'}) a {self.device_id}, modelo v{self._model.model_version}")
 
     async def _send_next(self, tx: InferTransport) -> None:
@@ -674,7 +683,23 @@ class InferDeviceSession(ProtocolSession):
         self._run_done = True
         self._run_id = None
 
+    async def _on_unsolicited_result(self, r: InferResultData) -> None:
+        """El device clasificó una ventana suya (infer_source = 2). No hay
+        pedido ni verdad: se guarda tal cual, fuera de toda corrida."""
+        await self.database_repo.insert_unsolicited_inference_async(self.device_id, r, time.time())
+        self._unsolicited += 1
+        if self._unsolicited == 1 or self._unsolicited % self._UNSOLICITED_LOG_EVERY == 0:
+            try:
+                kind = InferInput(r.input_kind).name
+            except ValueError:
+                kind = str(r.input_kind)
+            log(f"INFER: {self.device_id} lleva {self._unsolicited} resultados sin pedido ({kind}); "
+                f"último: clase {r.pred_fault}, severidad {r.severity:.3f}, estado {r.status}")
+
     async def _on_infer_result(self, tx: InferTransport, r: InferResultData) -> None:
+        if r.request_id == 0:
+            await self._on_unsolicited_result(r)
+            return
         if self._pending is None or r.request_id != self._pending[0]:
             return      # de un pedido que ya se dio por perdido
         await self.database_repo.complete_inference_async(self.device_id, r, time.time())

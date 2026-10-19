@@ -54,7 +54,11 @@ def main():
                     help="el .tflite a cargar; por defecto <model>.tflite (p.ej. model_cwru_f32.tflite)")
     ap.add_argument("--version", type=int, required=True,
                     help="model_version en la tabla; una versión no se reusa")
-    ap.add_argument("--trained-on", default="CWRU acc_x; train 0-1hp, val 2hp, test 3hp")
+    ap.add_argument("--trained-on", default=None,
+                    help="de qué datos y con qué split salió; por defecto lo que guardó train.py")
+    ap.add_argument("--test-dataset", default=None,
+                    help="set de infer_sample con que el servidor lo prueba en el device; "
+                         "por defecto el de train.py. '' = ninguno")
     args = ap.parse_args()
 
     tflite_path = args.tflite or f"{args.model}.tflite"
@@ -62,6 +66,15 @@ def main():
     data = np.load(f"{args.model}_test.npz", allow_pickle=True)
     mean, std = data["feat_mean"], data["feat_std"]
     classes = [str(c) for c in data["classes"]]
+
+    # Los npz de antes de data_sources.py no traen estos dos.
+    trained_on = args.trained_on or (str(data["trained_on"]) if "trained_on" in data else None)
+    if not trained_on:
+        raise SystemExit(f"{args.model}_test.npz no dice con qué se entrenó: pasar --trained-on")
+    test_dataset = args.test_dataset
+    if test_dataset is None:
+        test_dataset = str(data["test_dataset"]) if "test_dataset" in data else ""
+    test_dataset_sql = f"'{test_dataset}'" if test_dataset else "NULL"
 
     test_input = data["X_raw"][0]
     test_output, i_sev, i_fault = run_tflite(tflite_model, (test_input - mean) / std)
@@ -74,7 +87,7 @@ def main():
 INSERT INTO nebulaedge_schema.model (
     model_version, tflite, size_bytes, sha256, n_features, n_classes, class_names,
     window_size, fs_hz, feature_set_version, output_severity_index, output_fault_index,
-    feat_mean, feat_std, test_input, test_output, trained_on
+    feat_mean, feat_std, test_input, test_output, trained_on, test_dataset
 ) VALUES (
     {args.version},
     '\\x{tflite_model.hex()}'::bytea,
@@ -92,7 +105,8 @@ INSERT INTO nebulaedge_schema.model (
     {sql_floats(std)},
     {sql_floats(test_input)},
     {sql_floats(test_output)},
-    '{args.trained_on}'
+    '{trained_on}',
+    {test_dataset_sql}
 );
 """
     out = f"{tflite_path.removesuffix('.tflite')}_v{args.version}.sql"
@@ -104,6 +118,8 @@ INSERT INTO nebulaedge_schema.model (
     print(f"  autotest    : severidad {test_output[0]:.4f}, "
           f"clase {classes[int(np.argmax(test_output[1:]))]} "
           f"(verdad: {classes[int(data['y_fault'][0])]})")
+    print(f"  entrenado   : {trained_on}")
+    print(f"  set de test : {test_dataset or '(ninguno: el servidor no corre nada)'}")
 
 
 if __name__ == "__main__":

@@ -18,9 +18,8 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-import cwru
 import features
-import synthetic
+from data_sources import DATA_SOURCES, split_by_window
 
 # Reproducibilidad: sin esto cada corrida da una accuracy distinta.
 keras.utils.set_random_seed(42)
@@ -44,77 +43,31 @@ def build_model(n_features, n_classes, trunk=(64, 32)):
     return keras.Model(inputs=entrada, outputs=[severity, fault])
 
 
-def split_by_recording(source_files, val_frac=0.2, test_frac=0.2, seed=0):
-    """Divide por grabación, nunca por ventana.
-
-    Si ventanas de la misma grabación caen en entrenamiento y en test, el
-    modelo aprende a reconocer LA GRABACIÓN —su nivel de ruido, su ganancia,
-    sus resonancias de montaje— en vez de la física de la falla. La accuracy
-    sale cerca de 100% y no significa nada. Con --leaky se puede ver cuánto
-    infla exactamente.
-    """
-    rng = np.random.default_rng(seed)
-    recordings = np.unique(source_files)
-    rng.shuffle(recordings)
-
-    n_test = max(1, int(len(recordings) * test_frac))
-    n_val = max(1, int(len(recordings) * val_frac))
-
-    test_recs = set(recordings[:n_test])
-    val_recs = set(recordings[n_test:n_test + n_val])
-
-    is_test = np.array([f in test_recs for f in source_files])
-    is_val = np.array([f in val_recs for f in source_files])
-    return ~(is_test | is_val), is_val, is_test
-
-
-def split_by_load(load_hp, val_load=2, test_load=3):
-    """Divide por carga del motor: estudia con unas, se examina con otra.
-
-    Más exigente que dividir por grabación: el test es una condición de
-    operación que el modelo nunca vio. Si acierta igual, aprendió la falla y
-    no la carga.
-    """
-    is_test = load_hp == test_load
-    is_val = load_hp == val_load
-    return ~(is_test | is_val), is_val, is_test
-
-
-def split_by_window(n, val_frac=0.2, test_frac=0.2, seed=0):
-    """Split ingenuo, solo para demostrar la fuga de datos."""
-    rng = np.random.default_rng(seed)
-    idx = rng.permutation(n)
-    n_test, n_val = int(n * test_frac), int(n * val_frac)
-    test_i, val_i = idx[:n_test], idx[n_test:n_test + n_val]
-    is_test = np.zeros(n, bool); is_test[test_i] = True
-    is_val = np.zeros(n, bool); is_val[val_i] = True
-    return ~(is_test | is_val), is_val, is_test
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--leaky", action="store_true",
                     help="split por ventana en vez de por grabación (demuestra la fuga)")
     ap.add_argument("--epochs", type=int, default=120)
-    ap.add_argument("--recordings", type=int, default=48)
-    ap.add_argument("--windows", type=int, default=50)
-    ap.add_argument("--data", choices=["synthetic", "cwru"], default="synthetic")
+    ap.add_argument("--recordings", type=int, default=None, help="solo con --data synthetic")
+    ap.add_argument("--windows", type=int, default=None, help="solo con --data synthetic")
+    ap.add_argument("--data", choices=sorted(DATA_SOURCES), default="synthetic",
+                    help="de dónde salen los datos (ver data_sources.py)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--trunk", default="64,32",
                     help="neuronas de las dos capas del tronco, p.ej. 256,128")
     args = ap.parse_args()
     trunk = tuple(int(n) for n in args.trunk.split(","))
-    out = args.out or ("model_cwru" if args.data == "cwru" else "model")
+    out = args.out or ("model" if args.data == "synthetic" else f"model_{args.data}")
+    source = DATA_SOURCES[args.data]
 
-    if args.data == "cwru":
-        print("Leyendo CWRU...")
-        ds = cwru.load_windows()
-        classes = cwru.CLASSES
-    else:
-        print("Generando señal sintética...")
-        ds = synthetic.generate_dataset(
-            n_recordings=args.recordings, windows_per_recording=args.windows, seed=1)
-        classes = synthetic.CLASSES
+    opts = {}
+    if args.recordings is not None:
+        opts["n_recordings"] = args.recordings
+    if args.windows is not None:
+        opts["windows_per_recording"] = args.windows
+    print(f"Cargando {args.data}...")
+    ds = source.load(**opts)
+    classes = source.classes
 
     print(f"Extrayendo {features.N_FEATURES} features de {len(ds['windows'])} ventanas...")
     X = np.array([features.extract(w, ds["fs_hz"], r)
@@ -125,12 +78,9 @@ def main():
     if args.leaky:
         tr, va, te = split_by_window(len(X))
         print("\n*** SPLIT POR VENTANA (con fuga de datos) ***")
-    elif args.data == "cwru":
-        tr, va, te = split_by_load(ds["load_hp"])
-        print("\nSplit por carga: train 0-1 hp, val 2 hp, test 3 hp")
     else:
-        tr, va, te = split_by_recording(ds["source_file"])
-        print("\nSplit por grabación (honesto)")
+        tr, va, te = source.split(ds)
+        print(f"\n{source.description}")
     print(f"  train {tr.sum()}  val {va.sum()}  test {te.sum()}")
 
     # Estandarización FUERA del modelo, y con estadísticas de entrenamiento
@@ -200,7 +150,10 @@ def main():
                  X_raw=X_raw[te],      # las mismas, sin estandarizar
                  X_repr=X[tr][:400],   # calibración del cuantizador
                  feat_mean=feat_mean, feat_std=feat_std,
-                 classes=np.array(classes), fs_hz=ds["fs_hz"])
+                 classes=np.array(classes), fs_hz=ds["fs_hz"],
+                 # Para export_model.py: terminan en la tabla model.
+                 trained_on=f"{source.description}; tronco {args.trunk}",
+                 test_dataset=source.test_dataset or "")
         print(f"\nGuardados {out}.keras y {out}_test.npz")
 
     return acc, mae

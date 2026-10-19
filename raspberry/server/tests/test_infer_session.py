@@ -16,7 +16,7 @@ from unittest import mock
 import sessions
 import transport
 from codec import DataCodec
-from models import ModelState, Timeouts
+from models import InferInput, ModelState, Timeouts
 from protocol_dispatch import PROTOCOL_INFER
 from tests.fakes import (
     DEVICE_ID, FakeRepo, config_ack_packet, data_1_packet,
@@ -348,6 +348,40 @@ class InferRunTests(_InferHarness):
         self._ready()
         await asyncio.sleep(0.4)
         self.assertEqual(self._requests(), [])
+
+    async def test_run_not_started_without_test_dataset(self):
+        repo = self._run_repo(n_samples=3)
+        repo.models = {1: make_model(test_dataset=None)}
+        self._start(repo)
+        self._ready()
+        await asyncio.sleep(0.4)
+        self.assertEqual(self._requests(), [])
+
+    async def test_unsolicited_sensor_result_is_stored(self):
+        repo = self._run_repo(n_samples=3)
+        session = sessions.InferDeviceSession(
+            DEVICE_ID, make_config(1, protocol_conf=PROTOCOL_INFER, model_version=1),
+            repo, quick_timeouts())
+        session.config.infer_source = 2
+        task = asyncio.create_task(session.run())
+        self.addCleanup(task.cancel)
+        self._ready()
+        for _ in range(2):
+            self.data_queue.put(infer_result_packet(0, pred_fault=2, input_kind=InferInput.SENSOR))
+        self.assertTrue(await self._wait_until(lambda: len(getattr(repo, "unsolicited_rows", [])) == 2))
+        r = repo.unsolicited_rows[0]
+        self.assertEqual((r.request_id, r.input_kind, r.pred_fault), (0, InferInput.SENSOR, 2))
+        self.assertEqual(self._requests(), [], "con sensores el servidor no pide nada")
+
+    async def test_unsolicited_result_does_not_disturb_a_run(self):
+        repo = self._run_repo(n_samples=2)
+        self._start(repo)
+        self._ready()
+        self.assertTrue(await self._wait_until(lambda: len(self._requests()) == 1))
+        self.data_queue.put(infer_result_packet(0, pred_fault=1, input_kind=InferInput.SENSOR))
+        self.data_queue.put(infer_result_packet(self._requests()[0].request_id, pred_fault=0))
+        self.assertTrue(await self._wait_until(lambda: len(self._requests()) == 2))
+        self.assertEqual(len(repo.unsolicited_rows), 1)
 
     async def test_run_abandoned_if_device_has_no_model(self):
         repo = self._run_repo(n_samples=3)

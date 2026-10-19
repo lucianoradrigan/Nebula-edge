@@ -178,7 +178,7 @@ class DatabaseRepository:
                     SELECT model_version, tflite, sha256, n_features, n_classes,
                         window_size, fs_hz, feature_set_version,
                         output_severity_index, output_fault_index,
-                        feat_mean, feat_std, test_input, test_output
+                        feat_mean, feat_std, test_input, test_output, test_dataset
                     FROM nebulaedge_schema.model
                     WHERE model_version = %s;
                 """, (model_version,))
@@ -201,6 +201,7 @@ class DatabaseRepository:
             feat_std=list(row[11]),
             test_input=list(row[12]),
             test_output=list(row[13]),
+            test_dataset=row[14],
         )
 
     def get_infer_samples(self, dataset: str) -> list[InferSample]:
@@ -283,6 +284,34 @@ class DatabaseRepository:
             return True
         except Exception as e:
             log(f"ERROR de base guardando el resultado de inferencia {result.request_id}: {e}")
+            return False
+
+    def insert_unsolicited_inference(self, device_id: str, result: InferResultData,
+                                     time_server: float) -> bool:
+        """Un resultado que el device publicó sin pedido (sensores propios).
+        Sin request_id, sin corrida y sin verdad: request_id, run_id y true_*
+        quedan en NULL."""
+        try:
+            with self._connection() as db:
+                with db.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO nebulaedge_schema.inference_result (
+                            id_device, model_version, input_kind, status,
+                            pred_fault, pred_severity, probs, feature_us, inference_us,
+                            features_device, config_version_applied, time_client, time_server
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        device_id, result.model_version, result.input_kind, result.status,
+                        result.pred_fault, result.severity, result.probs,
+                        result.feature_us, result.inference_us, result.features or None,
+                        result.config_version_applied,
+                        self._int_to_db_datetime(result.time_client),
+                        datetime.utcfromtimestamp(time_server),
+                    ))
+                    db.commit()
+            return True
+        except Exception as e:
+            log(f"ERROR de base guardando un resultado de inferencia sin pedido: {e}")
             return False
 
     def inference_run_summary(self, run_id: int) -> dict:
@@ -435,6 +464,9 @@ class DatabaseRepository:
 
     async def complete_inference_async(self, *args) -> bool:
         return await asyncio.to_thread(self.complete_inference, *args)
+
+    async def insert_unsolicited_inference_async(self, *args) -> bool:
+        return await asyncio.to_thread(self.insert_unsolicited_inference, *args)
 
     async def inference_run_summary_async(self, run_id: int) -> dict:
         return await asyncio.to_thread(self.inference_run_summary, run_id)

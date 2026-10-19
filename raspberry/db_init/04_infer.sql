@@ -88,3 +88,32 @@ ALTER TABLE nebulaedge_schema.inference_result
     ADD COLUMN IF NOT EXISTS sample_index INT,
     ADD COLUMN IF NOT EXISTS status INT,                -- InferStatus; NULL = sin respuesta
     ADD COLUMN IF NOT EXISTS features_device FLOAT[];   -- C2: las features que calculó el device
+
+-- El set de test de cada modelo. Viaja con el modelo y no fijo en el
+-- servidor: un modelo entrenado con otros datos trae su propio set. NULL = no
+-- hay set; el modelo se transfiere igual, pero el servidor no corre nada.
+ALTER TABLE nebulaedge_schema.model
+    ADD COLUMN IF NOT EXISTS test_dataset VARCHAR(32);  -- infer_sample.dataset
+
+-- Resultados SIN pedido: con infer_source = 2 el device clasifica las ventanas
+-- de sus propios sensores y publica cada resultado con request_id = 0. No hay
+-- request_id que sirva de clave, así que la clave pasa a ser un id propio, y
+-- (id_device, request_id) queda único solo donde hay pedido. Los resultados
+-- sin pedido se guardan con request_id, run_id y true_* en NULL.
+ALTER TABLE nebulaedge_schema.inference_result
+    ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+DO $$
+BEGIN
+    -- Solo si la clave todavía es la vieja: así el archivo se puede repetir.
+    IF EXISTS (SELECT 1 FROM pg_constraint
+               WHERE conrelid = 'nebulaedge_schema.inference_result'::regclass
+                 AND contype = 'p'
+                 AND pg_get_constraintdef(oid) LIKE '%request_id%') THEN
+        ALTER TABLE nebulaedge_schema.inference_result DROP CONSTRAINT inference_result_pkey;
+        ALTER TABLE nebulaedge_schema.inference_result ALTER COLUMN request_id DROP NOT NULL;
+        ALTER TABLE nebulaedge_schema.inference_result ADD PRIMARY KEY (id);
+    END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS inference_result_request
+    ON nebulaedge_schema.inference_result (id_device, request_id)
+    WHERE request_id IS NOT NULL;

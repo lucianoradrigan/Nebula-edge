@@ -72,6 +72,25 @@ typedef enum _ModelError {
   MODEL_ERROR__MODEL_ERROR_SELFTEST = 7
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(MODEL_ERROR)
 } ModelError;
+/*
+ * Sobre qué se infirió. Los mismos valores que infer_source de la config y que
+ * input_kind de inference_result.
+ */
+typedef enum _InferInput {
+  /*
+   * C1: features que mandó el servidor.
+   */
+  INFER_INPUT__INFER_INPUT_FEATURES = 0,
+  /*
+   * C2: ventana cruda que mandó el servidor.
+   */
+  INFER_INPUT__INFER_INPUT_WINDOW = 1,
+  /*
+   * Ventana de los sensores del device, sin pedido.
+   */
+  INFER_INPUT__INFER_INPUT_SENSOR = 2
+    PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(INFER_INPUT)
+} InferInput;
 typedef enum _InferStatus {
   INFER_STATUS__INFER_STATUS_OK = 0,
   /*
@@ -410,6 +429,9 @@ struct  InferResult
 {
   ProtobufCMessage base;
   char *id_device;
+  /*
+   * 0 = sin pedido (INFER_INPUT_SENSOR).
+   */
   uint64_t request_id;
   int32_t model_version;
   InferStatus status;
@@ -426,16 +448,20 @@ struct  InferResult
   uint32_t feature_us;
   uint32_t inference_us;
   int32_t config_version_applied;
+  /*
+   * Al terminar de inferir; con sensores, ~el fin de la ventana.
+   */
   uint32_t time_client;
   /*
    * C2: las que calculó el device, para compararlas con Python.
    */
   size_t n_features;
   float *features;
+  InferInput input_kind;
 };
 #define INFER_RESULT__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&infer_result__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, INFER_STATUS__INFER_STATUS_OK, 0, 0,NULL, 0, 0, 0, 0, 0, 0,NULL }
+, (char *)protobuf_c_empty_string, 0, 0, INFER_STATUS__INFER_STATUS_OK, 0, 0,NULL, 0, 0, 0, 0, 0, 0,NULL, INFER_INPUT__INFER_INPUT_FEATURES }
 
 
 /* Config methods */
@@ -668,6 +694,7 @@ typedef void (*InferResult_Closure)
 
 extern const ProtobufCEnumDescriptor    model_state__descriptor;
 extern const ProtobufCEnumDescriptor    model_error__descriptor;
+extern const ProtobufCEnumDescriptor    infer_input__descriptor;
 extern const ProtobufCEnumDescriptor    infer_status__descriptor;
 extern const ProtobufCMessageDescriptor config__descriptor;
 extern const ProtobufCMessageDescriptor config_ack__descriptor;

@@ -1762,7 +1762,7 @@ const ProtobufCMessageDescriptor infer_request__descriptor =
   (ProtobufCMessageInit) infer_request__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor infer_result__field_descriptors[12] =
+static const ProtobufCFieldDescriptor infer_result__field_descriptors[13] =
 {
   {
     "id_device",
@@ -1908,6 +1908,18 @@ static const ProtobufCFieldDescriptor infer_result__field_descriptors[12] =
     PROTOBUF_C_FIELD_FLAG_PACKED,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "input_kind",
+    13,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_ENUM,
+    0,   /* quantifier_offset */
+    offsetof(InferResult, input_kind),
+    &infer_input__descriptor,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned infer_result__field_indices_by_name[] = {
   9,   /* field[9] = config_version_applied */
@@ -1915,6 +1927,7 @@ static const unsigned infer_result__field_indices_by_name[] = {
   11,   /* field[11] = features */
   0,   /* field[0] = id_device */
   8,   /* field[8] = inference_us */
+  12,   /* field[12] = input_kind */
   2,   /* field[2] = model_version */
   6,   /* field[6] = pred_fault */
   5,   /* field[5] = probs */
@@ -1926,7 +1939,7 @@ static const unsigned infer_result__field_indices_by_name[] = {
 static const ProtobufCIntRange infer_result__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 12 }
+  { 0, 13 }
 };
 const ProtobufCMessageDescriptor infer_result__descriptor =
 {
@@ -1936,7 +1949,7 @@ const ProtobufCMessageDescriptor infer_result__descriptor =
   "InferResult",
   "",
   sizeof(InferResult),
-  12,
+  13,
   infer_result__field_descriptors,
   infer_result__field_indices_by_name,
   1,  infer_result__number_ranges,
@@ -2015,6 +2028,36 @@ const ProtobufCEnumDescriptor model_error__descriptor =
   model_error__enum_values_by_name,
   1,
   model_error__value_ranges,
+  NULL,NULL,NULL,NULL   /* reserved[1234] */
+};
+static const ProtobufCEnumValue infer_input__enum_values_by_number[3] =
+{
+  { "INFER_INPUT_FEATURES", "INFER_INPUT__INFER_INPUT_FEATURES", 0 },
+  { "INFER_INPUT_WINDOW", "INFER_INPUT__INFER_INPUT_WINDOW", 1 },
+  { "INFER_INPUT_SENSOR", "INFER_INPUT__INFER_INPUT_SENSOR", 2 },
+};
+static const ProtobufCIntRange infer_input__value_ranges[] = {
+{0, 0},{0, 3}
+};
+static const ProtobufCEnumValueIndex infer_input__enum_values_by_name[3] =
+{
+  { "INFER_INPUT_FEATURES", 0 },
+  { "INFER_INPUT_SENSOR", 2 },
+  { "INFER_INPUT_WINDOW", 1 },
+};
+const ProtobufCEnumDescriptor infer_input__descriptor =
+{
+  PROTOBUF_C__ENUM_DESCRIPTOR_MAGIC,
+  "InferInput",
+  "InferInput",
+  "InferInput",
+  "",
+  3,
+  infer_input__enum_values_by_number,
+  3,
+  infer_input__enum_values_by_name,
+  1,
+  infer_input__value_ranges,
   NULL,NULL,NULL,NULL   /* reserved[1234] */
 };
 static const ProtobufCEnumValue infer_status__enum_values_by_number[5] =

@@ -191,6 +191,9 @@ class ModelInfo:
     feat_std: list[float]
     test_input: list[float]
     test_output: list[float]
+    # Set de infer_sample con que se evalúa EN el device (fase C). None = no
+    # hay: el modelo se transfiere igual, pero no se corre nada.
+    test_dataset: str | None = None
 
 @dataclass
 class ModelChunkRequestData:
@@ -227,6 +230,13 @@ class InferStatus(IntEnum):
     BAD_INPUT = 3
     FAILED = 4
 
+class InferInput(IntEnum):
+    """Espejo del enum InferInput de schema.proto. Mismos números que
+    infer_source de la config y que input_kind de inference_result."""
+    FEATURES = 0        # C1
+    WINDOW = 1          # C2
+    SENSOR = 2          # ventanas de los sensores del device, sin pedido
+
 @dataclass
 class InferSample:
     """Una ventana del set de test (tabla infer_sample), con su verdad."""
@@ -243,7 +253,8 @@ class InferSample:
 
 @dataclass
 class InferResultData:
-    """Lo que el device respondió a un InferRequest (protobuf InferResult)."""
+    """Lo que el device respondió a un InferRequest (protobuf InferResult), o
+    lo que clasificó por su cuenta (request_id 0, input_kind SENSOR)."""
     id_device: str
     request_id: int
     model_version: int
@@ -256,6 +267,7 @@ class InferResultData:
     config_version_applied: int
     time_client: int
     features: list[float]           # C2: las que calculó el device; vacía en C1
+    input_kind: int = 0             # InferInput
 
 @dataclass
 class Log:

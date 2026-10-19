@@ -450,78 +450,119 @@ static void on_chunk(const ModelChunk *c) {
 
 #define MAX_CLASSES 16
 
-/* Responde un InferRequest. Siempre responde -también cuando no puede
- * inferir, con el motivo en `status`-: el servidor espera una respuesta por
- * pedido, y sin ella lo daría por perdido y confundiría un error con una
- * pérdida de red. */
-static void on_infer_request(const InferRequest *req) {
-    InferResult res = INFER_RESULT__INIT;
-    res.id_device = s_device_id;
-    res.request_id = req->request_id;
-    res.model_version = model_runner_version();
-    res.config_version_applied = s_config_version;
+/* Lo que se clasifica, venga de donde venga: features ya calculadas, o una
+ * ventana cruda de la que se calculan acá. Una de las dos; si hay ventana,
+ * manda la ventana. */
+typedef struct {
+    const float *features;
+    size_t       n_features;
+    const float *window;
+    size_t       n_window;
+    float        fs_hz;
+    float        rpm;
+} infer_input_t;
 
+/* Buffers del resultado. Viven en el llamador porque `InferResult` apunta a
+ * ellos hasta que se empaqueta. */
+typedef struct {
     float probs[MAX_CLASSES];
-    float feats[FEATURES_COUNT];        // C2: las que se calculan acá
+    float feats[FEATURES_COUNT];
+} infer_buffers_t;
+
+/* Clasifica `in` con el modelo cargado y llena status, severidad, clase,
+ * probabilidades y tiempos de `res`. No sabe de MQTT ni de quién pidió: la
+ * usa el pedido del servidor (C1/C2) y la va a usar la fuente de sensores
+ * (infer_source = 2), que tiene que llamarla desde ESTA task: ni TFLM ni
+ * nebulaedge_features son reentrantes. */
+static void classify(const infer_input_t *in, InferResult *res, infer_buffers_t *buf) {
     float severity = 0;
     int64_t invoke_us = 0;
     int64_t t_feat = esp_timer_get_time();
     /* Del modelo CARGADO, no de s.manifest: si el último manifiesto fue de un
      * modelo rechazado, el que corre sigue siendo el anterior. */
     uint32_t n_classes = model_runner_n_classes();
+    const float *x = in->n_window ? buf->feats : in->features;
 
     if (!model_runner_loaded()) {
-        res.status = INFER_STATUS__INFER_STATUS_NO_MODEL;
-    }
-    else if (req->model_version != model_runner_version()) {
-        res.status = INFER_STATUS__INFER_STATUS_WRONG_MODEL;
+        res->status = INFER_STATUS__INFER_STATUS_NO_MODEL;
     }
     else if (n_classes == 0 || n_classes > MAX_CLASSES
-             || (req->n_features != FIRMWARE_N_FEATURES && req->n_window != FEATURES_WINDOW_SIZE)) {
-        res.status = INFER_STATUS__INFER_STATUS_BAD_INPUT;
+             || (in->n_window == 0 && in->n_features != FIRMWARE_N_FEATURES)) {
+        res->status = INFER_STATUS__INFER_STATUS_BAD_INPUT;
     }
-    else if (req->n_window == FEATURES_WINDOW_SIZE
-             && features_extract(req->window, req->n_window, req->fs_hz, req->rpm, feats) != 0) {
-        res.status = INFER_STATUS__INFER_STATUS_BAD_INPUT;
+    else if (in->n_window
+             && features_extract(in->window, in->n_window, in->fs_hz, in->rpm, buf->feats) != 0) {
+        res->status = INFER_STATUS__INFER_STATUS_BAD_INPUT;     // ventana que no es de FEATURES_WINDOW_SIZE
     }
-    else if (!model_runner_invoke(req->n_window ? feats : req->features, &severity, probs, &invoke_us)) {
-        res.status = INFER_STATUS__INFER_STATUS_FAILED;
+    else if (!model_runner_invoke(x, &severity, buf->probs, &invoke_us)) {
+        res->status = INFER_STATUS__INFER_STATUS_FAILED;
     }
     else {
-        res.status = INFER_STATUS__INFER_STATUS_OK;
-        res.severity = severity;
-        res.n_probs = n_classes;
-        res.probs = probs;
+        res->status = INFER_STATUS__INFER_STATUS_OK;
+        res->severity = severity;
+        res->n_probs = n_classes;
+        res->probs = buf->probs;
         uint32_t best = 0;
         for (uint32_t i = 1; i < n_classes; i++) {
-            if (probs[i] > probs[best]) best = i;
+            if (buf->probs[i] > buf->probs[best]) best = i;
         }
-        res.pred_fault = best;
-        res.inference_us = (uint32_t)invoke_us;
-        if (req->n_window) {
+        res->pred_fault = best;
+        res->inference_us = (uint32_t)invoke_us;
+        if (in->n_window) {
             /* El tiempo total menos el del modelo es el de las features. Y se
              * devuelven, para comparar en el servidor contra las de Python. */
-            res.feature_us = (uint32_t)(esp_timer_get_time() - t_feat - invoke_us);
-            res.n_features = FEATURES_COUNT;
-            res.features = feats;
+            res->feature_us = (uint32_t)(esp_timer_get_time() - t_feat - invoke_us);
+            res->n_features = FEATURES_COUNT;
+            res->features = buf->feats;
         }
         s.invoke_us = invoke_us;
     }
-    res.time_client = device_clock_now_s();
+}
 
-    if (res.status != INFER_STATUS__INFER_STATUS_OK) {
-        ESP_LOGW(TAG_INFER, "Pedido %llu sin inferir (estado %d)", (unsigned long long)req->request_id, (int)res.status);
-    }
+/* Completa lo que es igual para todo resultado y lo publica en /infer/result. */
+static void publish_result(InferResult *res) {
+    res->id_device = s_device_id;
+    res->model_version = model_runner_version();
+    res->config_version_applied = s_config_version;
+    res->time_client = device_clock_now_s();
 
-    size_t len = infer_result__get_packed_size(&res);
+    size_t len = infer_result__get_packed_size(res);
     uint8_t *buf = malloc(len);
     if (!buf) {
         ESP_LOGE(TAG_INFER, "Sin memoria para el InferResult");
         return;
     }
-    infer_result__pack(&res, buf);
+    infer_result__pack(res, buf);
     publish_typed("infer/result", 0x07, buf, len);
     free(buf);
+}
+
+/* Responde un InferRequest. Siempre responde -también cuando no puede
+ * inferir, con el motivo en `status`-: el servidor espera una respuesta por
+ * pedido, y sin ella lo daría por perdido y confundiría un error con una
+ * pérdida de red. */
+static void on_infer_request(const InferRequest *req) {
+    InferResult res = INFER_RESULT__INIT;
+    infer_buffers_t buf;
+    res.request_id = req->request_id;
+    res.input_kind = req->n_window ? INFER_INPUT__INFER_INPUT_WINDOW : INFER_INPUT__INFER_INPUT_FEATURES;
+
+    if (model_runner_loaded() && req->model_version != model_runner_version()) {
+        res.status = INFER_STATUS__INFER_STATUS_WRONG_MODEL;
+    }
+    else {
+        infer_input_t in = {
+            .features = req->features, .n_features = req->n_features,
+            .window = req->window, .n_window = req->n_window,
+            .fs_hz = req->fs_hz, .rpm = req->rpm,
+        };
+        classify(&in, &res, &buf);
+    }
+
+    if (res.status != INFER_STATUS__INFER_STATUS_OK) {
+        ESP_LOGW(TAG_INFER, "Pedido %llu sin inferir (estado %d)", (unsigned long long)req->request_id, (int)res.status);
+    }
+    publish_result(&res);
 }
 
 static void handle(const packet_t *pkt) {

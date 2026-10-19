@@ -412,6 +412,7 @@ class DataCodec:
             config_version_applied=pb.config_version_applied,
             time_client=pb.time_client,
             features=list(pb.features),
+            input_kind=pb.input_kind,
         )
 
     @staticmethod
@@ -430,6 +431,7 @@ class DataCodec:
         pb.config_version_applied = r.config_version_applied
         pb.time_client = r.time_client
         pb.features.extend(r.features)
+        pb.input_kind = r.input_kind
         return pb.SerializeToString()
 
     @staticmethod

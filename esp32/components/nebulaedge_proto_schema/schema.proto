@@ -185,6 +185,19 @@ message Data_2 {
 //
 //   servidor -> device   /topic/nebulaedge/{id}/infer/req     InferRequest
 //   device -> servidor   /topic/nebulaedge/{id}/infer/result  [0x07][InferResult]
+//
+// Un InferResult también puede llegar SIN pedido: con infer_source = 2 el
+// device clasifica las ventanas de sus propios sensores y publica cada
+// resultado con request_id = 0 e input_kind = INFER_INPUT_SENSOR. No hay
+// verdad con qué compararlo; el servidor lo guarda igual.
+
+// Sobre qué se infirió. Los mismos valores que infer_source de la config y que
+// input_kind de inference_result.
+enum InferInput {
+    INFER_INPUT_FEATURES = 0;               // C1: features que mandó el servidor.
+    INFER_INPUT_WINDOW = 1;                 // C2: ventana cruda que mandó el servidor.
+    INFER_INPUT_SENSOR = 2;                 // Ventana de los sensores del device, sin pedido.
+}
 
 message InferRequest {
     uint64 request_id = 1;
@@ -205,7 +218,7 @@ enum InferStatus {
 
 message InferResult {
     string id_device = 1;
-    uint64 request_id = 2;
+    uint64 request_id = 2;                  // 0 = sin pedido (INFER_INPUT_SENSOR).
     int32 model_version = 3;
     InferStatus status = 4;
     float severity = 5;
@@ -214,6 +227,7 @@ message InferResult {
     uint32 feature_us = 8;                  // C2: cálculo de features en el device. 0 en C1.
     uint32 inference_us = 9;
     int32 config_version_applied = 10;
-    uint32 time_client = 11;
+    uint32 time_client = 11;                // Al terminar de inferir; con sensores, ~el fin de la ventana.
     repeated float features = 12;           // C2: las que calculó el device, para compararlas con Python.
+    InferInput input_kind = 13;
 }
