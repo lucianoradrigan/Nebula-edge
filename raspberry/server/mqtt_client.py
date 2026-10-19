@@ -28,7 +28,7 @@ import paho.mqtt.client as mqtt
 import queue
 import threading
 from typing import Dict
-from system import MQTT_BROKER_PORT, MQTT_LOCAL_HOST, log
+from system import MQTT_BROKER_PORT, MQTT_HOST, log
 
 mqttc = None
 packet_queue = queue.Queue()        # Fallback: mensajes cuyo tópico no trae id_device
@@ -43,7 +43,7 @@ ack_queues: Dict[str, queue.Queue] = {}      # ACK de config, por device
 # sesión de ese device, que para un id inventado no existe nunca. Medido en
 # banco: 5000 publicaciones a un device inexistente dejaban 5000 mensajes en
 # cola, con maxsize=0 y sin una sola línea en el log. Desde que el servidor
-# hospeda su propio broker con acceso anónimo (mqtt_broker.py), eso es
+# hospeda su propio broker con acceso anónimo (servicio `mqtt`), eso es
 # alcanzable desde la red local.
 #
 # 1000 mensajes son unos 8 minutos de telemetría al ritmo normal de un device
@@ -196,10 +196,10 @@ def mqtt_start():
         mqttc.on_connect = on_connect
         mqttc.message_callback_add("/topic/nebulaedge/+/data", on_message_data)
         mqttc.message_callback_add("/topic/nebulaedge/+/config/ack", on_message_ack)
-        # El broker es este mismo proceso (mqtt_broker.py): el cliente del
-        # servidor se conecta a loopback. Antes acá estaba broker.hivemq.com,
-        # un broker público de terceros por el que pasaba toda la telemetría.
-        mqttc.connect(MQTT_LOCAL_HOST, MQTT_BROKER_PORT, 60)
+        # Al broker propio (servicio `mqtt` de docker-compose), no a uno
+        # ajeno: antes acá estaba broker.hivemq.com, un broker público de
+        # terceros por el que pasaba toda la telemetría.
+        mqttc.connect(MQTT_HOST, MQTT_BROKER_PORT, 60)
         mqttc.loop_start()
         _mqtt_started = True
 

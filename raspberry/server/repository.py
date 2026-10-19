@@ -136,7 +136,7 @@ class DatabaseRepository:
 
                     # Columna vacía = "usá el broker del servidor", que es el caso
                     # normal desde que el servidor hospeda el suyo
-                    # (mqtt_broker.py). Se deriva del host_ip_addr en vez de
+                    # (servicio `mqtt`). Se deriva del host_ip_addr en vez de
                     # guardarse en la base porque la IP del servidor cambia y una
                     # IP escrita en la tabla queda mintiendo. La columna sigue
                     # existiendo para el caso raro de apuntar un device a un

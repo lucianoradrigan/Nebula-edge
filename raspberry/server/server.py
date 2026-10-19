@@ -25,7 +25,6 @@ MAPA DEL SERVIDOR
     codec.py            (de)serialización protobuf
     models.py           dataclasses del dominio
     system.py           lo que viene del host: reloj UTC, DSN, adaptador BLE, WiFi
-    mqtt_broker.py      el broker MQTT que hospeda este proceso
     mqtt_client.py      cliente MQTT compartido del proceso
     gatt_uuids.py       UUIDs del servicio GATT
 
@@ -34,6 +33,7 @@ CONFIGURACIÓN
     discovery.py:
 
         PG_HOST / PG_DB / PG_USER / PG_PASSWORD   conexión a Postgres
+        MQTT_HOST / MQTT_PORT                     broker MQTT (servicio `mqtt`)
         BLE_ADAPTER                               adaptador BLE a usar
         HOST_IP / WIFI_SSID / WIFI_PASSWD         credenciales que van al device
 
@@ -46,26 +46,11 @@ from __future__ import annotations
 import asyncio
 
 from discovery import DeviceDiscovery
-from mqtt_broker import broker_shutdown, broker_start
 from system import log
 
-
-async def main() -> None:
-    """Levanta los recursos del proceso y le cede el control al descubrimiento.
-
-    El broker MQTT va PRIMERO y acá y no en una sesión: es un recurso del
-    proceso, igual que el cliente MQTT compartido, y tiene que estar escuchando
-    antes de que el primer device reciba su configuración apuntándole.
-    """
-    await broker_start()
-    try:
-        await DeviceDiscovery().run()
-    finally:
-        await broker_shutdown()
-
-
 if __name__ == "__main__":
+    master = DeviceDiscovery()
     try:
-        asyncio.run(main())
+        asyncio.run(master.run())
     except KeyboardInterrupt:
         log("\nCerrando programa...")
