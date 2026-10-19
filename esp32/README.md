@@ -11,6 +11,7 @@ Cada ESP32:
 3. Envía telemetría de sensores en formato protobuf.
 4. Detecta cambios de configuración en caliente mediante `config_version`.
 5. Puede operar en modo continuo o discontinuo con deep sleep.
+6. En modo INFER, baja un modelo de detección de fallas y lo corre en el propio device.
 
 Mapeo de protocolos (`protocol_conf`):
 
@@ -18,6 +19,7 @@ Mapeo de protocolos (`protocol_conf`):
 - `1`: UDP
 - `2`: TCP
 - `3`: BLE
+- `4`: INFER (sin telemetría; ver sección 7)
 
 ## 2) Sensores y datos recolectados
 
@@ -83,7 +85,37 @@ Comportamiento:
 - Si `sleep_time_s = 0`, el envío es continuo.
 - Si `sleep_time_s > 0`, el envío es discontinuo y luego entra a deep sleep.
 
-## 7) Validación rápida
+## 7) Modo INFER
+
+Con `protocol_conf = 4` el device se conecta al broker MQTT pero no manda
+telemetría: corre un modelo de TensorFlow Lite Micro que clasifica fallas de
+rodamiento a partir de ventanas de vibración. El flujo completo, del lado del
+sistema, está en la sección 9 del README de la raíz. Del lado del firmware:
+
+- `main/infer.c`: la task de INFER. Conduce la transferencia del modelo (pide
+  los trozos de a uno, con reintentos), lo verifica y responde los pedidos de
+  inferencia. `classify()` clasifica sin saber quién pidió: es el punto donde se
+  enchufará la fuente de sensores propios (`infer_source = 2`, sin implementar).
+- `main/model_runner.cc`: envuelve a TFLM (C++ por dentro, C por fuera). Carga el
+  modelo directo desde la flash mapeada, sin copiarlo; en RAM solo vive la
+  arena, que se reserva grande para cargar y después se achica a lo que el
+  modelo usa más 1 KB (el v3 usa 2.528 B).
+- `nebulaedge_model_store`: las dos ranuras del modelo (`model_a` y `model_b`
+  en `partitions.csv`, 512 KB cada una). El modelo nuevo se escribe en la que no
+  está activa y solo se activa si su sha256 calza; el avance de la
+  transferencia queda en NVS.
+- `nebulaedge_features`: port a C de `ml/features.py` (20 features de una
+  ventana de 2048 muestras). Es C portable, sin ESP-IDF, para poder compilarlo
+  en el computador y compararlo contra Python con `ml/check_features_c.py`.
+
+TFLM entra como componente administrado (`espressif/esp-tflite-micro`, declarado
+en `main/idf_component.yml`). `idf.py` lo baja a `managed_components/`, que no se
+versiona; la versión exacta queda fijada en `dependencies.lock`, que sí.
+
+La tabla de particiones es propia (`partitions.csv`): dos ranuras de app OTA de
+4 MB y las dos ranuras del modelo.
+
+## 8) Validación rápida
 
 1. Levantar server y DB en Raspberry.
 2. Flashear ESP32 y abrir monitor serial.
@@ -92,7 +124,7 @@ Comportamiento:
 5. Cambiar `protocol_conf` y aumentar `config_version` en DB.
 6. Verificar en monitor que se aplica el cambio en caliente.
 
-## 8) Troubleshooting
+## 9) Troubleshooting
 
 1. El ESP32 no recibe configuración BLE:
 - Revisar que el servidor en Raspberry esté corriendo.
@@ -101,8 +133,11 @@ Comportamiento:
 - Confirmar que se incrementó `config_version` en DB.
 3. No conecta por WiFi en TCP/UDP/MQTT:
 - Verificar `ssid`, `passwd` y `host_ip_addr` entregados por la Raspberry.
+4. Al abrir el puerto serie la placa queda en `waiting for download`:
+- Bajar DTR y RTS antes de abrir el puerto; pyserial los levanta al abrir y esa
+  combinación deja al ESP32-S3 en modo descarga.
 
-## 9) Estructura del firmware
+## 10) Estructura del firmware
 
 El proyecto sigue la organización estándar de ESP-IDF: `main/` orquesta y cada
 pieza reutilizable vive en `components/`.
@@ -121,6 +156,8 @@ Componentes, por rol:
 | Protocolos de salida | `nebulaedge_mqtt`, `nebulaedge_udp`, `nebulaedge_tcp`, `nebulaedge_ble` |
 | Red | `nebulaedge_wifi` |
 | Datos | `nebulaedge_proto_schema` (schema.proto + código generado) |
+| Identidad, hora y config en NVS | `nebulaedge_device` (id y reloj del device), `nebulaedge_config_store` (config guardada para el deep sleep) |
+| INFER | `nebulaedge_model_store` (ranuras del modelo), `nebulaedge_features` (features de vibración); en `main/`: `infer.c` y `model_runner.cc` |
 | Almacenamiento local | `nebulaedge_microsd` (montar/desmontar), `nebulaedge_sdstorage` (escritura de paquetes). Solo escribe en modo deep sleep. |
 | Definiciones compartidas | `nebulaedge_defs` |
 
@@ -159,8 +196,10 @@ Notas:
   (`nebulaedge_tcp_connect`) porque lwIP ya exporta un `tcp_connect` global y el
   enlace falla con símbolo duplicado.
 
-## 10) Relación con la documentación general
+## 11) Relación con la documentación general
 
 - Guía completa del sistema: `README.md` (raíz).
 - Módulos del servidor y cómo agregar un protocolo nuevo: sección 7 del README
   de la raíz.
+- Modo INFER de punta a punta: sección 9 del README de la raíz.
+- Entrenamiento de los modelos: `ml/README.md`.

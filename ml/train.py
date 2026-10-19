@@ -1,4 +1,6 @@
-"""Entrena el modelo de dos cabezas y lo exporta cuantizado a int8.
+"""Entrena el modelo de dos cabezas y guarda lo que necesita convert.py.
+
+    .venv/bin/python train.py --data cwru --trunk 256,128 --out model_cwru_wide
 
 El modelo es UNO SOLO con dos salidas: un tronco compartido que entiende la
 vibración, y dos cabezas que sacan conclusiones distintas del mismo
@@ -6,10 +8,10 @@ entendimiento. Las capas ocultas sirven a las dos tareas —"¿hay impactos?,
 ¿a qué orden?, ¿cuánta energía?" son las mismas preguntas para clasificar y
 para medir severidad— así que no hay razón para aprenderlas dos veces.
 
-La normalización de features va DENTRO del modelo, como primera capa. Es una
-decisión deliberada: así las constantes viajan dentro del .tflite y el ESP32
-no tiene que recibirlas ni aplicarlas por separado. Elimina de raíz el bug
-clásico de desplegar con una normalización distinta a la del entrenamiento.
+La estandarización de features va FUERA del modelo (el porqué está más abajo,
+junto a feat_mean): sus constantes se guardan en <out>_test.npz y viajan en el
+manifiesto, y el ESP32 las aplica antes de invocar. De dónde salen los datos y
+cómo se dividen lo dice data_sources.py; convert.py pasa el modelo a TFLite.
 """
 
 import argparse

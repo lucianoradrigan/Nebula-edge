@@ -10,3 +10,11 @@ Si se quiere modificar .proto solo hay que compilar otra vez (comando de arriba)
 
 
 Obs: protobuf es incluido como componente porque schema.c incluye el header proto-c.h.
+
+**El servidor usa el mismo contrato.** `schema.proto` está duplicado a propósito
+en `raspberry/server/schema.proto`: después de editarlo, copiarlo allá y
+regenerar también el código Python, desde `raspberry/server`:
+
+    protoc --python_out=. schema.proto
+
+Los dos `schema.proto` tienen que quedar idénticos (`diff` sin salida).

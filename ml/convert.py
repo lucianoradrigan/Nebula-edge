@@ -1,9 +1,13 @@
-"""Cuantiza el modelo a int8, lo exporta como array C y reporta la memoria.
+"""Convierte el modelo a TFLite (int8, o float32 con --float) y reporta la memoria.
+
+    .venv/bin/python convert.py --model model_cwru_wide --float
 
 Los dos números que deciden si el modelo cabe en el ESP32:
 
-  - TAMAÑO DEL MODELO: va en flash, como array const. La partición `model`
-    tiene 1 MB, así que esto prácticamente nunca es el límite.
+  - TAMAÑO DEL MODELO: va en flash. Cada ranura del modelo (model_a y model_b
+    en partitions.csv) tiene 512 KB, así que esto rara vez es el límite. El
+    array C (<model>_data.cc) es de antes de INFER, cuando el modelo iba
+    compilado en el firmware; hoy viaja por MQTT (export_model.py).
 
   - ARENA: el buffer contiguo de RAM donde TFLM mantiene las activaciones
     intermedias durante la inferencia. Este SÍ es el límite. En la IM-V2 el
@@ -106,7 +110,7 @@ def main():
     print(f"{'MAE severidad':<22}{mae_f32:>12.4f}{mae:>12.4f}{mae-mae_f32:>+12.4f}")
     print("=" * 58)
     print(f"\nMEMORIA")
-    print(f"  modelo .tflite        : {len(tflite_model):>7,} B   -> flash (part. model, 1 MB)")
+    print(f"  modelo .tflite        : {len(tflite_model):>7,} B   -> flash (ranura de 512 KB)")
     print(f"  cota de arena         : {arena:>7,} B   -> RAM contigua")
     print(f"  presupuesto del nodo  : {32*1024:>7,} B   (objetivo bajo 68 KB contiguos)")
     print(f"  margen                : {32*1024-arena:>7,} B   {'OK' if arena < 32*1024 else 'EXCEDIDO'}")
