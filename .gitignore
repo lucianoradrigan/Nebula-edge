@@ -30,3 +30,18 @@ raspberry/server/requirements.txt
 
 # Entorno virtual de Python (local, no versionado)
 raspberry/.venv/
+
+# ML: se versiona el código (*.py), no lo que produce.
+# archive/ es el dataset GC-FL (47 GB); .venv/ es TensorFlow (1,8 GB).
+ml/.venv/
+ml/archive/
+ml/**/__pycache__/
+ml/*.keras
+ml/*.npz
+ml/*.tflite
+ml/*_data.cc
+ml/*_data.h
+# INSERTs de export_model.py y export_testset.py: llevan el modelo entero en
+# hex, o miles de ventanas crudas (testset_*.sql pesa ~20 MB).
+ml/*_v*.sql
+ml/testset_*.sql
