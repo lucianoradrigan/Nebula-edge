@@ -47,6 +47,10 @@ PROTOCOL_BLE = 3
 # protocolo en caliente tal cual.
 PROTOCOL_INFER = 4
 
+# Los que el firmware conoce. Una config con otro valor no se le entrega: el
+# device la rechaza, y antes de que la rechazara entraba en un loop de reinicios.
+VALID_PROTOCOLS = frozenset({PROTOCOL_MQTT, PROTOCOL_UDP, PROTOCOL_TCP, PROTOCOL_BLE, PROTOCOL_INFER})
+
 
 async def handle_protocol(
     device_id: str,

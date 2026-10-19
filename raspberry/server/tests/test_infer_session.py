@@ -392,6 +392,17 @@ class InferRunTests(_InferHarness):
         await asyncio.sleep(0.4)
         self.assertEqual(len(self._requests()), 1, "sin modelo en el device no se sigue mandando")
 
+    def test_request_ids_unique_even_if_clock_stalls(self):
+        """Con run_id * 1000 + índice, la ventana 1000 de una corrida chocaba
+        con la 0 de una corrida empezada 1 ms después."""
+        session = sessions.InferDeviceSession(
+            DEVICE_ID, make_config(1, protocol_conf=PROTOCOL_INFER, model_version=1),
+            FakeRepo(1), quick_timeouts())
+        with mock.patch.object(sessions.time, "time_ns", lambda: 1_735_000_000_000_000_000):
+            ids = [session._new_request_id() for _ in range(2000)]
+        self.assertEqual(len(set(ids)), 2000)
+        self.assertNotIn(0, ids, "0 está reservado para los resultados sin pedido")
+
 
 def pytest_approx(v):
     """float32 en el cable: se compara redondeado a lo que entra en 32 bits."""

@@ -41,12 +41,21 @@ QueueHandle_t xQueueData = NULL;
 QueueHandle_t xQueueConfigBle = NULL;
 QueueHandle_t xQueueModel = NULL;       // manifiesto y trozos del modelo (INFER)
 
-/* Semáforo de arranque: lo da la task que recibe la primera configuración y lo
- * toman las tasks de envío para no mandar nada antes de estar configuradas.
- * Es de la aplicación. Vivía en nebulaedge_defs.c, o sea que un componente era
- * dueño de una primitiva de sincronización de main.c; nebulaedge_ble lo recibe
- * inyectado con ble_set_start_semaphore(). */
-SemaphoreHandle_t semaphore = NULL;
+/* Dos semáforos binarios, con dueños distintos.
+ *
+ * ble_start_semaphore: lo da nebulaedge_ble cuando el servidor escribe en la
+ * característica C, y lo toma ble_open() antes de arrancar las tasks de BLE.
+ * El componente lo recibe inyectado con ble_set_start_semaphore().
+ *
+ * protocol_change_semaphore: lo da la task de respuesta al aplicar una config
+ * nueva, y lo toma app_main para pasar al protocolo siguiente.
+ *
+ * Antes eran uno solo. Con BLE corriendo, una reconexión del servidor vuelve a
+ * escribir la característica C, y ese "start" despertaba a app_main como si
+ * fuera un cambio de protocolo: rehacía el bus I2C con las tasks vivas y
+ * después se quedaba bloqueado para siempre en ble_open(). */
+SemaphoreHandle_t ble_start_semaphore = NULL;
+SemaphoreHandle_t protocol_change_semaphore = NULL;
 
 Config *current_config = NULL;
 
@@ -163,6 +172,13 @@ static uint32_t data_window_count = 0;
 /* Antes de reiniciar por un protocol_conf inválido, para que el log alcance a
  * salir por el puerto serie. */
 #define RESTART_LOG_FLUSH_MS 1000
+
+/* Si la tabla de protocolos tiene una entrada para el protocol_conf de `c`.
+ * Las configs con un protocolo desconocido se rechazan al llegar, y no al
+ * intentar abrir el transporte. */
+static bool protocol_conf_is_valid(const Config *c) {
+    return c->protocol_conf >= 0 && c->protocol_conf < PROTOCOL_COUNT;
+}
 
 /* Vacía xQueueData liberando la memoria de cada packet_t pendiente.
  *
@@ -781,7 +797,7 @@ static void ble_close(void) { }
 static bool ble_open(void) {
     ESP_LOGI(TAG, "esperando conexión BLE para iniciar tasks...");
 
-    if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
+    if (xSemaphoreTake(ble_start_semaphore, portMAX_DELAY)) {
         ESP_LOGI(TAG, "toma semáforo, empieza recepción BLE");
     }
 
@@ -1371,6 +1387,19 @@ void vTaskGetResponse(void *pvParameters) {
             continue;
         }
 
+        /* Protocolo fuera de la tabla: también se rechaza, y el device sigue
+         * con la config que tiene. Antes se aplicaba, y app_main reiniciaba al
+         * no encontrar el protocolo; como el reinicio borra la config de NVS,
+         * el servidor volvía a mandar la misma por BLE y el device quedaba en
+         * un loop de reinicios. */
+        if (!protocol_conf_is_valid(new_config)) {
+            ESP_LOGW(proto->rsp_tag, "Config v%ld con protocol_conf inválido (%ld): se rechaza",
+                     (long)new_config->config_version, (long)new_config->protocol_conf);
+            send_config_ack(ack_over, new_config, false);
+            config__free_unpacked(new_config, NULL);
+            continue;
+        }
+
         /* Misma versión: se confirma y se descarta. No hay nada que cambiar. */
         if (!config_has_changed(current_config, new_config)) {
             ESP_LOGI(proto->rsp_tag, "La configuración recibida es la misma");
@@ -1381,13 +1410,21 @@ void vTaskGetResponse(void *pvParameters) {
 
         ESP_LOGI(proto->rsp_tag, "Configuración cambiada!");
 
-        /* Antes de liberar current_config: la task de INFER corre en paralelo
+        /* Antes de tocar current_config: la task de INFER corre en paralelo
          * y no debe seguir trabajando sobre un transporte que se va a cerrar.
          * Ver infer_freeze(). */
         infer_freeze();
 
-        // Reemplaza la configuración global y reinicia la ventana de deep sleep.
-        if (current_config) config__free_unpacked(current_config, NULL);
+        /* Reemplaza la configuración global y reinicia la ventana de deep sleep.
+         *
+         * La vieja NO se libera acá: la task de envío y las productoras siguen
+         * corriendo hasta pause_for_protocol_change(), y leen current_config
+         * sin lock (el tópico de MQTT, sleep_time_s, config_version). Si se
+         * liberaba antes, podían leer memoria ya devuelta al heap. Se cambia
+         * el puntero ahora —la task de envío necesita ver la config nueva para
+         * notar el cambio de protocolo— y la vieja se libera después de la
+         * pausa, cuando ya nadie la puede estar usando. */
+        Config *old_config = current_config;
         current_config = new_config;
         data_window_count = 0;
 
@@ -1400,6 +1437,7 @@ void vTaskGetResponse(void *pvParameters) {
          * paquetes del protocolo anterior no deben colarse al siguiente. */
         ESP_LOGI(proto->rsp_tag, "Se detienen las tasks del camino de datos");
         pause_for_protocol_change(proto->id);
+        if (old_config) config__free_unpacked(old_config, NULL);
 
         // Le da tiempo al ACK de llegar antes de cerrar. BLE no cierra: 0.
         if (proto->ack_drain_ms > 0) {
@@ -1409,7 +1447,7 @@ void vTaskGetResponse(void *pvParameters) {
         proto->close();
 
         // Señala a app_main que debe cambiar de protocolo.
-        if (xSemaphoreGive(semaphore)) {
+        if (xSemaphoreGive(protocol_change_semaphore)) {
             ESP_LOGI(proto->rsp_tag, "Libera semáforo para cambio de protocolo");
         }
 
@@ -1600,9 +1638,9 @@ void app_main() {
     // Obtiene MAC BT del dispositivo
     device_id_init();
 
-    /* Semáforo binario, arranca cerrado. Lo libera la task de respuesta al
-     * cambiar de protocolo, y lo espera app_main en cada rama del switch. */
-    semaphore = xSemaphoreCreateBinary();
+    // Los dos semáforos arrancan cerrados. Ver su declaración, arriba.
+    ble_start_semaphore = xSemaphoreCreateBinary();
+    protocol_change_semaphore = xSemaphoreCreateBinary();
 
     /* Compuerta de las tasks de sensores. Arranca con el permiso dado, para que
      * una productora recién creada produzca sin esperar a nadie. */
@@ -1640,7 +1678,7 @@ void app_main() {
      * cualquier reinicio, a diferencia de la config. */
     model_store_init();
     infer_init(xQueueModel);
-    ble_set_start_semaphore(semaphore);
+    ble_set_start_semaphore(ble_start_semaphore);
 
     /********************************************************************/
     /********************* CONFIG INICIAL (NVS/BLE) *********************/
@@ -1673,27 +1711,40 @@ void app_main() {
      * para poder ver si el heap baja con el tiempo. */
     start_memory_monitor();
 
-    // Espera recepción de paquete si no se recogió ninguno desde la NVS
-    if (!current_config) {
+    /* Espera recepción de paquete si no se recogió ninguno desde la NVS.
+     *
+     * Una config que no sirve se descarta y se sigue esperando, en vez de
+     * reiniciar: el reinicio no arregla nada, porque el servidor vuelve a
+     * mandar la misma apenas el device anuncia de nuevo. */
+    while (!current_config) {
 
         ESP_LOGI(TAG, "esperando configuración vía BLE");
         packet_t init_pkt;
-        if (xQueueReceive(xQueueConfigBle, &init_pkt, portMAX_DELAY) == pdTRUE) {
-            if (init_pkt.data == NULL || init_pkt.size == 0) {
-                ESP_LOGI(TAG, "configuración BLE vacía. Reiniciando...");
-                esp_restart();
-            }
-            current_config = config__unpack(NULL, init_pkt.size, init_pkt.data);
-            free(init_pkt.data);
-            if (current_config == NULL) {
-                ESP_LOGI(TAG, "error al desempaquetar paquete de configuración. Reiniciando...");
-                esp_restart();
-            }
-            device_clock_set(current_config->time_client);
-            data_window_count = 0;
-            ESP_LOGI(TAG, "configuración leída correctamente");
+        if (xQueueReceive(xQueueConfigBle, &init_pkt, portMAX_DELAY) != pdTRUE) {
+            continue;
         }
-    } 
+        if (init_pkt.data == NULL || init_pkt.size == 0) {
+            ESP_LOGW(TAG, "configuración BLE vacía, se descarta");
+            free(init_pkt.data);
+            continue;
+        }
+        current_config = config__unpack(NULL, init_pkt.size, init_pkt.data);
+        free(init_pkt.data);
+        if (current_config == NULL) {
+            ESP_LOGW(TAG, "error al desempaquetar paquete de configuración, se descarta");
+            continue;
+        }
+        if (!protocol_conf_is_valid(current_config)) {
+            ESP_LOGW(TAG, "config v%ld con protocol_conf inválido (%ld), se descarta",
+                     (long)current_config->config_version, (long)current_config->protocol_conf);
+            config__free_unpacked(current_config, NULL);
+            current_config = NULL;
+            continue;
+        }
+        device_clock_set(current_config->time_client);
+        data_window_count = 0;
+        ESP_LOGI(TAG, "configuración leída correctamente");
+    }
 
     /* PERSISTENCIA EN SD
      *
@@ -1771,7 +1822,9 @@ void app_main() {
          * entre los cuatro es cómo se abre el transporte, y eso es proto->open();
          * el resto del ciclo -WiFi arriba, arrancar tasks, bloquearse hasta que
          * la task de respuesta avise un cambio, WiFi abajo- es idéntico. */
-        if (current_config->protocol_conf < 0 || current_config->protocol_conf >= PROTOCOL_COUNT) {
+        /* No debería pasar: una config con protocolo inválido se rechaza al
+         * llegar. Queda como red de seguridad (p.ej. una NVS corrupta). */
+        if (!protocol_conf_is_valid(current_config)) {
             ESP_LOGE(TAG, "Selección de protocolo inválida: %ld", current_config->protocol_conf);
             vTaskDelay(pdMS_TO_TICKS(RESTART_LOG_FLUSH_MS));
             esp_restart();
@@ -1803,7 +1856,7 @@ void app_main() {
 
         /* Punto de bloqueo: lo libera la task de respuesta cuando aplica una
          * configuración que cambia de protocolo. */
-        if (xSemaphoreTake(semaphore, portMAX_DELAY)) {
+        if (xSemaphoreTake(protocol_change_semaphore, portMAX_DELAY)) {
             ESP_LOGI(TAG, "%s: se sale por cambio de protocolo", proto->name);
         }
 
@@ -1835,8 +1888,7 @@ void app_main() {
          * error, así que no se arreglaría solo. */
         if (proto->needs_wifi) {
             bool next_needs_wifi =
-                current_config->protocol_conf >= 0
-                && current_config->protocol_conf < PROTOCOL_COUNT
+                protocol_conf_is_valid(current_config)
                 && PROTOCOLS[current_config->protocol_conf].needs_wifi;
 
             if (!next_needs_wifi || wifi_credentials_changed(current_config)) {

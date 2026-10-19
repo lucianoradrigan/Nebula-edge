@@ -39,7 +39,7 @@ from models import BleContext, Timeouts, ConfigData, Log
 from codec import DataCodec
 from system import utc_epoch_now, database_dsn, log, BLEAdapterResolver
 from repository import DatabaseRepository
-from protocol_dispatch import handle_protocol, PROTOCOL_BLE
+from protocol_dispatch import handle_protocol, PROTOCOL_BLE, VALID_PROTOCOLS
 
 
 class DeviceDiscovery:
@@ -171,6 +171,13 @@ class DeviceDiscovery:
 
             if config is None:
                 log(f"No se encontró configuración para device_id {addr}")
+                self.devices.pop(addr, None)
+                continue
+
+            # Error de la tabla config, no del device: no tiene sentido
+            # mandarle algo que no puede aplicar.
+            if config.protocol_conf not in VALID_PROTOCOLS:
+                log(f"protocol_conf inválido ({config.protocol_conf}) en la config de {addr}: no se envía")
                 self.devices.pop(addr, None)
                 continue
 

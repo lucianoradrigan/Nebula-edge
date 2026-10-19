@@ -558,6 +558,7 @@ class InferDeviceSession(ProtocolSession):
         self._run_idx = 0
         self._run_done = False
         self._pending: tuple[int, float] | None = None     # (request_id, monotonic al enviar)
+        self._last_request_id = 0
         self._unsolicited = 0
 
     async def _load_model(self) -> ModelInfo | None:
@@ -669,14 +670,24 @@ class InferDeviceSession(ProtocolSession):
         log(f"INFER: corrida {self._run_id} empieza: {len(self._run_samples)} ventanas de {dataset} "
             f"({'features' if kind == 0 else 'ventanas crudas'}) a {self.device_id}, modelo v{self._model.model_version}")
 
+    def _new_request_id(self) -> int:
+        """Id único por device, también entre sesiones y reinicios del servidor.
+
+        Es la hora en microsegundos, o el anterior + 1 si la hora no avanzó.
+        Antes era run_id * 1000 + índice, que choca con la corrida siguiente
+        en cuanto un set pasa de mil ventanas, y el UPDATE del resultado caía
+        sobre la fila de la otra corrida.
+        """
+        self._last_request_id = max(self._last_request_id + 1, time.time_ns() // 1000)
+        return self._last_request_id
+
     async def _send_next(self, tx: InferTransport) -> None:
         if self._run_idx >= len(self._run_samples):
             await self._finish_run()
             return
         sample = self._run_samples[self._run_idx]
         kind = self._INPUT_KIND[self.config.infer_source]
-        # Único por device: el run_id es un epoch en ms y las ventanas no pasan de mil.
-        request_id = self._run_id * 1000 + self._run_idx
+        request_id = self._new_request_id()
         await self.database_repo.insert_inference_request_async(
             self.device_id, request_id, self._run_id, self._model.model_version, kind,
             self.config.config_version, sample, time.time())
