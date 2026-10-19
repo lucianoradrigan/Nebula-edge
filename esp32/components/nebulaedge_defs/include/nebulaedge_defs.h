@@ -30,7 +30,7 @@ typedef struct {
  * dos tienen que decidir entre IPv4 e IPv6. */
 typedef enum {
     IPV4,
-    IPV6
+    IPV6        // no soportado por nebulaedge_udp ni nebulaedge_tcp
 } ip_version_t;
 
 /* Marca de deep sleep que el device manda al servidor antes de dormirse, para

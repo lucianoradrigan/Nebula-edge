@@ -280,7 +280,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         // only posted for QoS level 1 and 2, as level 0 does not use acknowledgements. 
         // The event data contains the message ID of the publish message.
         case MQTT_EVENT_PUBLISHED:
-            ESP_LOGI(TAG, "PUBLISH: ACK from broker, msg_id=%d", event->msg_id);
+            ESP_LOGD(TAG, "PUBLISH: ACK from broker, msg_id=%d", event->msg_id);
             break;
 
         // The client has received a publish message. The event data contains: message ID, 
@@ -314,31 +314,25 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
  * @brief Initializes and starts the MQTT client with the provided configuration.
  * 
  * This function sets up the MQTT client using the broker configuration passed as parameter.
- * It configures logging levels for various ESP-IDF components, initializes the MQTT client
- * with the specified broker URI, registers event handlers, and starts the MQTT client.
+ * It initializes the MQTT client with the specified broker URI, registers event handlers,
+ * and starts the MQTT client.
  * 
  * @param mqtt_config_global Pointer to the global MQTT configuration structure containing
  *                          the broker information and other connection parameters.
  * 
  * @note This function sets the global client variable and should be called after
  *       network connectivity is established.
- * 
- * @warning The function modifies global logging levels for multiple ESP-IDF components.
- * 
+ *
  * @see mqtt_event_handler
  * @see esp_mqtt_client_init
  * @see esp_mqtt_client_start
  */
 void mqtt_start(const mqtt_config_global *mqtt_config_global) {
 
-    esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set("mqtt_client", ESP_LOG_VERBOSE);
-    esp_log_level_set("mqtt_example", ESP_LOG_VERBOSE);
-    esp_log_level_set("transport_base", ESP_LOG_VERBOSE);
-    esp_log_level_set("esp-tls", ESP_LOG_VERBOSE);
-    esp_log_level_set("transport", ESP_LOG_VERBOSE);
-    esp_log_level_set("outbox", ESP_LOG_VERBOSE);
-    
+    /* Acá se ponían varios componentes en VERBOSE y "*" en INFO. Lo primero
+     * no hacía nada (CONFIG_LOG_MAXIMUM_LEVEL es INFO, así que lo más fino ni
+     * se compila) y lo segundo pisaba, en cada conexión, cualquier nivel que
+     * la aplicación hubiera ajustado. Los niveles son cosa de la aplicación. */
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = mqtt_config_global->broker,
     };
@@ -389,7 +383,8 @@ int mqtt_publish(const char *topic, const uint8_t *data, size_t len, int qos) {
  *            - 1: At least once
  *            - 2: Exactly once
  * @return The message ID of the subscription request on success, or -1 if the
- *         MQTT client is not initialized.
+ *         MQTT client is not initialized or not connected yet (in that case
+ *         the subscription is requested again on MQTT_EVENT_CONNECTED).
  *
  * @note Ensure that the MQTT client is properly initialized before calling
  *       this function. If the client is not initialized, an error will be
@@ -402,14 +397,19 @@ int mqtt_subscribe(const char *topic, int qos) {
         return -1;
     }
 
-    // Reintenta hasta poder suscribir correctamente
-    int msg_id = -1;
-    while (msg_id < 0) {
-        remember_subscription(topic, qos);
-        msg_id = esp_mqtt_client_subscribe(client, topic, qos); 
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    /* Se recuerda ANTES de pedirla: si el cliente todavía no conecta, la
+     * suscripción falla acá pero resubscribe_all() la pide al llegar
+     * MQTT_EVENT_CONNECTED. Y si conectó entre medio, el pedido de acá ya
+     * encuentra el cliente conectado.
+     *
+     * Antes era un bucle que reintentaba con 1 s de espera después de CADA
+     * intento, también del que salía bien: 1 s por tópico en cada apertura
+     * (4 s en INFER), y un bucle sin fin si el broker no respondía nunca. */
+    remember_subscription(topic, qos);
+    int msg_id = esp_mqtt_client_subscribe(client, topic, qos);
+    if (msg_id < 0) {
+        ESP_LOGW(TAG, "Suscripción a %s pendiente: se pide al conectar", topic);
     }
-
     return msg_id;
 }
 
@@ -435,43 +435,3 @@ void mqtt_finish(void) {
         ESP_LOGI(TAG, "MQTT client cerrado correctamente.");
     }
 }
-
-// Publica datos continuamente vía MQTT, un test packet.
-// mode: 0 para modo discontinuo y 1 para modo continuo
-// ESTO IRÁ DESPUÉS EN MAIN
-// static const int ID_DEVICE = 12345;
-// int mqtt_publish(int mode) {
-//     int msg_id;
-
-//     // Inicialización de estructura protobuf
-//     Measure packet = MEASURE__INIT;
-
-
-//     // Loop de envío de datos
-//     while (1) {
-//         // Se asignan los valores a enviar en la estructura protobuf
-//         packet.id_device = ID_DEVICE;
-//         packet.timestamp_esp = esp_log_timestamp();
-//         printf("time in milliseconds is %ld\n", packet.timestamp_esp);
-
-//         // Serializar la estructura (en variable buffer)
-//         size_t packed_size = measure__get_packed_size(&packet);     // Obtiene el tamaño del empaquetado
-//         uint8_t buffer[packed_size];
-//         printf("%d bytes a enviar\n", packed_size); 
-//         measure__pack(&packet, buffer);                             // Empaqueta
-
-//         // Publicar mensaje en broker MQTT
-//         msg_id = esp_mqtt_client_publish(client, "/topic/nebulaedge", (char*)buffer, packed_size, 1, 0);
-//         ESP_LOGI(TAG, "sent publish successful, msg_id=%d, timestamp: %ld", msg_id, packet.timestamp_esp);
-        
-//         // Entra en modo deep sleep si mode == 0
-//         if (mode == 0) {
-//             ESP_LOGI(TAG, "Entering deep sleep for %d seconds", 10);
-//             esp_deep_sleep(1000000LL * 10);
-//         }
-//         else {
-//             // Delay 500 ms between packets
-//             vTaskDelay(500 / portTICK_PERIOD_MS); 
-//         }
-//     }
-// }

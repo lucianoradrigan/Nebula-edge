@@ -64,22 +64,13 @@ static int sock = -1;
  *     un reset físico. */
 static bool link_down = false;
 
-/* Familia y protocolo con los que se abrió el socket. Se guardan para poder
- * rearmarlo en el reconnect sin volver a resolver los parámetros: el ip_host
- * del tcp_params_t apunta dentro del Config, que se libera al cambiar de
- * configuración, así que guardarse ese puntero sería quedarse con uno colgado.
- * dest_addr ya tiene la dirección resuelta y es nuestro. */
-static int sock_addr_family = 0;
-static int sock_ip_protocol = 0;
-
-/* Variable global para guardar información del destinatario.
- * esta se configura al momento de abrir el socket. */
-static struct sockaddr *dest_addr;
-
-/* Largo real de la estructura apuntada por dest_addr. Hace falta para
- * connect(): sizeof(*dest_addr) devuelve el de `struct sockaddr` genérico,
- * que solo por casualidad coincide con el de sockaddr_in (16 bytes). */
-static socklen_t dest_addr_len = 0;
+/* Destino, guardado al abrir para poder rearmar el socket en el reconnect
+ * sin volver a resolver los parámetros: el ip_host del tcp_params_t apunta
+ * dentro del Config, que se libera al cambiar de configuración, así que
+ * guardarse ese puntero sería quedarse con uno colgado. Solo IPv4: ver
+ * nebulaedge_tcp_open_socket(). */
+static struct sockaddr_in dest_addr;
+static bool dest_set = false;
 
 /* Dos tasks escriben en el mismo socket: vTaskSendTCP (telemetría) y
  * vTaskGetResponseTCP (ACK de config), esta última con más prioridad.
@@ -89,24 +80,11 @@ static socklen_t dest_addr_len = 0;
  * El mutex serializa el envío del frame entero. */
 static SemaphoreHandle_t tcp_send_mutex = NULL;
 
-/* Función auxiliar que ayuda a buscar una interfaz de red dada su descripción. */
-static bool netif_desc_matches_with(esp_netif_t *netif, void *ctx) {
-    return strcmp(ctx, esp_netif_get_desc(netif)) == 0;
-}
-
-/* Función auxiliar que ayuda a buscar una interfaz de red dada su descripción. */
-static esp_netif_t *get_netif_from_desc(const char *desc) {
-    return esp_netif_find_if(netif_desc_matches_with, (void*)desc);
-}
-
-/* Abre socket TCP IPv4 o IPv6 y lo configura en base a los parámetros entregados. 
- * Luego, se setea la dirección IPv4 o IPv6 del host. Para cambiar de host 
- * hay que cerrar el socket y llamar de nuevo a esta función con los nuevos parámetros. */
 /* Crea el socket y le deja puestas las opciones. Lo usan la apertura normal y
  * el reconnect, para que las dos rutas queden con el mismo SO_RCVTIMEO: si el
  * socket rearmado quedara sin él, recv() volvería a bloquear para siempre. */
 static int create_socket(void) {
-    sock = socket(sock_addr_family, SOCK_STREAM, sock_ip_protocol);
+    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     if (sock < 0) {
         ESP_LOGE(TAG, "Unable to create socket: errno %d (%s)", errno, strerror(errno));
         return -1;
@@ -127,64 +105,23 @@ static int create_socket(void) {
     return 0;
 }
 
+/* Abre el socket TCP y fija el host. Para cambiar de host hay que cerrar el
+ * socket y llamar de nuevo a esta función.
+ *
+ * SOLO IPv4. La rama IPv6 nunca se usó y no funcionaba: ponía en
+ * sin6_scope_id un puntero a la interfaz en vez de su índice. Se quitó en vez
+ * de arreglarla sin poder probarla. */
 void nebulaedge_tcp_open_socket(tcp_params_t *params) {
-    int addr_family = 0;
-    int ip_protocol = 0;
-
-    // Caso selección IPv4
-    if (params->ip_version == IPV4) {
-
-        // Pide memoria para guardar información de destinatario
-        struct sockaddr_in *dest_addr_ipv4 = malloc(sizeof(struct sockaddr_in));
-        if (dest_addr_ipv4 == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate memory for IPv4 address");
-            return;
-        }
-
-        // Configura destinatario
-        inet_pton(AF_INET, params->ip_host, &dest_addr_ipv4->sin_addr);
-        dest_addr_ipv4->sin_family = AF_INET;
-        dest_addr_ipv4->sin_port = htons(params->port);
-
-        // Asigna destinatario a la variable global
-        dest_addr = (struct sockaddr *)dest_addr_ipv4;
-        dest_addr_len = sizeof(struct sockaddr_in);
-
-        // Asigna parámetros del socket
-        addr_family = AF_INET;
-        ip_protocol = IPPROTO_IP;
+    if (params->ip_version != IPV4) {
+        ESP_LOGE(TAG, "Solo IPv4 está soportado");
+        return;
     }
 
-    // Caso selección IPv6
-    else if (params->ip_version == IPV6) {
-    
-        // Pide memoria para guardar información de destinatario.
-        struct sockaddr_in6 *dest_addr_ipv6 = malloc(sizeof(struct sockaddr_in6));
-        if (dest_addr_ipv6 == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate memory for IPv6 address");
-            return;
-        }
-
-        // Configura destinatario
-        memset(dest_addr_ipv6, 0, sizeof(struct sockaddr_in6));
-        inet_pton(AF_INET6, params->ip_host, &dest_addr_ipv6->sin6_addr);
-        dest_addr_ipv6->sin6_family = AF_INET6;
-        dest_addr_ipv6->sin6_port = htons(params->port);
-        dest_addr_ipv6->sin6_scope_id = (uint32_t)get_netif_from_desc("sta");
-
-        if (dest_addr_ipv6->sin6_scope_id == NETIF_NO_INDEX) {
-            ESP_LOGE(TAG, "NETIF_NO_INDEX");
-            return;
-        }
-
-        // Asigna destinatario a la variable global
-        dest_addr = (struct sockaddr *)dest_addr_ipv6;
-        dest_addr_len = sizeof(struct sockaddr_in6);
-
-        // Asigna parámetros del socket
-        addr_family = AF_INET6;
-        ip_protocol = IPPROTO_TCP;
-    }
+    memset(&dest_addr, 0, sizeof dest_addr);
+    inet_pton(AF_INET, params->ip_host, &dest_addr.sin_addr);
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(params->port);
+    dest_set = true;
 
     // El mutex de envío vive lo que el proceso; se crea en la primera apertura.
     if (tcp_send_mutex == NULL) {
@@ -193,9 +130,6 @@ void nebulaedge_tcp_open_socket(tcp_params_t *params) {
             ESP_LOGE(TAG, "No se pudo crear el mutex de envío TCP");
         }
     }
-
-    sock_addr_family = addr_family;
-    sock_ip_protocol = ip_protocol;
 
     if (create_socket() != 0) {
         return;
@@ -210,7 +144,7 @@ int nebulaedge_tcp_connect(void) {
     // Conecta al server
     ESP_LOGI(TAG, "socket is %d\n", sock);
 
-    int err = connect(sock, dest_addr, dest_addr_len);
+    int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof dest_addr);
     if (err != 0) {
         ESP_LOGE(TAG, "Socket unable to connect: errno %d (%s)", errno, strerror(errno));
         return err;
@@ -228,11 +162,11 @@ bool nebulaedge_tcp_link_is_down(void) {
  * conectado.
  *
  * El connect va en modo no bloqueante con select(): ver TCP_CONNECT_TIMEOUT_MS.
- * dest_addr NO se libera acá, que es la diferencia con
+ * dest_addr NO se borra acá, que es la diferencia con
  * nebulaedge_tcp_close_socket(): el destino sigue siendo el mismo y es lo único
  * que permite reconectar sin volver a pedirle los parámetros a la aplicación. */
 int nebulaedge_tcp_reconnect(void) {
-    if (dest_addr == NULL) {
+    if (!dest_set) {
         ESP_LOGE(TAG, "No se puede reconectar: no hay destino guardado");
         return -1;
     }
@@ -254,7 +188,7 @@ int nebulaedge_tcp_reconnect(void) {
         flags = -1;     // se sigue igual: un connect bloqueante es peor que nada
     }
 
-    int err = connect(sock, dest_addr, dest_addr_len);
+    int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof dest_addr);
     if (err != 0 && errno == EINPROGRESS) {
         /* El connect quedó en curso. select() sobre escritura avisa cuando
          * termina, bien o mal; el resultado real hay que pedirlo con
@@ -368,7 +302,7 @@ esp_err_t nebulaedge_tcp_send(const uint8_t *data, size_t len) {
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "TCP packet sent (%u B de payload)", (unsigned)len);
+    ESP_LOGD(TAG, "TCP packet sent (%u B de payload)", (unsigned)len);
     return ESP_OK;
 }
 
@@ -503,8 +437,6 @@ void nebulaedge_tcp_close_socket(void) {
     else {
         ESP_LOGW(TAG, "Socket is already closed");
     }
-    free(dest_addr);
-    dest_addr = NULL;
-    dest_addr_len = 0;
+    dest_set = false;
     link_down = false;
 }

@@ -9,7 +9,7 @@
 typedef struct {
     char *ip_host;            // Dirección IP (IPv4)
     int port;                 // Puerto
-    ip_version_t ip_version;  // tipo. IPv4 o IPv6
+    ip_version_t ip_version;  // solo IPV4 está soportado
 } udp_params_t;
 
 void nebulaedge_udp_open_socket(udp_params_t *params);

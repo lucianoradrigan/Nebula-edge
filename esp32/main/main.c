@@ -567,7 +567,7 @@ static esp_err_t mqtt_send_data(const uint8_t *data, size_t size) {
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG_SEND_MQTT, "Paquete publicado por MQTT. msg_id=%d", msg_id);
+    ESP_LOGD(TAG_SEND_MQTT, "Paquete publicado por MQTT. msg_id=%d", msg_id);
     return ESP_OK;
 }
 
@@ -1070,7 +1070,7 @@ static void send_config_ack(protocol_t over, const Config *cfg, bool applied) {
 static void enqueue_packet(packet_t *pkt, const char *tag) {
     int send = xQueueSend(xQueueData, pkt, portMAX_DELAY);
     if (send == pdTRUE) {
-        ESP_LOGI(tag, "Se ha insertado correctamente en la xQueue");
+        ESP_LOGD(tag, "Se ha insertado correctamente en la xQueue");
     }
     else {
         ESP_LOGW(tag, "xQueueSend falló (code=%d), paquete descartado y memoria liberada", send);
@@ -1151,7 +1151,7 @@ void vTaskCollectInertial(void *pvParameters) {
         }
         packet.data[0] = 0x02;
         data_2__pack(&data_2, packet.data + 1);
-        ESP_LOGI(TAG_COLLECT_INERTIAL, "Paquete Data_2 generado");
+        ESP_LOGD(TAG_COLLECT_INERTIAL, "Paquete Data_2 generado");
 
         enqueue_packet(&packet, TAG_COLLECT_INERTIAL);
 
@@ -1206,7 +1206,7 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         }
         packet.data[0] = 0x01;
         data_1__pack(&data_1, packet.data + 1);
-        ESP_LOGI(TAG_COLLECT_ENV, "Paquete Data_1 generado");
+        ESP_LOGD(TAG_COLLECT_ENV, "Paquete Data_1 generado");
 
         enqueue_packet(&packet, TAG_COLLECT_ENV);
 
@@ -1458,12 +1458,6 @@ void vTaskGetResponse(void *pvParameters) {
         vTaskSuspend(NULL);
     }
 }
-
-
-
-
-
-
 
 /****************************************************************/
 /******************* DIAGNÓSTICO DE ARRANQUE ********************/

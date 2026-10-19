@@ -26,96 +26,30 @@ static const char *TAG = "nebulaedge_udp";
 /* El descriptor de socket es definido globalmente en este script. */
 static int sock = -1;
 
-/* Variable global para guardar información del destinatario.
- * esta se configura al momento de abrir el socket. */
-static struct sockaddr *dest_addr;
+/* Destinatario, fijado al abrir el socket. Es solo IPv4: ver
+ * nebulaedge_udp_open_socket(). */
+static struct sockaddr_in dest_addr;
 
-/* Realiza un print de todos los descriptores de red abiertos. */
-static void print_all_netif_descriptions(void) {
-    esp_netif_t *netif = NULL;
-    while ((netif = esp_netif_next_unsafe(netif)) != NULL) {
-        ESP_LOGI("netif", "Interface description: %s", esp_netif_get_desc(netif));
-    }
-}
-
-/* Función auxiliar que ayuda a buscar una interfaz de red dada su descripción. */
-static bool netif_desc_matches_with(esp_netif_t *netif, void *ctx) {
-    return strcmp(ctx, esp_netif_get_desc(netif)) == 0;
-}
-
-/* Función auxiliar que ayuda a buscar una interfaz de red dada su descripción. */
-static esp_netif_t *get_netif_from_desc(const char *desc) {
-    return esp_netif_find_if(netif_desc_matches_with, (void*)desc);
-}
-
-/* Abre socket UDP IPv4 o IPv6 y lo configura en base a los parámetros entregados. 
- * Luego, asigna la dirección IPv4 o IPv6 de destino cambiando la variable global 
- * dest_addr. Para cambiar de destinatario hay que cerrar el socket y llamar de nuevo
- * a esta función con nuevos parámetros. */
-
- /* SEPARAR RESPONSABILIDADES de ABRIR Y PREPARAR DESTINO (pensarlo igual) */
+/* Abre el socket UDP y fija el destinatario. Para cambiar de destinatario hay
+ * que cerrar el socket y llamar de nuevo a esta función.
+ *
+ * SOLO IPv4. Había una rama IPv6 que nunca se usó y que no funcionaba: ponía
+ * en sin6_scope_id un puntero a la interfaz en vez de su índice, y sendto()
+ * pasaba sizeof(struct sockaddr) (16 B) en vez de los 28 B de sockaddr_in6.
+ * Se quitó en vez de arreglarla sin poder probarla. */
 void nebulaedge_udp_open_socket(udp_params_t *params) {
-    int addr_family = 0;
-    int ip_protocol = 0;
-
-    // Caso selección IPv4
-    if (params->ip_version == IPV4) {
-
-        // Pide memoria para guardar información de destinatario.
-        struct sockaddr_in *dest_addr_ipv4 = malloc(sizeof(struct sockaddr_in));
-        if (dest_addr_ipv4 == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate memory for IPv4 address");
-            return;
-        }
-        
-        // Configura destinatario
-        dest_addr_ipv4->sin_addr.s_addr = inet_addr(params->ip_host);
-        dest_addr_ipv4->sin_family = AF_INET;
-        dest_addr_ipv4->sin_port = htons(params->port);
-
-        // Asigna destinatario a la variable global
-        dest_addr = (struct sockaddr *)dest_addr_ipv4;
-
-        // Parámetros del socket
-        addr_family = AF_INET;
-        ip_protocol = IPPROTO_IP;
+    if (params->ip_version != IPV4) {
+        ESP_LOGE(TAG, "Solo IPv4 está soportado");
+        return;
     }
 
-    // Caso selección IPv6
-    else if (params->ip_version == IPV6) {
-    
-        // Pide memoria para guardar información de destinatario.
-        struct sockaddr_in6 *dest_addr_ipv6 = malloc(sizeof(struct sockaddr_in6));
-        if (dest_addr_ipv6 == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate memory for IPv6 address");
-            return;
-        }
-
-        // Configura destinatario
-        memset(dest_addr_ipv6, 0, sizeof(struct sockaddr_in6));
-        inet6_aton(params->ip_host, &dest_addr_ipv6->sin6_addr);
-        dest_addr_ipv6->sin6_family = AF_INET6;
-        dest_addr_ipv6->sin6_port = htons(params->port);
-
-        // Print de descripciones de socket
-        print_all_netif_descriptions();
-
-        // El nombre por default es sta: este se obtiene del componente
-        // nebulaedge_wifi
-        dest_addr_ipv6->sin6_scope_id = (uint32_t)get_netif_from_desc("sta");
-        if (dest_addr_ipv6->sin6_scope_id == NETIF_NO_INDEX) {
-            ESP_LOGE(TAG, "NETIF_NO_INDEX");
-            return;
-        }
-
-        dest_addr = (struct sockaddr *)dest_addr_ipv6;
-
-        addr_family = AF_INET6;
-        ip_protocol = IPPROTO_IPV6;
-    }
+    memset(&dest_addr, 0, sizeof dest_addr);
+    dest_addr.sin_addr.s_addr = inet_addr(params->ip_host);
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(params->port);
 
     // ESP32 abre socket
-    sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
+    sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0) {
         ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
         return;
@@ -144,13 +78,13 @@ esp_err_t nebulaedge_udp_send(const uint8_t *data, size_t len) {
     }
 
     // Envía payload a una dirección IP y puerto
-    int err = sendto(sock, data, len, 0, dest_addr, sizeof(*dest_addr));
+    int err = sendto(sock, data, len, 0, (struct sockaddr *)&dest_addr, sizeof dest_addr);
     if (err < 0) {
         ESP_LOGE(TAG, "Error occurred during sending: %s", strerror(errno));
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "UDP packet sent");
+    ESP_LOGD(TAG, "UDP packet sent");
     return ESP_OK;
 }
 
@@ -194,6 +128,4 @@ void nebulaedge_udp_close_socket(void) {
     else {
         ESP_LOGE(TAG, "Socket is already closed");
     }
-    free(dest_addr);
-    dest_addr = NULL;
 }
