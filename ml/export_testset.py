@@ -26,6 +26,7 @@ import numpy as np
 
 import features
 from data_sources import DATA_SOURCES
+from sql_literals import sql_text
 
 
 def floats(values):
@@ -57,14 +58,14 @@ def main():
     with open(out, "w") as fh:
         fh.write("-- Generado por ml/export_testset.py. No editar a mano.\n")
         fh.write("BEGIN;\n")
-        fh.write(f"DELETE FROM nebulaedge_schema.infer_sample WHERE dataset = '{dataset}';\n")
+        fh.write(f"DELETE FROM nebulaedge_schema.infer_sample WHERE dataset = {sql_text(dataset)};\n")
         for n, (i, wi) in enumerate(zip(idx, window_index)):
             w = ds["windows"][i]
             feats = features.extract(w, ds["fs_hz"], ds["rpm"][i])
             fh.write(
                 "INSERT INTO nebulaedge_schema.infer_sample (dataset, sample_index, source_file, window_index, "
                 "true_fault, true_severity, rpm, fs_hz, features, \"window\") VALUES ("
-                f"'{dataset}', {n}, '{ds['source_file'][i]}', {wi}, {int(ds['label'][i])}, "
+                f"{sql_text(dataset)}, {n}, {sql_text(ds['source_file'][i])}, {wi}, {int(ds['label'][i])}, "
                 f"{float(ds['severity'][i]):.9g}, {float(ds['rpm'][i]):.9g}, {float(ds['fs_hz']):.9g}, "
                 f"{floats(feats)}, {floats(w)});\n")
         fh.write("COMMIT;\n")

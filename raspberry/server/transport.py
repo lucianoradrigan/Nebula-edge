@@ -135,6 +135,23 @@ class Transport(ABC):
         return False
 
 
+def _bind_or_close(sock: socket.socket, host: str, port: int, name: str) -> bool:
+    """bind() que no lanza: si falla, cierra el socket y devuelve False.
+
+    Falla con el puerto ocupado, p.ej. dos devices con el mismo puerto en la
+    tabla config. Antes la excepción salía de la sesión y el socket quedaba
+    abierto; así, open() devuelve False y la sesión termina como cualquier
+    transporte que no se pudo abrir.
+    """
+    try:
+        sock.bind((host, port))
+        return True
+    except OSError as e:
+        log(f"{name}: no se pudo escuchar en {host}:{port}: {e}")
+        sock.close()
+        return False
+
+
 class UdpTransport(Transport):
     """UDP: el server escucha en un puerto fijo por device (`config.udp_port`)
     y le responde a la última dirección desde la que ese device escribió.
@@ -162,7 +179,8 @@ class UdpTransport(Transport):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # reutiliza puerto si quedó abierto
         sock.setblocking(False)         # para no bloquear el event loop
-        sock.bind((host, port))
+        if not _bind_or_close(sock, host, port, self.name):
+            return False
 
         self._sock = sock
         log(f"Servidor UDP escuchando en {host}:{port}")
@@ -265,7 +283,8 @@ class TcpTransport(Transport):
         listen = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listen.setblocking(False)
-        listen.bind((host, port))
+        if not _bind_or_close(listen, host, port, self.name):
+            return False
         listen.listen()
         self._listen = listen
         log(f"Servidor TCP escuchando en {host}:{port}")

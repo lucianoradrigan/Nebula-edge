@@ -51,7 +51,7 @@ class DataCodec:
     solo se tendrá que modificar esto."""
     TYPE_DATA_1 = 0x01
     TYPE_DATA_2 = 0x02
-    # TYPE_ACK = 0x03 sería bueno implementarlo
+    # 0x03 sin uso: el ConfigAck viaja sin prefijo de tipo (ver deserialize_config_ack)
     TYPE_DEEP_SLEEP = 0x04
     # Los dos que manda el device en INFER (ver schema.proto).
     TYPE_MODEL_STATUS = 0x05

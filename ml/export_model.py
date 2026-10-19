@@ -24,6 +24,7 @@ import numpy as np
 import tensorflow as tf
 
 import features
+from sql_literals import sql_text
 
 
 def run_tflite(tflite_model, x_std):
@@ -74,13 +75,13 @@ def main():
     test_dataset = args.test_dataset
     if test_dataset is None:
         test_dataset = str(data["test_dataset"]) if "test_dataset" in data else ""
-    test_dataset_sql = f"'{test_dataset}'" if test_dataset else "NULL"
+    test_dataset_sql = sql_text(test_dataset or None)
 
     test_input = data["X_raw"][0]
     test_output, i_sev, i_fault = run_tflite(tflite_model, (test_input - mean) / std)
 
     sha256 = hashlib.sha256(tflite_model).hexdigest()
-    class_names = "ARRAY[" + ", ".join(f"'{c}'" for c in classes) + "]::text[]"
+    class_names = "ARRAY[" + ", ".join(sql_text(c) for c in classes) + "]::text[]"
 
     sql = f"""-- Generado por ml/export_model.py. No editar a mano.
 -- {tflite_path}, {len(tflite_model)} B, sha256 {sha256}
@@ -105,7 +106,7 @@ INSERT INTO nebulaedge_schema.model (
     {sql_floats(std)},
     {sql_floats(test_input)},
     {sql_floats(test_output)},
-    '{trained_on}',
+    {sql_text(trained_on)},
     {test_dataset_sql}
 );
 """

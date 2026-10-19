@@ -10,8 +10,9 @@ UTILIDAD PRINCIPAL
         protocol_conf:   0 MQTT    1 UDP    2 TCP    3 BLE    4 INFER
 
 DAR DE ALTA UN PROTOCOLO NUEVO
-    `session_classes` es, junto con escribir el `Transport` (transport.py) y su
-    subclase de sesión (sessions.py), lo único que hay que tocar.
+    `session_classes` es, junto con escribir el `Transport` (transport.py), su
+    subclase de sesión (sessions.py) y sumar su número a VALID_PROTOCOLS
+    (models.py), lo único que hay que tocar.
 
 CUÁNDO TERMINA DE VERDAD
     El bucle corta cuando `session.run()` devuelve None: el device dejó de
@@ -29,28 +30,17 @@ import asyncio
 from dataclasses import replace
 
 from models import BleContext, ConfigData, Timeouts
+# Las constantes viven en models.py (sessions.py también las usa, y no puede
+# importar este módulo sin un ciclo); se reexportan acá con el nombre de siempre.
+from models import (  # noqa: F401
+    PROTOCOL_MQTT, PROTOCOL_UDP, PROTOCOL_TCP, PROTOCOL_BLE, PROTOCOL_INFER, VALID_PROTOCOLS,
+)
 from repository import DatabaseRepository
 from sessions import (
     MQTTDeviceSession, UDPDeviceSession, TCPDeviceSession, BLEDeviceSession,
     InferDeviceSession,
 )
 from system import log
-
-# Valores de `protocol_conf` en la tabla config. Son parte del contrato con el
-# firmware (ver el switch de app_main en esp32/main/main.c): no se reordenan.
-PROTOCOL_MQTT = 0
-PROTOCOL_UDP = 1
-PROTOCOL_TCP = 2
-PROTOCOL_BLE = 3
-# No es un transporte nuevo: es MQTT con otro uso (transferir un modelo e
-# inferir, sin telemetría). Va en la misma numeración para reusar el cambio de
-# protocolo en caliente tal cual.
-PROTOCOL_INFER = 4
-
-# Los que el firmware conoce. Una config con otro valor no se le entrega: el
-# device la rechaza, y antes de que la rechazara entraba en un loop de reinicios.
-VALID_PROTOCOLS = frozenset({PROTOCOL_MQTT, PROTOCOL_UDP, PROTOCOL_TCP, PROTOCOL_BLE, PROTOCOL_INFER})
-
 
 async def handle_protocol(
     device_id: str,

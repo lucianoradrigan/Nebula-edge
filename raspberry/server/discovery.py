@@ -213,7 +213,7 @@ class DeviceDiscovery:
                         id_device=config.id_device,
                         status_report=1,
                         protocol_report=config.protocol_conf,
-                        batt_level=100,
+                        batt_level=None,      # el device no mide batería
                         time_client=config.time_client,
                         time_server=config.time_client
                     )
@@ -291,7 +291,7 @@ class DeviceDiscovery:
                     id_device=addr,
                     status_report=0,
                     protocol_report=last_protocol,
-                    batt_level=100,
+                    batt_level=None,      # el device no mide batería
                     time_client=server_time,
                     time_server=server_time
                 )

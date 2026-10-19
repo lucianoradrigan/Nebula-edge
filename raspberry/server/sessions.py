@@ -41,6 +41,7 @@ from models import (
     BleContext, Timeouts, ConfigData, Log,
     ModelInfo, ModelChunkRequestData, ModelStatusData, ModelState,
     InferSample, InferResultData, InferStatus, InferInput,
+    VALID_PROTOCOLS,
 )
 from codec import DataCodec
 from system import utc_epoch_now, log
@@ -117,7 +118,7 @@ class DeviceSession:
                         id_device=self.device_id,
                         status_report=2,
                         protocol_report=self.config.protocol_conf,
-                        batt_level=100,
+                        batt_level=None,      # el device no mide batería
                         time_client=self._last_client_time if fresh else None,
                         time_server=server_time,
                     )
@@ -201,6 +202,27 @@ class DeviceSession:
             return
         log(f"{tx.name}: hora reenviada a {self.device_id} (config v{db_config.config_version})")
 
+    # Última versión con protocolo inválido que ya se avisó en el log.
+    _invalid_protocol_logged: int | None = None
+
+    async def _pushable_db_config(self) -> "ConfigData | None":
+        """La config de la BD, o None si no hay o si no se le puede entregar.
+
+        Una config con un protocol_conf que el firmware no conoce se ignora,
+        igual que en discovery.py: el device la rechaza con un ACK negativo, y
+        como _wait_ack no distingue ese rechazo de un ACK perdido, la sesión
+        la reenviaba hasta agotar los reintentos, cerraba, y la siguiente
+        volvía a empezar. Medido en banco: un rechazo por segundo.
+        """
+        db_config = await self.database_repo.get_config_async(self.device_id)
+        if db_config is not None and db_config.protocol_conf not in VALID_PROTOCOLS:
+            if self._invalid_protocol_logged != db_config.config_version:
+                log(f"protocol_conf inválido ({db_config.protocol_conf}) en la config "
+                    f"v{db_config.config_version} de {self.device_id}: no se envía")
+                self._invalid_protocol_logged = db_config.config_version
+            return None
+        return db_config
+
     async def _proactive_config_push(self, push_and_wait: Callable[["ConfigData"], Any]) -> "ConfigData | None":
         """Consulta la BD sin haber recibido un paquete y empuja la config si cambió.
 
@@ -209,7 +231,7 @@ class DeviceSession:
         debe enviar la config por el canal correspondiente y esperar su ACK, retornando
         True si se confirmó.
         """
-        db_config = await self.database_repo.get_config_async(self.device_id)
+        db_config = await self._pushable_db_config()
         if db_config is None or db_config.config_version <= self.config.config_version:
             return None
         applied = await push_and_wait(db_config)
@@ -440,7 +462,7 @@ class ProtocolSession(DeviceSession):
             self._update_last_client_time(data)
 
             # Obtiene configuración desde DB
-            db_config = await self.database_repo.get_config_async(self.device_id)
+            db_config = await self._pushable_db_config()
             if db_config is None:
                 continue
 

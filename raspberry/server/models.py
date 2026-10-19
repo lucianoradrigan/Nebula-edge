@@ -40,6 +40,23 @@ from enum import IntEnum
 from typing import Any
 
 
+# Valores de `protocol_conf` en la tabla config. Son parte del contrato con el
+# firmware (ver PROTOCOLS[] en esp32/main/main.c): no se reordenan.
+PROTOCOL_MQTT = 0
+PROTOCOL_UDP = 1
+PROTOCOL_TCP = 2
+PROTOCOL_BLE = 3
+# No es un transporte nuevo: es MQTT con otro uso (transferir un modelo e
+# inferir, sin telemetría). Va en la misma numeración para reusar el cambio de
+# protocolo en caliente tal cual.
+PROTOCOL_INFER = 4
+
+# Los que el firmware conoce. Una config con otro valor no se le entrega: el
+# device la rechaza, y antes de que la rechazara entraba en un loop de reinicios.
+VALID_PROTOCOLS = frozenset({PROTOCOL_MQTT, PROTOCOL_UDP, PROTOCOL_TCP, PROTOCOL_BLE, PROTOCOL_INFER})
+
+
+
 @dataclass
 class BleContext:
     """Lo que el transporte BLE necesita y los otros tres no tienen.
@@ -275,6 +292,6 @@ class Log:
     id_device: str
     status_report: int
     protocol_report: int
-    batt_level: int
+    batt_level: int | None      # None: el firmware no mide batería
     time_client: int
     time_server: int

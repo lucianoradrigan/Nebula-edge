@@ -14,6 +14,7 @@ import time
 import unittest
 
 import sessions
+import transport
 from codec import DataCodec
 from models import Timeouts
 from tests.fakes import (
@@ -361,6 +362,29 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(task, timeout=5.0)
         self.assertEqual(result.config_version, 2)
 
+    async def test_config_with_invalid_protocol_is_not_pushed(self):
+        """El device la rechazaría; reenviarla era un rechazo por segundo."""
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        task = asyncio.create_task(self._build_session(repo, port, quick_timeouts()).run())
+        self.addCleanup(task.cancel)
+
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+        for _ in range(5):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            if await self._wait_until(lambda: len(repo.data_1) >= 1, timeout=0.5):
+                break
+
+        repo.db_version, repo.protocol_conf = 2, 7
+        for _ in range(4):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            await asyncio.sleep(0.3)
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=1.0)
+        self.assertFalse(task.done(), "la sesión sigue con la config que tiene")
+        self.assertGreaterEqual(len(repo.data_1), 5)
+
     async def test_without_device_does_not_push_and_closes_on_timeout(self):
         """can_send=False mientras el device no haya escrito: no se puede
         responder a nadie, así que la sesión solo espera y cierra."""
@@ -385,6 +409,27 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
             probe.bind(("0.0.0.0", port))
         finally:
             probe.close()
+
+
+class BusyPortTests(unittest.IsolatedAsyncioTestCase):
+    """Puerto ocupado: open() devuelve False en vez de lanzar."""
+
+    async def _assert_open_fails(self, transport_cls, kind):
+        port = free_port(kind)
+        busy = socket.socket(socket.AF_INET, kind)
+        self.addCleanup(busy.close)
+        busy.bind(("0.0.0.0", port))
+        if kind == socket.SOCK_STREAM:
+            busy.listen()
+        tx = transport_cls(make_config(1, udp_port=port, tcp_port=port), connect_timeout_sec=0.5)
+        self.assertFalse(await tx.open())
+        await tx.close()
+
+    async def test_udp_busy_port(self):
+        await self._assert_open_fails(transport.UdpTransport, socket.SOCK_DGRAM)
+
+    async def test_tcp_busy_port(self):
+        await self._assert_open_fails(transport.TcpTransport, socket.SOCK_STREAM)
 
 
 if __name__ == "__main__":
