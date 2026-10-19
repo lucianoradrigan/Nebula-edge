@@ -78,6 +78,7 @@ static uint8_t *s_rx_buf = NULL;
 static size_t   s_rx_total = 0;
 static size_t   s_rx_got = 0;
 static char     s_rx_topic[MQTT_TOPIC_MAX];
+static bool     s_rx_retain = false;    // el broker lo entregó de lo retenido, no recién publicado
 
 static bool topic_ends_with(const char *topic, const char *suffix) {
     size_t t = strlen(topic), s = strlen(suffix);
@@ -90,7 +91,7 @@ static bool topic_ends_with(const char *topic, const char *suffix) {
  * tipo de los mensajes de modelo sin tener que copiarlos. Una ventana cruda de
  * la fase C2 mide 8 KB, y copiarla para anteponerle un byte pedía otros 8 KB
  * contiguos justo cuando menos hay. */
-static void rx_dispatch(const char *topic, uint8_t *buf, size_t len) {
+static void rx_dispatch(const char *topic, uint8_t *buf, size_t len, bool retained) {
     if (strncmp(topic, "/topic/nebulaedge/", 18) != 0) {
         free(buf);
         return;
@@ -107,9 +108,13 @@ static void rx_dispatch(const char *topic, uint8_t *buf, size_t len) {
             free(buf);
             return;
         }
-        // La config va sin el byte de tipo: se corre el mensaje un lugar.
-        memmove(buf, buf + 1, len);
-        packet_t pkt = { .size = len, .data = buf };
+        /* El byte libre lleva si la config vino de lo RETENIDO: [retenida][protobuf].
+         * Una retenida trae la hora de cuando se publicó, que puede ser de
+         * hace minutos o días; la aplicación no debe poner el reloj con ella.
+         * Medido en banco: al entrar a MQTT el device recibía la config
+         * retenida de una ronda anterior y el reloj retrocedía ~110 s. */
+        buf[0] = retained ? 1 : 0;
+        packet_t pkt = { .size = len + 1, .data = buf };
         if (xQueueSend(s_config_queue, &pkt, 0) != pdTRUE) {
             ESP_LOGW(TAG, "Cola de config llena, configuración descartada");
             free(buf);
@@ -144,6 +149,7 @@ static void rx_fragment(esp_mqtt_event_handle_t event) {
         s_rx_buf = NULL;
         s_rx_got = 0;
         s_rx_total = (size_t)event->total_data_len;
+        s_rx_retain = event->retain;
 
         snprintf(s_rx_topic, sizeof s_rx_topic, "%.*s", event->topic_len, event->topic);
 
@@ -183,7 +189,7 @@ static void rx_fragment(esp_mqtt_event_handle_t event) {
     if (s_rx_got == s_rx_total) {
         uint8_t *done = s_rx_buf;
         s_rx_buf = NULL;
-        rx_dispatch(s_rx_topic, done, s_rx_total);
+        rx_dispatch(s_rx_topic, done, s_rx_total, s_rx_retain);
     }
 }
 

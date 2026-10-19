@@ -562,7 +562,11 @@ static esp_err_t mqtt_send_ack(const Config *cfg, const uint8_t *buf, size_t siz
 }
 
 /* La config llega cruda por la cola y se desempaqueta acá, igual que en BLE:
- * los componentes de transporte mueven bytes y no conocen el formato de cable. */
+ * los componentes de transporte mueven bytes y no conocen el formato de cable.
+ *
+ * Por MQTT llega como [retenida][protobuf] (ver rx_dispatch() en
+ * nebulaedge_mqtt.c). De una retenida se borra time_client: su hora es la de
+ * cuando se publicó, no la de ahora, y no debe tocar el reloj. */
 static Config *mqtt_recv_config(void) {
     packet_t pkt;
 
@@ -570,16 +574,21 @@ static Config *mqtt_recv_config(void) {
         return NULL;    // nada todavía; la task vuelve a mirar la compuerta
     }
 
-    if (pkt.data == NULL || pkt.size == 0) {
+    if (pkt.data == NULL || pkt.size < 2) {
         free(pkt.data);
         return NULL;
     }
 
-    Config *cfg = config__unpack(NULL, pkt.size, pkt.data);
+    bool retained = pkt.data[0] != 0;
+    Config *cfg = config__unpack(NULL, pkt.size - 1, pkt.data + 1);
     free(pkt.data);
 
     if (cfg == NULL) {
         ESP_LOGW(TAG_GET_RSP_MQTT, "Error al desempaquetar la configuración MQTT");
+    }
+    else if (retained) {
+        ESP_LOGI(TAG_GET_RSP_MQTT, "Config v%ld retenida: no se usa su hora", (long)cfg->config_version);
+        cfg->time_client = 0;
     }
     return cfg;
 }
@@ -1344,8 +1353,13 @@ void vTaskGetResponse(void *pvParameters) {
          * Va acá arriba y no más abajo a propósito: si fuera después de las
          * comparaciones de versión, una config repetida —que es justamente el
          * caso de la resincronización periódica del servidor— se descartaría
-         * sin que su hora llegara nunca al reloj. */
-        device_clock_set(new_config->time_client);
+         * sin que su hora llegara nunca al reloj.
+         *
+         * La excepción es una config RETENIDA de MQTT, que llega con
+         * time_client = 0 (ver mqtt_recv_config): su hora es vieja. */
+        if (new_config->time_client > 0) {
+            device_clock_set(new_config->time_client);
+        }
 
         /* Config más vieja que la aplicada: se rechaza con un ACK negativo, para
          * que el servidor sepa que llegó y que NO se aplicó. */

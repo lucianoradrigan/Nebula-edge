@@ -28,6 +28,10 @@ static const char *TAG = "model_runner";
 #define ARENA_MAX_BYTES  (16 * 1024)
 #define ARENA_MIN_BYTES  (8 * 1024)
 #define ARENA_HEAP_SLACK (4 * 1024)     // lo que se le deja al resto del sistema en ese bloque
+/* Después de cargar, la arena se achica a lo que el modelo usó más este margen
+ * (ver shrink_arena()). TFLM no pide más arena al invocar: lo que usa queda
+ * fijado en AllocateTensors. */
+#define ARENA_MARGIN     1024
 
 /* Las operaciones que usan los modelos de ml/: FULLY_CONNECTED, LOGISTIC y
  * SOFTMAX, más QUANTIZE/DEQUANTIZE en los int8. Registrar solo estas mantiene
@@ -59,6 +63,86 @@ void model_runner_unload(void) {
         r.interpreter = nullptr;
     }
     r.version = 0;
+}
+
+static void free_arena(void) {
+    heap_caps_free(r.arena);
+    r.arena = nullptr;
+    r.arena_size = 0;
+}
+
+/* Reserva la arena con lo que haya, entre ARENA_MIN_BYTES y ARENA_MAX_BYTES. */
+static runner_err_t alloc_arena(void) {
+    const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    size_t largest = heap_caps_get_largest_free_block(caps);
+    size_t want = largest > ARENA_HEAP_SLACK ? largest - ARENA_HEAP_SLACK : 0;
+    if (want > ARENA_MAX_BYTES) want = ARENA_MAX_BYTES;
+    want &= ~(size_t)15;
+    if (want < ARENA_MIN_BYTES) {
+        ESP_LOGE(TAG, "Bloque contiguo de %u B: no alcanza para una arena de %d B",
+                 (unsigned)largest, ARENA_MIN_BYTES);
+        return RUNNER_ERR_ARENA;
+    }
+    r.arena = (uint8_t *)heap_caps_aligned_alloc(16, want, caps);
+    if (!r.arena) {
+        ESP_LOGE(TAG, "No se pudieron reservar %u B para la arena", (unsigned)want);
+        return RUNNER_ERR_ARENA;
+    }
+    r.arena_size = want;
+    ESP_LOGI(TAG, "Arena de %u B (bloque contiguo libre: %u B)", (unsigned)want, (unsigned)largest);
+    return RUNNER_OK;
+}
+
+static bool build_interpreter(const tflite::Model *model) {
+    void *mem = heap_caps_malloc(sizeof(tflite::MicroInterpreter), MALLOC_CAP_8BIT);
+    if (!mem) {
+        return false;
+    }
+    r.interpreter = new (mem) tflite::MicroInterpreter(model, *r.resolver, r.arena, r.arena_size);
+    return true;
+}
+
+/* ACHICAR LA ARENA A LO QUE EL MODELO USA
+ *
+ * La arena se reserva grande porque antes de AllocateTensors no se sabe cuánto
+ * pide el modelo. Pero lo que pide es poco: 2.528 B el v3, de 16 KB
+ * reservados. Y esos 16 KB salían del bloque contiguo más grande, que en la
+ * IM-V2 en INFER es de ~31 KB: quedaban 13,8 KB, y un pedido C2 necesita dos
+ * bloques de ~8 KB (el mensaje MQTT y la ventana desempaquetada). Medido en la
+ * prueba nocturna: la IM-V2 #1 descartó TODOS los pedidos C2 de cuatro rondas
+ * ("Pedido de inferencia ilegible", "Sin memoria para un mensaje de 8216 B").
+ *
+ * Se libera la arena grande, se reserva lo usado más ARENA_MARGIN y se vuelve a
+ * armar el intérprete. Si algo falla, se vuelve a la arena grande. */
+static runner_err_t shrink_arena(const tflite::Model *model) {
+    size_t target = (r.interpreter->arena_used_bytes() + ARENA_MARGIN + 15) & ~(size_t)15;
+    if (target + ARENA_MARGIN >= r.arena_size) {
+        return RUNNER_OK;       // no vale la pena
+    }
+    size_t big = r.arena_size;
+    model_runner_unload();
+    free_arena();
+
+    r.arena = (uint8_t *)heap_caps_aligned_alloc(16, target, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (r.arena) {
+        r.arena_size = target;
+        if (build_interpreter(model) && r.interpreter->AllocateTensors() == kTfLiteOk) {
+            ESP_LOGI(TAG, "Arena achicada de %u a %u B", (unsigned)big, (unsigned)target);
+            return RUNNER_OK;
+        }
+        model_runner_unload();
+        free_arena();
+    }
+    ESP_LOGW(TAG, "No se pudo achicar la arena a %u B: se vuelve a la grande", (unsigned)target);
+    runner_err_t err = alloc_arena();
+    if (err != RUNNER_OK) {
+        return err;
+    }
+    if (!build_interpreter(model) || r.interpreter->AllocateTensors() != kTfLiteOk) {
+        model_runner_unload();
+        return RUNNER_ERR_ARENA;
+    }
+    return RUNNER_OK;
 }
 
 bool model_runner_loaded(void) {
@@ -93,25 +177,12 @@ runner_err_t model_runner_load(const void *model_data, const ModelManifest *meta
         return RUNNER_ERR_INCOMPATIBLE;
     }
 
-    // La arena se reserva una vez y se reusa entre modelos.
-    if (!r.arena) {
-        const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-        size_t largest = heap_caps_get_largest_free_block(caps);
-        size_t want = largest > ARENA_HEAP_SLACK ? largest - ARENA_HEAP_SLACK : 0;
-        if (want > ARENA_MAX_BYTES) want = ARENA_MAX_BYTES;
-        want &= ~(size_t)15;
-        if (want < ARENA_MIN_BYTES) {
-            ESP_LOGE(TAG, "Bloque contiguo de %u B: no alcanza para una arena de %d B",
-                     (unsigned)largest, ARENA_MIN_BYTES);
-            return RUNNER_ERR_ARENA;
-        }
-        r.arena = (uint8_t *)heap_caps_aligned_alloc(16, want, caps);
-        if (!r.arena) {
-            ESP_LOGE(TAG, "No se pudieron reservar %u B para la arena", (unsigned)want);
-            return RUNNER_ERR_ARENA;
-        }
-        r.arena_size = want;
-        ESP_LOGI(TAG, "Arena de %u B (bloque contiguo libre: %u B)", (unsigned)want, (unsigned)largest);
+    /* Cada carga parte de una arena grande nueva: la anterior quedó achicada
+     * a la medida del modelo anterior, y el nuevo puede pedir más. */
+    free_arena();
+    runner_err_t aerr = alloc_arena();
+    if (aerr != RUNNER_OK) {
+        return aerr;
     }
     if (!r.resolver) {
         void *mem = heap_caps_malloc(sizeof(tflite::MicroMutableOpResolver<N_OPS>), MALLOC_CAP_8BIT);
@@ -133,11 +204,9 @@ runner_err_t model_runner_load(const void *model_data, const ModelManifest *meta
         return RUNNER_ERR_LOAD;
     }
 
-    void *mem = heap_caps_malloc(sizeof(tflite::MicroInterpreter), MALLOC_CAP_8BIT);
-    if (!mem) {
+    if (!build_interpreter(model)) {
         return RUNNER_ERR_ARENA;
     }
-    r.interpreter = new (mem) tflite::MicroInterpreter(model, *r.resolver, r.arena, r.arena_size);
 
     if (r.interpreter->AllocateTensors() != kTfLiteOk) {
         // También falla así con una operación no registrada: el log de TFLM
@@ -162,6 +231,11 @@ runner_err_t model_runner_load(const void *model_data, const ModelManifest *meta
         ESP_LOGE(TAG, "Las entradas/salidas del modelo no calzan con el manifiesto");
         model_runner_unload();
         return RUNNER_ERR_INCOMPATIBLE;
+    }
+
+    runner_err_t serr = shrink_arena(model);
+    if (serr != RUNNER_OK) {
+        return serr;
     }
 
     r.version = meta->model_version;
