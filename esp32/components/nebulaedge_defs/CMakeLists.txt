@@ -1,6 +1,6 @@
 idf_component_register(SRCS "nebulaedge_defs.c"
                     INCLUDE_DIRS "include"
-                    REQUIRES)
+                    REQUIRES nebulaedge_proto_schema)
 
 if(CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE)
    # some variables are only used by asserts

@@ -27,7 +27,8 @@ POR QUÉ DOS MENSAJES DE TELEMETRÍA Y NO UNO
     Son el punto donde convergen las tres representaciones del mismo dato: el
     mensaje protobuf que viaja por el cable, la fila de la tabla, y el objeto
     que usa la lógica de sesión. Por eso este módulo no importa nada del
-    proyecto: todos lo importan a él, y así no hay ciclos.
+    proyecto: todos lo importan a él, y así no hay ciclos. La única excepción
+    es schema_pb2, que es código generado y no importa nada a su vez.
 
 AJUSTAR LOS TIEMPOS
     `Timeouts` se construye una vez en `DeviceDiscovery` y baja por toda la
@@ -39,21 +40,24 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
 
+import schema_pb2
 
-# Valores de `protocol_conf` en la tabla config. Son parte del contrato con el
-# firmware (ver PROTOCOLS[] en esp32/main/main.c): no se reordenan.
-PROTOCOL_MQTT = 0
-PROTOCOL_UDP = 1
-PROTOCOL_TCP = 2
-PROTOCOL_BLE = 3
+
+# Valores de `protocol_conf` en la tabla config. Salen del enum Protocol de
+# schema.proto, el mismo del que los toma el firmware: no se reordenan.
+PROTOCOL_MQTT = schema_pb2.PROTOCOL_MQTT
+PROTOCOL_UDP = schema_pb2.PROTOCOL_UDP
+PROTOCOL_TCP = schema_pb2.PROTOCOL_TCP
+PROTOCOL_BLE = schema_pb2.PROTOCOL_BLE
 # No es un transporte nuevo: es MQTT con otro uso (transferir un modelo e
 # inferir, sin telemetría). Va en la misma numeración para reusar el cambio de
 # protocolo en caliente tal cual.
-PROTOCOL_INFER = 4
+PROTOCOL_INFER = schema_pb2.PROTOCOL_INFER
 
-# Los que el firmware conoce. Una config con otro valor no se le entrega: el
-# device la rechaza, y antes de que la rechazara entraba en un loop de reinicios.
-VALID_PROTOCOLS = frozenset({PROTOCOL_MQTT, PROTOCOL_UDP, PROTOCOL_TCP, PROTOCOL_BLE, PROTOCOL_INFER})
+# Los que el firmware conoce: todos los del enum. Una config con otro valor no
+# se le entrega: el device la rechaza, y antes de que la rechazara entraba en
+# un loop de reinicios.
+VALID_PROTOCOLS = frozenset(schema_pb2.Protocol.values())
 
 
 

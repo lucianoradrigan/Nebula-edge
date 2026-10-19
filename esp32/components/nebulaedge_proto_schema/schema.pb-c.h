@@ -29,6 +29,41 @@ typedef struct InferResult InferResult;
 
 /* --- enums --- */
 
+/*
+ * Primer byte de los paquetes "tipados" que el device le manda al servidor:
+ * [tipo][protobuf]. El ConfigAck es el único que viaja sin ese byte.
+ */
+typedef enum _PacketType {
+  /*
+   * proto3 exige un 0; ningún paquete lo usa
+   */
+  PACKET_TYPE__PACKET_TYPE_NONE = 0,
+  PACKET_TYPE__PACKET_TYPE_DATA_1 = 1,
+  PACKET_TYPE__PACKET_TYPE_DATA_2 = 2,
+  /*
+   * aviso de deep sleep: [0x04]['d']['s']
+   */
+  PACKET_TYPE__PACKET_TYPE_DEEP_SLEEP = 4,
+  PACKET_TYPE__PACKET_TYPE_MODEL_STATUS = 5,
+  PACKET_TYPE__PACKET_TYPE_MODEL_CHUNK_REQUEST = 6,
+  PACKET_TYPE__PACKET_TYPE_INFER_RESULT = 7
+    PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(PACKET_TYPE)
+} PacketType;
+/*
+ * Valores de Config.protocol_conf. No se reordenan: están guardados en la
+ * tabla config y en la NVS de cada device.
+ */
+typedef enum _Protocol {
+  PROTOCOL__PROTOCOL_MQTT = 0,
+  PROTOCOL__PROTOCOL_UDP = 1,
+  PROTOCOL__PROTOCOL_TCP = 2,
+  PROTOCOL__PROTOCOL_BLE = 3,
+  /*
+   * MQTT para transferir un modelo e inferir
+   */
+  PROTOCOL__PROTOCOL_INFER = 4
+    PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(PROTOCOL)
+} Protocol;
 typedef enum _ModelState {
   /*
    * Sin modelo activo ni en curso.
@@ -129,7 +164,7 @@ struct  Config
    */
   int32_t config_version;
   /*
-   * Protocolo seleccionado. 0 -> MQTT, 1 -> UDP, 2 -> TCP, 3 -> BLE.
+   * Protocolo seleccionado: un valor de enum Protocol.
    */
   int32_t protocol_conf;
   int32_t acc_sampling;
@@ -692,6 +727,8 @@ typedef void (*InferResult_Closure)
 
 /* --- descriptors --- */
 
+extern const ProtobufCEnumDescriptor    packet_type__descriptor;
+extern const ProtobufCEnumDescriptor    protocol__descriptor;
 extern const ProtobufCEnumDescriptor    model_state__descriptor;
 extern const ProtobufCEnumDescriptor    model_error__descriptor;
 extern const ProtobufCEnumDescriptor    infer_input__descriptor;

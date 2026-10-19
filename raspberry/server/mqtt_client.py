@@ -33,6 +33,29 @@ import threading
 from typing import Dict
 from system import MQTT_BROKER_PORT, MQTT_HOST, log
 
+# TÓPICOS
+#
+# Todos cuelgan de /topic/nebulaedge/{id}/. El firmware arma los mismos en
+# esp32/components/nebulaedge_mqtt/include/nebulaedge_mqtt_topics.h: un .proto
+# no puede declarar textos, así que hay una copia por lado, y si cambia una
+# tiene que cambiar la otra.
+TOPIC_PREFIX = "/topic/nebulaedge"
+TOPIC_DATA = "data"                         # device -> servidor, telemetría
+TOPIC_CONFIG = "config"                     # servidor -> device, retenida
+TOPIC_CONFIG_ACK = "config/ack"             # device -> servidor
+TOPIC_MODEL_MANIFEST = "model/manifest"     # servidor -> device, retenido (INFER)
+TOPIC_MODEL_CHUNK = "model/chunk"           # servidor -> device (INFER)
+TOPIC_MODEL_STATUS = "model/status"         # device -> servidor, tipado (INFER)
+TOPIC_MODEL_CHUNK_REQ = "model/chunk/req"   # device -> servidor, tipado (INFER)
+TOPIC_INFER_REQ = "infer/req"               # servidor -> device (INFER)
+TOPIC_INFER_RESULT = "infer/result"         # device -> servidor, tipado (INFER)
+
+
+def topic(device_id: str, suffix: str) -> str:
+    """El tópico de un device; con device_id = "+" es el wildcard de todos."""
+    return f"{TOPIC_PREFIX}/{device_id}/{suffix}"
+
+
 mqttc = None
 packet_queue = queue.Queue()        # Fallback: mensajes cuyo tópico no trae id_device
 device_queues: Dict[str, queue.Queue] = {}   # Telemetría, por device
@@ -141,16 +164,28 @@ def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code.is_failure:
         log(f"Falló la conexión: {reason_code}")
     else:
-        client.subscribe("/topic/nebulaedge/+/data")
-        client.subscribe("/topic/nebulaedge/+/config")
-        client.subscribe("/topic/nebulaedge/+/config/ack")
-        # INFER. QoS 1 en la suscripción para que el broker entregue a QoS 1
-        # lo que el device publique a QoS 1: se entrega al MENOR de los dos.
-        client.subscribe("/topic/nebulaedge/+/model/status", qos=1)
-        client.subscribe("/topic/nebulaedge/+/model/chunk/req", qos=1)
-        client.subscribe("/topic/nebulaedge/+/infer/result", qos=1)
-        log("Suscrito a /topic/nebulaedge/+/data, /config, /config/ack, /model/status, "
-            "/model/chunk/req y /infer/result")
+        client.subscribe(topic("+", TOPIC_CONFIG))
+        for suffix, qos, _ in _INBOUND:
+            client.subscribe(topic("+", suffix), qos=qos)
+        log(f"Suscrito a {topic('+', '')}{{{TOPIC_CONFIG}, "
+            f"{', '.join(suffix for suffix, _, _ in _INBOUND)}}}")
+
+# Lo que manda el device: (sufijo, QoS de la suscripción, callback). Una sola
+# tabla para suscribir (on_connect) y para enrutar (mqtt_start).
+#
+# QoS 1 en INFER para que el broker entregue a QoS 1 lo que el device publica
+# a QoS 1: se entrega al MENOR de los dos. Y lo de INFER va a la MISMA cola que
+# la telemetría: trae byte de tipo, así que la sesión lo distingue igual que
+# distingue Data_1 de Data_2. Tópicos propios igual, para poder mirarlos por
+# separado con mosquitto_sub.
+_INBOUND = (
+    (TOPIC_DATA, 0, on_message_data),
+    (TOPIC_CONFIG_ACK, 0, on_message_ack),
+    (TOPIC_MODEL_STATUS, 1, on_message_data),
+    (TOPIC_MODEL_CHUNK_REQ, 1, on_message_data),
+    (TOPIC_INFER_RESULT, 1, on_message_data),
+)
+
 
 def mqtt_publish(topic, data, retain: bool = False, qos: int = 0):
     """Publica un payload en el tópico especificado.
@@ -203,15 +238,8 @@ def mqtt_start():
 
         mqttc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         mqttc.on_connect = on_connect
-        mqttc.message_callback_add("/topic/nebulaedge/+/data", on_message_data)
-        mqttc.message_callback_add("/topic/nebulaedge/+/config/ack", on_message_ack)
-        # Lo que el device manda en INFER va a la MISMA cola que la telemetría:
-        # trae byte de tipo (0x05, 0x06), así que la sesión lo distingue igual
-        # que distingue Data_1 de Data_2. Tópicos propios igual, para poder
-        # mirarlos por separado con mosquitto_sub.
-        mqttc.message_callback_add("/topic/nebulaedge/+/model/status", on_message_data)
-        mqttc.message_callback_add("/topic/nebulaedge/+/model/chunk/req", on_message_data)
-        mqttc.message_callback_add("/topic/nebulaedge/+/infer/result", on_message_data)
+        for suffix, _, callback in _INBOUND:
+            mqttc.message_callback_add(topic("+", suffix), callback)
         # Al broker propio (servicio `mqtt` de docker-compose), no a uno
         # ajeno: antes acá estaba broker.hivemq.com, un broker público de
         # terceros por el que pasaba toda la telemetría.

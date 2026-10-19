@@ -125,7 +125,7 @@ static const char *state_name(ModelState st) {
 /* Publica [tipo][protobuf] en /topic/nebulaedge/{id}/<path>, a QoS 1. */
 static void publish_typed(const char *path, uint8_t type, const uint8_t *pb, size_t len) {
     char topic[128];
-    snprintf(topic, sizeof topic, "/topic/nebulaedge/%s/%s", s_device_id, path);
+    mqtt_topic(topic, sizeof topic, s_device_id, path);
 
     uint8_t *buf = malloc(len + 1);
     if (!buf) {
@@ -161,7 +161,7 @@ static void publish_status(void) {
         return;
     }
     model_status__pack(&st, buf);
-    publish_typed("model/status", 0x05, buf, len);
+    publish_typed(MQTT_TOPIC_MODEL_STATUS, PACKET_TYPE__PACKET_TYPE_MODEL_STATUS, buf, len);
     s.status_at_us = esp_timer_get_time();
 }
 
@@ -186,7 +186,7 @@ static void request_chunk(uint32_t index) {
         return;
     }
     model_chunk_request__pack(&req, buf);
-    publish_typed("model/chunk/req", 0x06, buf, len);
+    publish_typed(MQTT_TOPIC_MODEL_CHUNK_REQ, PACKET_TYPE__PACKET_TYPE_MODEL_CHUNK_REQUEST, buf, len);
     s.requested_at_us = esp_timer_get_time();
 }
 
@@ -533,7 +533,7 @@ static void publish_result(InferResult *res) {
         return;
     }
     infer_result__pack(res, buf);
-    publish_typed("infer/result", 0x07, buf, len);
+    publish_typed(MQTT_TOPIC_INFER_RESULT, PACKET_TYPE__PACKET_TYPE_INFER_RESULT, buf, len);
     free(buf);
 }
 

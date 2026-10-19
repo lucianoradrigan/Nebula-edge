@@ -44,7 +44,10 @@ from bleak import BleakClient
 from gatt_uuids import UUID_CHAR_A, UUID_CHAR_B, UUID_CHAR_C, UUID_CHAR_D
 from codec import DataCodec
 from models import ConfigData
-from mqtt_client import mqtt_start, mqtt_publish, get_data_queue, get_ack_queue
+from mqtt_client import (
+    mqtt_start, mqtt_publish, get_data_queue, get_ack_queue, topic as mqtt_topic,
+    TOPIC_CONFIG, TOPIC_MODEL_MANIFEST, TOPIC_MODEL_CHUNK, TOPIC_INFER_REQ,
+)
 from system import log
 
 
@@ -417,7 +420,7 @@ class MqttTransport(Transport):
         super().__init__(config, connect_timeout_sec)
         self._data_queue: queue.Queue | None = None
         self._ack_queue: queue.Queue | None = None
-        self._config_topic = f"/topic/nebulaedge/{config.id_device}/config"
+        self._config_topic = mqtt_topic(config.id_device, TOPIC_CONFIG)
 
     async def open(self) -> bool:
         mqtt_start()    # idempotente: conecta el cliente compartido si hace falta
@@ -460,10 +463,9 @@ class InferTransport(MqttTransport):
 
     def __init__(self, config: ConfigData, connect_timeout_sec: float):
         super().__init__(config, connect_timeout_sec)
-        base = f"/topic/nebulaedge/{config.id_device}/model"
-        self._manifest_topic = f"{base}/manifest"
-        self._chunk_topic = f"{base}/chunk"
-        self._infer_topic = f"/topic/nebulaedge/{config.id_device}/infer/req"
+        self._manifest_topic = mqtt_topic(config.id_device, TOPIC_MODEL_MANIFEST)
+        self._chunk_topic = mqtt_topic(config.id_device, TOPIC_MODEL_CHUNK)
+        self._infer_topic = mqtt_topic(config.id_device, TOPIC_INFER_REQ)
 
     async def send_infer_request(self, data: bytes) -> None:
         # Sin retener, como los trozos: un pedido viejo entregado a un device

@@ -1956,6 +1956,78 @@ const ProtobufCMessageDescriptor infer_result__descriptor =
   (ProtobufCMessageInit) infer_result__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
+static const ProtobufCEnumValue packet_type__enum_values_by_number[7] =
+{
+  { "PACKET_TYPE_NONE", "PACKET_TYPE__PACKET_TYPE_NONE", 0 },
+  { "PACKET_TYPE_DATA_1", "PACKET_TYPE__PACKET_TYPE_DATA_1", 1 },
+  { "PACKET_TYPE_DATA_2", "PACKET_TYPE__PACKET_TYPE_DATA_2", 2 },
+  { "PACKET_TYPE_DEEP_SLEEP", "PACKET_TYPE__PACKET_TYPE_DEEP_SLEEP", 4 },
+  { "PACKET_TYPE_MODEL_STATUS", "PACKET_TYPE__PACKET_TYPE_MODEL_STATUS", 5 },
+  { "PACKET_TYPE_MODEL_CHUNK_REQUEST", "PACKET_TYPE__PACKET_TYPE_MODEL_CHUNK_REQUEST", 6 },
+  { "PACKET_TYPE_INFER_RESULT", "PACKET_TYPE__PACKET_TYPE_INFER_RESULT", 7 },
+};
+static const ProtobufCIntRange packet_type__value_ranges[] = {
+{0, 0},{4, 3},{0, 7}
+};
+static const ProtobufCEnumValueIndex packet_type__enum_values_by_name[7] =
+{
+  { "PACKET_TYPE_DATA_1", 1 },
+  { "PACKET_TYPE_DATA_2", 2 },
+  { "PACKET_TYPE_DEEP_SLEEP", 3 },
+  { "PACKET_TYPE_INFER_RESULT", 6 },
+  { "PACKET_TYPE_MODEL_CHUNK_REQUEST", 5 },
+  { "PACKET_TYPE_MODEL_STATUS", 4 },
+  { "PACKET_TYPE_NONE", 0 },
+};
+const ProtobufCEnumDescriptor packet_type__descriptor =
+{
+  PROTOBUF_C__ENUM_DESCRIPTOR_MAGIC,
+  "PacketType",
+  "PacketType",
+  "PacketType",
+  "",
+  7,
+  packet_type__enum_values_by_number,
+  7,
+  packet_type__enum_values_by_name,
+  2,
+  packet_type__value_ranges,
+  NULL,NULL,NULL,NULL   /* reserved[1234] */
+};
+static const ProtobufCEnumValue protocol__enum_values_by_number[5] =
+{
+  { "PROTOCOL_MQTT", "PROTOCOL__PROTOCOL_MQTT", 0 },
+  { "PROTOCOL_UDP", "PROTOCOL__PROTOCOL_UDP", 1 },
+  { "PROTOCOL_TCP", "PROTOCOL__PROTOCOL_TCP", 2 },
+  { "PROTOCOL_BLE", "PROTOCOL__PROTOCOL_BLE", 3 },
+  { "PROTOCOL_INFER", "PROTOCOL__PROTOCOL_INFER", 4 },
+};
+static const ProtobufCIntRange protocol__value_ranges[] = {
+{0, 0},{0, 5}
+};
+static const ProtobufCEnumValueIndex protocol__enum_values_by_name[5] =
+{
+  { "PROTOCOL_BLE", 3 },
+  { "PROTOCOL_INFER", 4 },
+  { "PROTOCOL_MQTT", 0 },
+  { "PROTOCOL_TCP", 2 },
+  { "PROTOCOL_UDP", 1 },
+};
+const ProtobufCEnumDescriptor protocol__descriptor =
+{
+  PROTOBUF_C__ENUM_DESCRIPTOR_MAGIC,
+  "Protocol",
+  "Protocol",
+  "Protocol",
+  "",
+  5,
+  protocol__enum_values_by_number,
+  5,
+  protocol__enum_values_by_name,
+  1,
+  protocol__value_ranges,
+  NULL,NULL,NULL,NULL   /* reserved[1234] */
+};
 static const ProtobufCEnumValue model_state__enum_values_by_number[5] =
 {
   { "MODEL_STATE_NONE", "MODEL_STATE__MODEL_STATE_NONE", 0 },

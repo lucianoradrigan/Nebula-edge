@@ -119,7 +119,7 @@ esp_err_t sdstorage_write_packet(uint8_t *data, size_t size) {
     const uint8_t *payload = data + 1;
     size_t payload_size = size - 1;
 
-    if (type == 0x01) {
+    if (type == PACKET_TYPE__PACKET_TYPE_DATA_1) {
         FILE *f = open_append(data_1_path);
         if (!f) return ESP_FAIL;
 
@@ -135,7 +135,7 @@ esp_err_t sdstorage_write_packet(uint8_t *data, size_t size) {
         return ret;
     }
 
-    if (type == 0x02) {
+    if (type == PACKET_TYPE__PACKET_TYPE_DATA_2) {
         FILE *f = open_append(data_2_path);
         if (!f) return ESP_FAIL;
 

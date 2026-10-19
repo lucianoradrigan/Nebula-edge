@@ -92,12 +92,12 @@ static bool topic_ends_with(const char *topic, const char *suffix) {
  * la fase C2 mide 8 KB, y copiarla para anteponerle un byte pedía otros 8 KB
  * contiguos justo cuando menos hay. */
 static void rx_dispatch(const char *topic, uint8_t *buf, size_t len, bool retained) {
-    if (strncmp(topic, "/topic/nebulaedge/", 18) != 0) {
+    if (strncmp(topic, MQTT_TOPIC_PREFIX, strlen(MQTT_TOPIC_PREFIX)) != 0) {
         free(buf);
         return;
     }
 
-    if (topic_ends_with(topic, "/config")) {
+    if (topic_ends_with(topic, "/" MQTT_TOPIC_CONFIG)) {
         ESP_LOGI(TAG, "MQTT config topic: %s", topic);
         /* Se encolan los bytes crudos, sin desempaquetar. Este componente mueve
          * bytes y no tiene por qué conocer el formato de cable; la aplicación,
@@ -123,9 +123,9 @@ static void rx_dispatch(const char *topic, uint8_t *buf, size_t len, bool retain
     }
 
     char kind = 0;
-    if (topic_ends_with(topic, "/model/manifest")) kind = MQTT_MODEL_MSG_MANIFEST;
-    else if (topic_ends_with(topic, "/model/chunk")) kind = MQTT_MODEL_MSG_CHUNK;
-    else if (topic_ends_with(topic, "/infer/req")) kind = MQTT_MODEL_MSG_INFER;
+    if (topic_ends_with(topic, "/" MQTT_TOPIC_MODEL_MANIFEST)) kind = MQTT_MODEL_MSG_MANIFEST;
+    else if (topic_ends_with(topic, "/" MQTT_TOPIC_MODEL_CHUNK)) kind = MQTT_MODEL_MSG_CHUNK;
+    else if (topic_ends_with(topic, "/" MQTT_TOPIC_INFER_REQ)) kind = MQTT_MODEL_MSG_INFER;
 
     if (kind == 0 || s_model_queue == NULL) {
         free(buf);

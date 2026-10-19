@@ -71,18 +71,17 @@ static const i2c_bus_config_t board_i2c = {
     .freq_hz = I2C_MASTER_FREQ_HZ,
 };
 
-/* Protocolos que puede tomar `protocol_conf` del Config. Los números son parte
- * del formato de cable (los fija schema.proto), así que el enum no los
- * renumera: les pone nombre para que los switch dejen de comparar contra 0..3
- * sueltos. */
+/* Protocolos que puede tomar `protocol_conf` del Config. Los números los fija
+ * el enum Protocol de schema.proto, que es también de donde los toma el
+ * servidor; acá solo se les pone un nombre corto y se agrega PROTOCOL_COUNT. */
 typedef enum {
-    PROTOCOL_MQTT = 0,
-    PROTOCOL_UDP  = 1,
-    PROTOCOL_TCP  = 2,
-    PROTOCOL_BLE  = 3,
+    PROTOCOL_MQTT  = PROTOCOL__PROTOCOL_MQTT,
+    PROTOCOL_UDP   = PROTOCOL__PROTOCOL_UDP,
+    PROTOCOL_TCP   = PROTOCOL__PROTOCOL_TCP,
+    PROTOCOL_BLE   = PROTOCOL__PROTOCOL_BLE,
     /* No es un transporte nuevo: es MQTT con otro uso. Baja un modelo e infiere,
      * sin telemetría. Ver infer.c. */
-    PROTOCOL_INFER = 4,
+    PROTOCOL_INFER = PROTOCOL__PROTOCOL_INFER,
 
     PROTOCOL_COUNT   // cuántos hay; no es un protocolo
 } protocol_t;
@@ -558,7 +557,7 @@ typedef struct {
 
 static esp_err_t mqtt_send_data(const uint8_t *data, size_t size) {
     char topic_data[128];
-    snprintf(topic_data, sizeof(topic_data), "/topic/nebulaedge/%s/data", current_config->id_device);
+    mqtt_topic(topic_data, sizeof topic_data, current_config->id_device, MQTT_TOPIC_DATA);
 
     /* esp-mqtt devuelve el msg_id, o negativo si falló. Se traduce a esp_err_t
      * para que los cuatro transportes hablen el mismo idioma. */
@@ -573,7 +572,7 @@ static esp_err_t mqtt_send_data(const uint8_t *data, size_t size) {
 
 static esp_err_t mqtt_send_ack(const Config *cfg, const uint8_t *buf, size_t size) {
     char topic_ack[128];
-    snprintf(topic_ack, sizeof(topic_ack), "/topic/nebulaedge/%s/config/ack", cfg->id_device);
+    mqtt_topic(topic_ack, sizeof topic_ack, cfg->id_device, MQTT_TOPIC_CONFIG_ACK);
     return mqtt_publish(topic_ack, buf, size, 0) < 0 ? ESP_FAIL : ESP_OK;
 }
 
@@ -621,7 +620,7 @@ static bool mqtt_open(void) {
     vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
 
     char topic_cfg[128];
-    snprintf(topic_cfg, sizeof(topic_cfg), "/topic/nebulaedge/%s/config", current_config->id_device);
+    mqtt_topic(topic_cfg, sizeof topic_cfg, current_config->id_device, MQTT_TOPIC_CONFIG);
     ESP_LOGI(TAG_SEND_MQTT, "topic_cfg: %s", topic_cfg);
     mqtt_subscribe(topic_cfg, 0);
 
@@ -818,11 +817,11 @@ static bool infer_open(void) {
     char topic[128];
     /* QoS 1: un trozo perdido se vuelve a pedir igual, pero así casi nunca
      * hace falta. */
-    snprintf(topic, sizeof topic, "/topic/nebulaedge/%s/model/manifest", current_config->id_device);
+    mqtt_topic(topic, sizeof topic, current_config->id_device, MQTT_TOPIC_MODEL_MANIFEST);
     mqtt_subscribe(topic, 1);
-    snprintf(topic, sizeof topic, "/topic/nebulaedge/%s/model/chunk", current_config->id_device);
+    mqtt_topic(topic, sizeof topic, current_config->id_device, MQTT_TOPIC_MODEL_CHUNK);
     mqtt_subscribe(topic, 1);
-    snprintf(topic, sizeof topic, "/topic/nebulaedge/%s/infer/req", current_config->id_device);
+    mqtt_topic(topic, sizeof topic, current_config->id_device, MQTT_TOPIC_INFER_REQ);
     mqtt_subscribe(topic, 1);
 
     infer_start();
@@ -1149,7 +1148,7 @@ void vTaskCollectInertial(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(ALLOC_RETRY_MS));
             continue;
         }
-        packet.data[0] = 0x02;
+        packet.data[0] = PACKET_TYPE__PACKET_TYPE_DATA_2;
         data_2__pack(&data_2, packet.data + 1);
         ESP_LOGD(TAG_COLLECT_INERTIAL, "Paquete Data_2 generado");
 
@@ -1204,7 +1203,7 @@ void vTaskCollectEnvironmental(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(ALLOC_RETRY_MS));
             continue;
         }
-        packet.data[0] = 0x01;
+        packet.data[0] = PACKET_TYPE__PACKET_TYPE_DATA_1;
         data_1__pack(&data_1, packet.data + 1);
         ESP_LOGD(TAG_COLLECT_ENV, "Paquete Data_1 generado");
 

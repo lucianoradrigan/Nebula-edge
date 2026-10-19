@@ -20,6 +20,8 @@ PAQUETES TIPADOS
         0x06  ModelChunkRequest  INFER: el device pide un trozo del modelo
         0x07  InferResult        INFER: la respuesta a un pedido de inferencia
 
+    Los valores se definen en el enum PacketType de schema.proto.
+
     Este byte es lo ÚNICO del framing que es igual en los cuatro protocolos:
     dónde empieza y termina cada mensaje lo resuelve cada Transport a su manera
     (ver transport.py).
@@ -49,14 +51,16 @@ class DataCodec:
     """Esta clase permite que DatabaseRepository se desligue de protobuf.
     En caso de querer cambiar la forma de enviar los datos (JSON por ejemplo)
     solo se tendrá que modificar esto."""
-    TYPE_DATA_1 = 0x01
-    TYPE_DATA_2 = 0x02
-    # 0x03 sin uso: el ConfigAck viaja sin prefijo de tipo (ver deserialize_config_ack)
-    TYPE_DEEP_SLEEP = 0x04
-    # Los dos que manda el device en INFER (ver schema.proto).
-    TYPE_MODEL_STATUS = 0x05
-    TYPE_MODEL_CHUNK_REQUEST = 0x06
-    TYPE_INFER_RESULT = 0x07
+    # Los valores salen del enum PacketType de schema.proto, que es también de
+    # donde los toma el firmware. El 3 no se usa: el ConfigAck viaja sin
+    # prefijo de tipo (ver deserialize_config_ack).
+    TYPE_DATA_1 = schema_pb2.PACKET_TYPE_DATA_1
+    TYPE_DATA_2 = schema_pb2.PACKET_TYPE_DATA_2
+    TYPE_DEEP_SLEEP = schema_pb2.PACKET_TYPE_DEEP_SLEEP
+    # Los tres que manda el device en INFER.
+    TYPE_MODEL_STATUS = schema_pb2.PACKET_TYPE_MODEL_STATUS
+    TYPE_MODEL_CHUNK_REQUEST = schema_pb2.PACKET_TYPE_MODEL_CHUNK_REQUEST
+    TYPE_INFER_RESULT = schema_pb2.PACKET_TYPE_INFER_RESULT
 
     # Los tipos que llevan byte de prefijo, para poder descartar de una que un
     # paquete sea un ACK sin intentar decodificarlo (ver is_typed_packet).

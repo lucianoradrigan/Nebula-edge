@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "nebulaedge_defs.h"
+#include "nebulaedge_mqtt_topics.h"
 
 /* Cola donde dejar las configuraciones que lleguen por el tópico /config.
  *

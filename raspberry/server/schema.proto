@@ -1,10 +1,44 @@
 syntax = "proto3";
 
+// ------------------------------------------------- CONSTANTES DEL CONTRATO
+//
+// No son mensajes: son números que el firmware y el servidor tienen que
+// conocer igual, y que antes estaban escritos a mano en los dos lados (0x02 en
+// main.c, TYPE_DATA_2 en codec.py...). Acá se definen una vez, y cada lado los
+// toma del código generado:
+//     C       PACKET_TYPE__PACKET_TYPE_DATA_2, PROTOCOL__PROTOCOL_INFER
+//     Python  schema_pb2.PACKET_TYPE_DATA_2,  schema_pb2.PROTOCOL_INFER
+//
+// Ningún mensaje los usa como campo: no cambian nada de lo que viaja.
+
+// Primer byte de los paquetes "tipados" que el device le manda al servidor:
+// [tipo][protobuf]. El ConfigAck es el único que viaja sin ese byte.
+enum PacketType {
+    PACKET_TYPE_NONE = 0;                   // proto3 exige un 0; ningún paquete lo usa
+    PACKET_TYPE_DATA_1 = 1;
+    PACKET_TYPE_DATA_2 = 2;
+    reserved 3;                             // sin uso: el ConfigAck no lleva tipo
+    PACKET_TYPE_DEEP_SLEEP = 4;             // aviso de deep sleep: [0x04]['d']['s']
+    PACKET_TYPE_MODEL_STATUS = 5;
+    PACKET_TYPE_MODEL_CHUNK_REQUEST = 6;
+    PACKET_TYPE_INFER_RESULT = 7;
+}
+
+// Valores de Config.protocol_conf. No se reordenan: están guardados en la
+// tabla config y en la NVS de cada device.
+enum Protocol {
+    PROTOCOL_MQTT = 0;
+    PROTOCOL_UDP = 1;
+    PROTOCOL_TCP = 2;
+    PROTOCOL_BLE = 3;
+    PROTOCOL_INFER = 4;                     // MQTT para transferir un modelo e inferir
+}
+
 // Configuración del dispositivo
 message Config {
     string id_device = 1;                   // Identificador del dispositivo.
     int32 config_version = 2;               // Versión configuración. Cada cambio realizado debe incrementar este campo.
-    int32 protocol_conf = 3;                // Protocolo seleccionado. 0 -> MQTT, 1 -> UDP, 2 -> TCP, 3 -> BLE.
+    int32 protocol_conf = 3;                // Protocolo seleccionado: un valor de enum Protocol.
     int32 acc_sampling = 4;
     int32 gyro_sensibility = 5;
     int32 bme688_sampling = 6;
