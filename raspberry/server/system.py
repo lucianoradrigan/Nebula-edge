@@ -171,8 +171,11 @@ class BLEAdapterResolver:
     ignora el kwarg `adapter=`, así que ahí lo que se resuelva da igual.
     """
 
-    # Adaptador de la placa. Es el último recurso, cuando no hay ninguno USB.
-    DEFAULT_ADAPTER = "hci1"
+    # Último recurso, si no se encuentra ninguno. Antes era "hci1", que en la
+    # Raspberry original era el de la placa; en una Pi 5 sin dongle el de la
+    # placa es hci0 y no hay hci1, así que el servidor caía en un loop de
+    # reinicios ("adapter 'hci1' not found").
+    DEFAULT_ADAPTER = "hci0"
 
     # Valores de BLE_ADAPTER que significan "decidilo vos", no un nombre.
     _AUTO_SENTINELS = ("auto", "usb")
@@ -199,6 +202,18 @@ class BLEAdapterResolver:
                 return current
         return ""
 
+    @staticmethod
+    def available_adapters() -> list[str]:
+        """Los adaptadores que el kernel tiene registrados (hci0, hci1...).
+
+        Las entradas con ':' (p.ej. hci0:64) son conexiones, no adaptadores.
+        """
+        try:
+            names = os.listdir("/sys/class/bluetooth")
+        except OSError:
+            return []
+        return sorted(n for n in names if n.startswith("hci") and ":" not in n)
+
     @classmethod
     def resolve(cls) -> str:
         """Resuelve el adaptador BLE a usar.
@@ -206,7 +221,8 @@ class BLEAdapterResolver:
         Prioridad:
         1) `BLE_ADAPTER` si es un valor explícito (no `auto`/`usb`).
         2) Autodetección de adaptador USB.
-        3) Fallback a `hci1`.
+        3) El primero que exista (el de la placa, si no hay dongle).
+        4) Fallback a `hci0`.
         """
         env_value = os.getenv("BLE_ADAPTER", "").strip()
 
@@ -218,7 +234,15 @@ class BLEAdapterResolver:
         if detected:
             return detected
 
-        # Sin adaptador USB detectado se cae al de la placa. El valor centinela
+        # Sin dongle se usa el de la placa, que funciona pero es menos estable:
+        # en la Pi el banco usa un dongle USB justamente por eso. Se avisa para
+        # que una desconexión BLE no se confunda con un bug.
+        available = cls.available_adapters()
+        if available:
+            log(f"[BLE] No hay adaptador USB: se usa {available[0]}, el de la placa (menos estable)")
+            return available[0]
+
+        # Sin ninguno a la vista se cae al nombre por defecto. El valor centinela
         # NO se devuelve tal cual: antes, con BLE_ADAPTER=auto -que es lo que
         # pone docker-compose.yml- esta función devolvía la cadena "auto", y
         # bleak recibía "auto" como si fuera un nombre de interfaz.
