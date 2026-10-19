@@ -38,8 +38,8 @@ from models import (  # noqa: F401
 from repository import DatabaseRepository
 from sessions import (
     MQTTDeviceSession, UDPDeviceSession, TCPDeviceSession, BLEDeviceSession,
-    InferDeviceSession,
 )
+from infer_session import InferDeviceSession
 from system import log
 
 async def handle_protocol(

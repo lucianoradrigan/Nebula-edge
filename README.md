@@ -256,7 +256,8 @@ explica para que sirve. En el orden en que se encadenan durante una sesion:
 | `server.py` | Punto de entrada. Es lo que ejecuta el contenedor. |
 | `discovery.py` | Escanea BLE, entrega la config inicial y abre una sesion por dispositivo. |
 | `protocol_dispatch.py` | Elige que sesion corre segun `protocol_conf`, y la vuelve a elegir si el protocolo cambia. |
-| `sessions.py` | El bucle de sesion: recibir, persistir, comparar version de config, empujar y esperar ACK. Identico para los 4 protocolos de telemetria. `InferDeviceSession` reemplaza el bucle en INFER: transfiere el modelo y recorre el set de prueba. |
+| `sessions.py` | El bucle de sesion: recibir, persistir, comparar version de config, empujar y esperar ACK. Identico para los 4 protocolos de telemetria. |
+| `infer_session.py` | `InferDeviceSession`: reemplaza ese bucle en INFER. Transfiere el modelo y recorre el set de prueba. |
 | `transport.py` | Lo unico que cambia entre protocolos: como se mueven los bytes (`UdpTransport`, `TcpTransport`, `MqttTransport`, `BleTransport`, `InferTransport`). |
 | `packet_router.py` | Clasifica cada paquete entrante (telemetria / deep sleep / descartar) y persiste la telemetria. |
 | `config_resolver.py` | Decide si hay que empujar una config nueva. Funcion pura, sin I/O. |

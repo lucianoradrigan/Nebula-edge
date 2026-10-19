@@ -15,6 +15,7 @@ MAPA DEL SERVIDOR
     discovery.py        escanea BLE, entrega la config inicial, abre una sesión
     protocol_dispatch.py  elige qué sesión corre según protocol_conf
     sessions.py         el bucle de sesión, idéntico para los 4 protocolos
+    infer_session.py    la sesión INFER: modelo e inferencia, sin telemetría
     transport.py        lo único que cambia entre protocolos: mover los bytes
     packet_router.py    clasifica el paquete entrante y persiste la telemetría
     config_resolver.py  decide si hay que empujar una config nueva al device

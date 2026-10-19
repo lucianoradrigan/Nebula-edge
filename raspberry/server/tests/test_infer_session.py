@@ -13,6 +13,7 @@ import queue
 import unittest
 from unittest import mock
 
+import infer_session
 import sessions
 import transport
 from codec import DataCodec
@@ -63,7 +64,7 @@ class _InferHarness(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(p.stop)
 
     def _start(self, repo, model_version=1, timeouts=None):
-        session = sessions.InferDeviceSession(
+        session = infer_session.InferDeviceSession(
             DEVICE_ID,
             make_config(1, protocol_conf=PROTOCOL_INFER, model_version=model_version),
             repo, timeouts or quick_timeouts(),
@@ -89,7 +90,7 @@ class InferSessionTests(_InferHarness):
 
     def test_infer_is_protocol_4(self):
         self.assertEqual(PROTOCOL_INFER, 4)
-        self.assertTrue(issubclass(sessions.InferDeviceSession, sessions.ProtocolSession))
+        self.assertTrue(issubclass(infer_session.InferDeviceSession, sessions.ProtocolSession))
 
     async def test_manifest_is_published_retained_on_start(self):
         model = make_model(version=1, size=5000)
@@ -103,7 +104,7 @@ class InferSessionTests(_InferHarness):
         m = DataCodec.deserialize_model_manifest(payload)
         self.assertEqual(m.model_version, 1)
         self.assertEqual(m.size_bytes, 5000)
-        self.assertEqual(m.chunk_size, sessions.InferDeviceSession.CHUNK_SIZE)
+        self.assertEqual(m.chunk_size, infer_session.InferDeviceSession.CHUNK_SIZE)
         self.assertEqual(m.n_chunks, 3)         # 2048 + 2048 + 904
         self.assertEqual(m.sha256, model.sha256)
         self.assertEqual(m.output_fault_index, 0)
@@ -157,7 +158,7 @@ class InferSessionTests(_InferHarness):
 
         # Fuera de rango, y de una versión que no es la vigente. Fuera de la
         # ventana de tope, cada uno republica el manifiesto.
-        with mock.patch.object(sessions.InferDeviceSession, "_MANIFEST_REPUBLISH_SEC", 0.0):
+        with mock.patch.object(infer_session.InferDeviceSession, "_MANIFEST_REPUBLISH_SEC", 0.0):
             self.data_queue.put(model_chunk_request_packet(1, 3))
             self.data_queue.put(model_chunk_request_packet(9, 0))
             self.assertTrue(await self._wait_until(lambda: len(self._on(MANIFEST_TOPIC)) == 3))
@@ -306,7 +307,7 @@ class InferRunTests(_InferHarness):
     async def test_run_raw_windows_in_c2(self):
         repo = self._run_repo(n_samples=1)
         repo.infer_source = 1       # que el empuje proactivo no vea un cambio
-        session = sessions.InferDeviceSession(
+        session = infer_session.InferDeviceSession(
             DEVICE_ID, make_config(1, protocol_conf=PROTOCOL_INFER, model_version=1),
             repo, quick_timeouts())
         session.config.infer_source = 1
@@ -321,7 +322,7 @@ class InferRunTests(_InferHarness):
 
     async def test_run_marks_lost_after_timeout_and_moves_on(self):
         repo = self._run_repo(n_samples=2)
-        with mock.patch.object(sessions.InferDeviceSession, "INFER_RESULT_TIMEOUT_SEC", 0.3):
+        with mock.patch.object(infer_session.InferDeviceSession, "INFER_RESULT_TIMEOUT_SEC", 0.3):
             self._start(repo)
             self._ready()
             self.assertTrue(await self._wait_until(lambda: len(self._requests()) == 2, timeout=3.0),
@@ -339,7 +340,7 @@ class InferRunTests(_InferHarness):
 
     async def test_run_not_started_for_sensor_source(self):
         repo = self._run_repo(n_samples=3)
-        session = sessions.InferDeviceSession(
+        session = infer_session.InferDeviceSession(
             DEVICE_ID, make_config(1, protocol_conf=PROTOCOL_INFER, model_version=1),
             repo, quick_timeouts())
         session.config.infer_source = 2
@@ -359,7 +360,7 @@ class InferRunTests(_InferHarness):
 
     async def test_unsolicited_sensor_result_is_stored(self):
         repo = self._run_repo(n_samples=3)
-        session = sessions.InferDeviceSession(
+        session = infer_session.InferDeviceSession(
             DEVICE_ID, make_config(1, protocol_conf=PROTOCOL_INFER, model_version=1),
             repo, quick_timeouts())
         session.config.infer_source = 2
@@ -395,10 +396,10 @@ class InferRunTests(_InferHarness):
     def test_request_ids_unique_even_if_clock_stalls(self):
         """Con run_id * 1000 + índice, la ventana 1000 de una corrida chocaba
         con la 0 de una corrida empezada 1 ms después."""
-        session = sessions.InferDeviceSession(
+        session = infer_session.InferDeviceSession(
             DEVICE_ID, make_config(1, protocol_conf=PROTOCOL_INFER, model_version=1),
             FakeRepo(1), quick_timeouts())
-        with mock.patch.object(sessions.time, "time_ns", lambda: 1_735_000_000_000_000_000):
+        with mock.patch.object(infer_session.time, "time_ns", lambda: 1_735_000_000_000_000_000):
             ids = [session._new_request_id() for _ in range(2000)]
         self.assertEqual(len(set(ids)), 2000)
         self.assertNotIn(0, ids, "0 está reservado para los resultados sin pedido")
