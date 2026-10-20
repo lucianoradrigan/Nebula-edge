@@ -15,6 +15,8 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "driver/i2c_master.h"
+#include "fxl6408.h"
 #include "schema.pb-c.h"
 
 /* Protocolos que puede tomar `protocol_conf` del Config. Los números los fija
@@ -44,6 +46,31 @@ extern TaskHandle_t xHandleCollectInertial;
 extern TaskHandle_t xHandleCollectEnvironmental;
 extern TaskHandle_t send_task[PROTOCOL_COUNT];
 extern TaskHandle_t response_task[PROTOCOL_COUNT];
+extern i2c_master_bus_handle_t bus_handle;
+extern fxl6408_handle_t io_expander;
+
+/* Va acá y no en main.c porque decide qué se compila en más de un archivo:
+ * power.c tiene que desmontar la SD antes de dormir. */
+/* Persistencia local en microSD. ENCENDIDA.
+ *
+ * El pinout es el del bringup de la IM-V2 (CS en el IO0 del expansor FXL6408).
+ * Encenderla dejaba el chip en un bucle de reset por INTERRUPT watchdog
+ * (rst:0x8, TG1WDT_SYS_RST) hasta que se encontró la causa, que no era la
+ * contención en el bus I2C sino un corrimiento indefinido dentro de SDSPI: está
+ * contada en sd_mount(), en nebulaedge_microsd.c.
+ *
+ * Verificada en banco después del arreglo, con los cuatro protocolos en deep
+ * sleep: 18 montajes, 250 líneas escritas, cero reinicios por watchdog y cero
+ * fallos de montaje. El caso de control en modo continuo monta la tarjeta y no
+ * escribe nada, que es lo que corresponde. Con la tarjeta sin responder, el
+ * montaje falla con ESP_ERR_TIMEOUT, el firmware sigue transmitiendo sin
+ * respaldo local y NO intenta formatear: format_if_mount_failed solo entra si
+ * la tarjeta contesta pero no trae una FAT válida.
+ *
+ * OJO: el montaje va con .format_if_mount_failed en true, heredado del bringup.
+ * Hace que una tarjeta virgen sirva sin prepararla a mano, pero también
+ * formatea una que no monte por cualquier otro motivo. */
+#define SD_PERSISTENCE      1
 
 #define TAG "main_task"
 #define TAG_COLLECT_INERTIAL "task_collect_inertial"
