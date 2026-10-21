@@ -403,6 +403,17 @@ class TcpTransport(Transport):
         await loop.sock_sendall(self._conn, header + data)
 
 
+def _drain(q: queue.Queue) -> int:
+    """Vacía una queue.Queue sin bloquear y devuelve cuántos elementos tenía."""
+    n = 0
+    while True:
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            return n
+        n += 1
+
+
 class MqttTransport(Transport):
     """MQTT: el cliente es del proceso (ver mqtt_client.py), no de esta sesión.
 
@@ -436,9 +447,31 @@ class MqttTransport(Transport):
         self._config_topic = mqtt_topic(config.id_device, TOPIC_CONFIG)
 
     async def open(self) -> bool:
+        """Toma las colas de este device, que viven más que la sesión.
+
+        Las colas son del proceso y no se vacían al cerrar, así que pueden
+        traer lo que llegó entre dos sesiones (durante un cambio de protocolo,
+        o con la sesión caída). Se tratan distinto:
+
+        - ACK: se vacía. Un ACK es la respuesta a una config que mandó OTRA
+          sesión; leído acá parece la respuesta a la config de ésta. La
+          comparación de versión en _wait_ack no lo frena cuando la versión
+          coincide (p.ej. la misma config reenviada): la sesión daba por
+          aplicada una config que el device nunca recibió en esta sesión.
+          Lo cubre test_queues_left_by_a_previous_session.
+        - Telemetría: se conserva. Son mediciones reales con su propia hora, y
+          descartarlas sería perder datos. Solo se informa cuántas había.
+        """
         mqtt_start()    # idempotente: conecta el cliente compartido si hace falta
         self._data_queue = get_data_queue(self.config.id_device)
         self._ack_queue = get_ack_queue(self.config.id_device)
+
+        stale_acks = _drain(self._ack_queue)
+        if stale_acks:
+            log(f"{self.name}: {stale_acks} ACK de una sesión anterior de {self.config.id_device} descartados")
+        backlog = self._data_queue.qsize()
+        if backlog:
+            log(f"{self.name}: {backlog} paquetes de {self.config.id_device} esperaban en cola desde antes de la sesión")
         return True
 
     async def close(self) -> None:

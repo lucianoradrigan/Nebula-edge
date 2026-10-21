@@ -136,6 +136,30 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(task, timeout=5.0)
         self.assertEqual(result.config_version, 2)
 
+    async def test_queues_left_by_a_previous_session(self):
+        """Las colas viven más que la sesión: lo que quedó de antes se trata distinto.
+
+        Un ACK viejo no puede confirmar la config que empuja ESTA sesión, aunque
+        coincida la versión: no es la respuesta a este envío. La telemetría que
+        esperaba, en cambio, son mediciones reales y se guardan.
+        """
+        self.ack_queue.put(config_ack_packet(version=2))        # de otra sesión
+        self.data_queue.put(data_1_packet(applied_version=1))   # llegó entre sesiones
+
+        repo = FakeRepo(db_version=2)
+        task = asyncio.create_task(self._build_session(repo, quick_timeouts()).run())
+        self.addCleanup(task.cancel)
+
+        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 1),
+                        "se perdió la telemetría que esperaba en cola")
+        self.assertTrue(await self._wait_until(lambda: len(self.published) >= 1))
+        await asyncio.sleep(0.3)
+        self.assertFalse(task.done(), "un ACK de una sesión anterior confirmó la config de ésta")
+
+        self.ack_queue.put(config_ack_packet(version=2))        # el de este envío
+        result = await asyncio.wait_for(task, timeout=5.0)
+        self.assertEqual(result.config_version, 2)
+
     async def test_deep_sleep_does_not_close_mqtt_session(self):
         """Sin conexión que cortar: se sigue escuchando el tópico."""
         repo = FakeRepo(db_version=1)
