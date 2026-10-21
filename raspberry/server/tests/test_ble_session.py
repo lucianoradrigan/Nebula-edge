@@ -285,6 +285,49 @@ class BleSessionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(task.done(), "la sesión debía seguir viva tras reconectar")
 
+    async def test_lost_link_ends_the_session_without_waiting_for_the_grace(self):
+        """El device se reinicia (o sale de alcance) sin avisar deep sleep.
+
+        Antes la sesión no se enteraba: seguía esperando datos hasta agotar
+        no_data_grace_sec, ~50 s en producción. Ahora termina enseguida y SIN
+        reabrir: el device reiniciado espera su config por char A, y eso lo
+        entrega el descubrimiento, no una reapertura.
+        """
+        p = mock.patch.object(transport.BleTransport, "_LINK_CHECK_SEC", 0.05)
+        p.start()
+        self.addCleanup(p.stop)
+
+        repo = FakeRepo(db_version=1)
+        # Gracia larga a propósito: si la sesión terminara por timeout, el
+        # wait_for de abajo vencería antes.
+        task, client = await self._connected_session(repo, quick_timeouts(no_data_grace_sec=30.0))
+        first = client
+
+        client.is_connected = False     # el enlace se cae sin aviso
+
+        result = await asyncio.wait_for(task, timeout=2.0)
+        self.assertIsNone(result)
+        self.assertIs(FakeBleakClient.last_instance, first,
+                      "no debía intentar reconectar: el descubrimiento se encarga")
+
+    async def test_packet_received_before_the_link_drops_is_not_lost(self):
+        p = mock.patch.object(transport.BleTransport, "_LINK_CHECK_SEC", 0.05)
+        p.start()
+        self.addCleanup(p.stop)
+
+        repo = FakeRepo(db_version=1)
+        task, client = await self._connected_session(repo, quick_timeouts(no_data_grace_sec=30.0))
+        # "start" sale después de registrar las notificaciones: antes, el
+        # emit_notification de abajo no tendría a quién llegar.
+        self.assertTrue(await self._wait_until(
+            lambda: any(u == UUID_CHAR_C for u, _ in client.writes)))
+
+        client.emit_notification(UUID_CHAR_B, data_1_packet(applied_version=1))
+        client.is_connected = False
+
+        await asyncio.wait_for(task, timeout=2.0)
+        self.assertEqual(len(repo.data_1), 1, "el paquete que ya había llegado se perdió")
+
     async def test_session_ends_when_connection_fails(self):
         FakeBleakClient.fail_to_connect = True
         repo = FakeRepo(db_version=1)

@@ -72,6 +72,19 @@ class DeviceWentToSleep(TransportClosed):
     """
 
 
+class LinkLost(TransportClosed):
+    """El enlace se cortó SIN aviso de deep sleep: el device se reinició o salió
+    de alcance.
+
+    A diferencia de DeviceWentToSleep, acá no se reabre aunque el transporte
+    declare `reopens`. Un device que se reinició perdió su config y la espera
+    por la característica A, en el bucle inicial de app_main; reabrir solo
+    escribe "start" en C, así que la sesión se quedaba esperando datos que no
+    iban a llegar. Cerrando la sesión, el descubrimiento lo vuelve a encontrar
+    y le entrega la config desde cero, que es lo que necesita.
+    """
+
+
 class Transport(ABC):
     """Mueve bytes hacia/desde un device. Sin lógica de protocolo de aplicación."""
 
@@ -505,6 +518,8 @@ class BleTransport(Transport):
     """
     name = "BLE"
     reopens = True      # el device corta el enlace al dormirse y vuelve al despertar
+    _LINK_CHECK_SEC = 1.0   # cada cuánto recv() revisa si la conexión sigue arriba
+    _LINK_LOST_DRAIN_SEC = 0.1  # margen para lo que llegó justo antes del corte
 
     def __init__(
         self,
@@ -627,18 +642,46 @@ class BleTransport(Transport):
         await self._scanner(self.scanner_start)
 
     async def recv(self, timeout_sec: float) -> bytes | None:
+        """Espera una notificación; lanza LinkLost si la conexión se cae.
+
+        Antes solo esperaba la cola, así que una desconexión no se notaba: la
+        sesión seguía hasta agotar no_data_grace_sec (~50 s) sin datos. Medido
+        en banco con un device que se reinició 3 s después de abrir la sesión:
+        51 s de espera, y después el descubrimiento lo reconectó en 3 s.
+
+        Se mira `is_connected` cada _LINK_CHECK_SEC en vez de registrar un
+        disconnected_callback porque la conexión adoptada del descubrimiento ya
+        viene creada, y bleak solo acepta el callback en el constructor.
+        """
         # Misma precaución que en los otros transportes: no cancelar un get()
         # que puede haber sacado un elemento de la cola.
         if self._pending is None:
             self._pending = asyncio.ensure_future(self._queue.get())
 
-        done, _ = await asyncio.wait({self._pending}, timeout=timeout_sec)
-        if not done:
-            return None
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            remaining = deadline - time.monotonic()
+            done, _ = await asyncio.wait(
+                {self._pending}, timeout=max(0.0, min(remaining, self._LINK_CHECK_SEC)))
+            if done:
+                packet = self._pending.result()
+                self._pending = None
+                return packet
 
-        packet = self._pending.result()
-        self._pending = None
-        return packet
+            # Lo que ya llegó se entrega primero: recién sin nada pendiente
+            # importa si el enlace sigue arriba.
+            if self._client is not None and not self._client.is_connected:
+                # Una notificación recibida justo antes del corte puede estar
+                # todavía en camino: la encola call_soon_threadsafe (en
+                # _on_notify) y el get() pendiente la recibe en otra vuelta del
+                # loop. Una espera corta la deja entrar; una sola vuelta
+                # (sleep(0)) no alcanza.
+                done, _ = await asyncio.wait({self._pending}, timeout=self._LINK_LOST_DRAIN_SEC)
+                if done:
+                    continue
+                raise LinkLost(f"se perdió la conexión BLE con {self.config.id_device}")
+            if remaining <= self._LINK_CHECK_SEC:
+                return None
 
     async def send(self, data: bytes) -> None:
         await self._client.write_gatt_char(UUID_CHAR_A, data, response=True)

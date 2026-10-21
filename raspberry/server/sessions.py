@@ -48,7 +48,7 @@ from config_resolver import ConfigResolver, ConfigDecision
 from packet_router import PacketRouter, PacketOutcome
 from repository import DatabaseRepository
 from transport import (
-    Transport, TransportClosed, DeviceWentToSleep,
+    Transport, TransportClosed, DeviceWentToSleep, LinkLost,
     UdpTransport, TcpTransport, MqttTransport, BleTransport,
 )
 
@@ -390,7 +390,10 @@ class ProtocolSession(DeviceSession):
             try:
                 return await self._session_loop(tx)
             except TransportClosed as e:
-                if not tx.reopens:
+                # LinkLost no se reabre aunque el transporte lo permita: el
+                # device se reinició o se fue, y lo que necesita es que el
+                # descubrimiento le entregue la config de nuevo (ver LinkLost).
+                if not tx.reopens or isinstance(e, LinkLost):
                     log(f"{tx.name}: enlace cortado con {self.device_id} ({e}). Cerrando sesión.")
                     return None
                 log(f"{tx.name}: {e}. Reabriendo para esperar al device.")
