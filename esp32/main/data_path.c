@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nebulaedge_defs.h"
 #include "nebulaedge_device.h"
 #include "nebulaedge_sdstorage.h"
@@ -113,8 +114,15 @@ void vTaskCollectInertial(void *pvParameters) {
     }
 }
 
+/* Recordatorio mientras el BME688 sigue sin responder. Ver el aviso en
+ * vTaskCollectEnvironmental. */
+#define BME688_FAIL_REMINDER_S 300
+
 // GEN_DATA: BME688 -> paquete Data_1, cada send_interval_s.
 void vTaskCollectEnvironmental(void *pvParameters) {
+    uint32_t bme688_failures = 0;       // lecturas fallidas seguidas
+    int64_t bme688_last_warn_us = 0;
+
     for (;;) {
         // Punto seguro: acá no hay memoria reservada ni bus tomado.
         sensor_gate_wait(GATE_ENV_IDLE);
@@ -143,9 +151,28 @@ void vTaskCollectEnvironmental(void *pvParameters) {
             data_1.press       = ambient.pressure_pa;
             data_1.hum         = ambient.humidity_pct;
             data_1.co          = ambient.gas_resistance_ohm;
+            if (bme688_failures > 0) {
+                ESP_LOGI(TAG_COLLECT_ENV, "El BME688 responde de nuevo (tras %lu lecturas fallidas)",
+                         (unsigned long)bme688_failures);
+                bme688_failures = 0;
+            }
         }
         else {
-            ESP_LOGW(TAG_COLLECT_ENV, "Lectura del BME688 falló, el paquete va con ceros");
+            /* Se avisa al cambiar de estado y después cada
+             * BME688_FAIL_REMINDER_S, no en cada lectura: en una placa sin el
+             * sensor eran un aviso por segundo, el 16 % del log (medido en la
+             * placa con solo el BMI270). */
+            bme688_failures++;
+            int64_t now_us = esp_timer_get_time();
+            if (bme688_failures == 1) {
+                ESP_LOGW(TAG_COLLECT_ENV, "Lectura del BME688 falló: los Data_1 salen con ceros hasta que responda");
+                bme688_last_warn_us = now_us;
+            }
+            else if (now_us - bme688_last_warn_us >= (int64_t)BME688_FAIL_REMINDER_S * 1000000) {
+                ESP_LOGW(TAG_COLLECT_ENV, "El BME688 sigue sin responder (%lu lecturas fallidas)",
+                         (unsigned long)bme688_failures);
+                bme688_last_warn_us = now_us;
+            }
         }
 
         // Serializa el mensaje protobuf, con el byte de tipo por delante
