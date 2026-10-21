@@ -55,6 +55,14 @@ class InferDeviceSession(ProtocolSession):
     # FASE C: cuánto se espera cada respuesta. De dónde salen las ventanas lo
     # dice el modelo (ModelInfo.test_dataset): cada modelo trae su set de test.
     INFER_RESULT_TIMEOUT_SEC = 5.0
+    # Un pedido sin respuesta se reenvía UNA vez antes de darlo por perdido.
+    # MQTT a QoS 1 no retransmite dentro de una conexión viva, así que un
+    # corte breve de la red perdía el pedido para siempre: en la prueba de
+    # 5 h, ~1 de cada 10.000, y una vez en dos placas en el mismo instante.
+    # Va con el mismo request_id, así que la respuesta de cualquiera de los
+    # dos envíos completa la misma fila; los reenvíos se cuentan aparte en el
+    # resumen de la corrida, para no esconder las pérdidas de red.
+    INFER_RESULT_RETRIES = 1
     # infer_source de la config -> input_kind de inference_result. Con
     # sensores (2) no hay corrida: el device clasifica sus propias ventanas y
     # publica los resultados sin pedido (ver _on_unsolicited_result).
@@ -75,6 +83,9 @@ class InferDeviceSession(ProtocolSession):
         self._run_idx = 0
         self._run_done = False
         self._pending: tuple[int, float] | None = None     # (request_id, monotonic al enviar)
+        self._pending_payload = b""     # el pedido en vuelo, serializado, para reenviarlo
+        self._pending_retries = 0       # reenvíos ya hechos del pedido en vuelo
+        self._run_retries = 0           # reenvíos de la corrida, para el resumen
         self._last_request_id = 0
         self._unsolicited = 0
 
@@ -184,6 +195,7 @@ class InferDeviceSession(ProtocolSession):
 
         self._run_id = int(time.time() * 1000)
         self._run_idx = 0
+        self._run_retries = 0
         log(f"INFER: corrida {self._run_id} empieza: {len(self._run_samples)} ventanas de {dataset} "
             f"({'features' if kind == 0 else 'ventanas crudas'}) a {self.device_id}, modelo v{self._model.model_version}")
 
@@ -208,9 +220,12 @@ class InferDeviceSession(ProtocolSession):
         await self.database_repo.insert_inference_request_async(
             self.device_id, request_id, self._run_id, self._model.model_version, kind,
             self.config.config_version, sample, time.time())
-        await tx.send_infer_request(
-            DataCodec.serialize_infer_request(request_id, self._model.model_version, sample, raw_window=kind == 1))
+        payload = DataCodec.serialize_infer_request(
+            request_id, self._model.model_version, sample, raw_window=kind == 1)
+        await tx.send_infer_request(payload)
         self._pending = (request_id, time.monotonic())
+        self._pending_payload = payload
+        self._pending_retries = 0
 
     async def _finish_run(self) -> None:
         s = await self.database_repo.inference_run_summary_async(self._run_id)
@@ -218,7 +233,7 @@ class InferDeviceSession(ProtocolSession):
         if s["ok"]:
             log(f"INFER: corrida {self._run_id} terminada en {self.device_id}: "
                 f"accuracy {s['accuracy'] * 100:.2f}%, MAE severidad {s['mae']:.4f}, "
-                f"{s['ok']}/{s['sent']} respondidas ({lost} perdidas), "
+                f"{s['ok']}/{s['sent']} respondidas ({lost} perdidas, {self._run_retries} reenviadas), "
                 f"inferencia {s['inference_us']:.0f} us, features {s['feature_us'] or 0:.0f} us, "
                 f"ida y vuelta {s['rtt_s'] * 1000:.0f} ms")
         else:
@@ -270,7 +285,15 @@ class InferDeviceSession(ProtocolSession):
         if self._pending is not None:
             if time.monotonic() - self._pending[1] < self.INFER_RESULT_TIMEOUT_SEC:
                 return
-            log(f"INFER: sin respuesta al pedido {self._pending[0]} en {self.INFER_RESULT_TIMEOUT_SEC:.0f} s: "
+            if self._pending_retries < self.INFER_RESULT_RETRIES:
+                log(f"INFER: sin respuesta al pedido {self._pending[0]} en {self.INFER_RESULT_TIMEOUT_SEC:.0f} s: "
+                    f"se reenvía")
+                await tx.send_infer_request(self._pending_payload)
+                self._pending = (self._pending[0], time.monotonic())
+                self._pending_retries += 1
+                self._run_retries += 1
+                return
+            log(f"INFER: sin respuesta al pedido {self._pending[0]} tampoco al reenvío: "
                 f"queda como perdido")
             self._pending = None
             self._run_idx += 1

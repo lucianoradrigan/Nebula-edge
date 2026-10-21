@@ -321,14 +321,34 @@ class InferRunTests(_InferHarness):
         self.assertEqual(repo.inference_rows[req.request_id]["input_kind"], 1)
 
     async def test_run_marks_lost_after_timeout_and_moves_on(self):
+        """Sin respuesta: se reenvía una vez el MISMO pedido y, si tampoco
+        responde, queda perdido y sale el siguiente."""
+        repo = self._run_repo(n_samples=2)
+        with mock.patch.object(infer_session.InferDeviceSession, "INFER_RESULT_TIMEOUT_SEC", 0.3):
+            self._start(repo)
+            self._ready()
+            self.assertTrue(await self._wait_until(lambda: len(self._requests()) == 3, timeout=3.0),
+                            "tras el reenvío sin respuesta tenía que salir el siguiente")
+        first, retry, nxt = self._requests()[:3]
+        self.assertEqual(retry.request_id, first.request_id, "el reenvío va con el mismo request_id")
+        self.assertNotEqual(nxt.request_id, first.request_id)
+        lost = repo.inference_rows[first.request_id]
+        self.assertIsNone(lost["result"], "el perdido queda sin resultado: así se cuenta la pérdida")
+
+    async def test_answer_to_the_resend_completes_the_request(self):
         repo = self._run_repo(n_samples=2)
         with mock.patch.object(infer_session.InferDeviceSession, "INFER_RESULT_TIMEOUT_SEC", 0.3):
             self._start(repo)
             self._ready()
             self.assertTrue(await self._wait_until(lambda: len(self._requests()) == 2, timeout=3.0),
-                            "tras el timeout del primero tenía que salir el segundo")
-        lost = repo.inference_rows[self._requests()[0].request_id]
-        self.assertIsNone(lost["result"], "el perdido queda sin resultado: así se cuenta la pérdida")
+                            "no se reenvió el pedido sin respuesta")
+            first = self._requests()[0]
+            self.data_queue.put(infer_result_packet(first.request_id, pred_fault=0))
+            self.assertTrue(await self._wait_until(lambda: len(self._requests()) == 3, timeout=3.0),
+                            "respondido el reenvío, tenía que salir el siguiente")
+        self.assertIsNotNone(repo.inference_rows[first.request_id]["result"],
+                             "la respuesta al reenvío no completó el pedido")
+        self.assertEqual(len(repo.inference_rows), 2, "el reenvío no debe crear otra fila")
 
     async def test_run_not_repeated_when_already_complete(self):
         repo = self._run_repo(n_samples=3)
