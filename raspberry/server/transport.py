@@ -475,7 +475,7 @@ class MqttTransport(Transport):
         return True
 
     async def close(self) -> None:
-        # A propósito no se llama mqtt_shutdown(): el cliente es compartido
+        # A propósito no se desconecta el cliente MQTT: es compartido
         # por todos los devices en MQTT y sobrevive a esta sesión.
         self._data_queue = None
         self._ack_queue = None

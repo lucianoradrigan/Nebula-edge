@@ -613,25 +613,6 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
     }
 }
 
-// Cambia el valor de cualquier característica dado su índice.
-// Retorna ESP_OK si se escribe correctamente.
-esp_err_t ble_set_char(uint8_t char_index, const uint8_t *value, uint16_t length) {
-    if (char_index >= IDX_NB) {
-        ESP_LOGE(GATTS_TABLE_TAG, "ble_set_char: índice inválido %u", char_index);
-        return ESP_FAIL;
-    }
-    
-    const char *label = char_index_to_label(char_index);
-    esp_err_t status = esp_ble_gatts_set_attr_value(ble_handle_table[char_index], length, value);
-    if (status == ESP_OK) {
-        ESP_LOGI(GATTS_TABLE_TAG, "ble_set_char: char %s actualizado (%u bytes, handle=%u)", 
-                 label, length, ble_handle_table[char_index]);
-    } else {
-        ESP_LOGE(GATTS_TABLE_TAG, "ble_set_char: falló en char %s: %s", label, esp_err_to_name(status));
-    }
-    return status;
-}
-
 // Cambia el valor de cualquier característica y, si soporta notify,
 // envía notificación. Retorna ESP_OK si se escribe correctamente.
 esp_err_t ble_set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_t length) {

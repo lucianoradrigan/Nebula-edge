@@ -25,7 +25,7 @@ bool protocol_conf_is_valid(const Config *c) {
 }
 
 // Recibe dos configuraciones y retorna un booleano si son diferentes o iguales
-bool config_has_changed(Config *old, Config *new) {
+static bool config_has_changed(Config *old, Config *new) {
     /* Sin config previa, cualquiera es nueva. El caller de más arriba ya
      * pregunta por NULL antes de comparar versiones, así que acá faltaba la
      * misma guarda: sin ella esto desreferencia old y revienta. */

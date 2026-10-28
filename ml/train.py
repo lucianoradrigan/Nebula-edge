@@ -16,7 +16,6 @@ cómo se dividen lo dice data_sources.py; convert.py pasa el modelo a TFLite.
 
 import argparse
 import numpy as np
-import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 

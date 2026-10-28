@@ -5,7 +5,9 @@ services:
     container_name: nebulaedge_server
     environment:
       PYTHONUNBUFFERED: 1
-      BLE_ADAPTER: auto
+      # auto = el dongle USB si hay, si no el de la placa. Ver system.py ->
+      # BLEAdapterResolver.
+      BLE_ADAPTER: ${BLE_ADAPTER:-auto}
       # Las mismas cuatro variables que recibe el contenedor de la base, para
       # que la credencial se defina UNA vez (en .env, o en los defaults de acá)
       # y no haya dos copias que se puedan desincronizar. El servidor las lee

@@ -18,9 +18,9 @@ CICLO DE VIDA: UN RECURSO DEL PROCESO, NO DE LA SESIÓN
     siguientes, así que cada sesión que arranca puede llamarlo sin coordinarse
     con las demás.
 
-    `mqtt_shutdown()` es para el apagado del servidor completo. El cierre de la
-    sesión de un device NO debe llamarlo: dejaría sin broker a todos los demás
-    devices que estén usando MQTT en ese momento.
+    No hay un cierre: el cliente vive lo que vive el proceso. El cierre de la
+    sesión de un device NO debe desconectarlo: dejaría sin broker a todos los
+    demás devices que estén usando MQTT en ese momento.
 
 POR QUÉ COLAS SINCRÓNICAS Y NO asyncio.Queue
     Las llena el hilo interno de paho (`loop_start()`), que no es el event loop
@@ -202,7 +202,6 @@ def mqtt_publish(topic, data, retain: bool = False, qos: int = 0):
     (misma versión -> ACK positivo y descarta) y rechaza con ACK negativo
     cualquiera más vieja que la que tiene.
     """
-    global mqttc
     mqttc.publish(topic, data, qos=qos, retain=retain)
     log(f"Publish en {topic}{' (retenida)' if retain else ''}")
 
@@ -246,17 +245,3 @@ def mqtt_start():
         mqttc.connect(MQTT_HOST, MQTT_BROKER_PORT, 60)
         mqttc.loop_start()
         _mqtt_started = True
-
-def mqtt_shutdown():
-    """Detiene el cliente MQTT compartido y su hilo de loop_start().
-
-    Solo para el apagado del proceso completo. Llamarla al terminar la sesión
-    de un device dejaría sin broker a todos los demás que estén usando MQTT.
-    """
-    global mqttc, _mqtt_started
-    with _mqtt_lock:
-        if not _mqtt_started:
-            return
-        mqttc.loop_stop()
-        mqttc.disconnect()
-        _mqtt_started = False

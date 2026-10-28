@@ -232,7 +232,6 @@ class DeviceDiscovery:
 
             except Exception as e:
                 log(f"Fallo en la primera conexión BLE con {addr}: {type(e).__name__}: {e!r}")
-                # traceback.print_exc()
                 log(f"Pop device {addr}")
                 self.devices.pop(addr, None)
 

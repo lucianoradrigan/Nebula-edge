@@ -53,7 +53,6 @@ void ble_set_start_semaphore(SemaphoreHandle_t sem);
 
 void ble_init(void);
 
-esp_err_t ble_set_char(uint8_t char_index, const uint8_t *value, uint16_t length);
 esp_err_t ble_set_char_with_notify(uint8_t char_index, const uint8_t *value, uint16_t length);
 
 #endif

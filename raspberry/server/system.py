@@ -271,20 +271,6 @@ class LocalWifiConfig:
             return ""
 
     @classmethod
-    def active_wifi_device(cls) -> str:
-        """Detecta el dispositivo WiFi activo conectado (ej: wlan0)."""
-        output = cls._run_cmd(["sudo", "nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev", "status"])
-        for line in output.splitlines():
-            parts = line.split(":", 2)
-            if len(parts) != 3:
-                continue
-            device, dev_type, state = parts
-            if dev_type == "wifi" and state == "connected":
-                log(f"Adaptador WIFI a usar: {device}")
-                return device
-        return ""
-
-    @classmethod
     def _active_connection_name(cls, device: str) -> str:
         """Obtiene el nombre de la conexión activa para el dispositivo dado."""
         if not device:
@@ -369,8 +355,8 @@ class LocalWifiConfig:
         if env_ip and env_ssid and env_passwd:
             ssid, passwd, host_ip_addr = env_ssid, env_passwd, env_ip
         else:
-            # Fija y no detectada con active_wifi_device(): esa solo encuentra
-            # interfaces en modo cliente, y la Pi puede estar levantando un AP.
+            # Fija y no detectada: la interfaz puede estar en modo cliente o
+            # levantando un AP, y en los dos casos es la misma.
             device = os.getenv("WIFI_DEVICE", "").strip() or "wlan0"
             conn_name = cls._active_connection_name(device)
             ssid = env_ssid or cls._active_wifi_ssid(device, conn_name)

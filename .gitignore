@@ -19,10 +19,7 @@ esp32/managed_components/
 # Credenciales reales de la base. La plantilla versionada es raspberry/.env.example
 raspberry/.env
 raspberry/__pycache__/
-raspberry/server/venv/
 raspberry/**/__pycache__/
-raspberry/deprecated-testing/
-raspberry/server/requirements.txt
 
 # macOS
 .DS_Store
