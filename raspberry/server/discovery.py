@@ -283,20 +283,28 @@ class DeviceDiscovery:
             addr = device.address
             self.active_tasks.pop(addr, None)
             server_time = utc_epoch_now()
-            # Permite re-descubrimiento si se pierde la conexión
-            log(f"Pop device {addr}")
-            # Registra la desconexión
-            await DatabaseRepository(self.db_dsn).insert_log_async(
-                Log(
-                    id_device=addr,
-                    status_report=0,
-                    protocol_report=last_protocol,
-                    batt_level=None,      # el device no mide batería
-                    time_client=server_time,
-                    time_server=server_time
-                )
-            )
+            # Permite re-descubrimiento si se pierde la conexión. Va ANTES de
+            # tocar la base: si el INSERT de abajo falla (Postgres caído o
+            # reiniciándose), la excepción cortaba el finally y el device quedaba
+            # marcado para siempre, así que el descubrimiento lo ignoraba hasta
+            # reiniciar el servidor. Medido en banco reiniciando Postgres: dos
+            # placas fuera indefinidamente.
             self.devices.pop(addr, None)
+            log(f"Pop device {addr}")
+            # Registra la desconexión; si la base no está, se pierde solo el registro.
+            try:
+                await DatabaseRepository(self.db_dsn).insert_log_async(
+                    Log(
+                        id_device=addr,
+                        status_report=0,
+                        protocol_report=last_protocol,
+                        batt_level=None,      # el device no mide batería
+                        time_client=server_time,
+                        time_server=server_time
+                    )
+                )
+            except Exception as e:
+                log(f"No se pudo registrar la desconexión de {addr} en la base: {type(e).__name__}: {e}")
 
     async def run(self):
         """Inicia el escaneo BLE y reinicia periódicamente el adaptador."""
