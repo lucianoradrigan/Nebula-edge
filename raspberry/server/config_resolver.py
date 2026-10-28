@@ -5,8 +5,8 @@ UTILIDAD PRINCIPAL
     el device dice tener aplicada, la que hay en la BD, y la que esta sesión ya
     le envió- y devuelve una de tres decisiones:
 
-        APPLIED_NEWER   el device ya aplicó algo más nuevo de lo que la sesión
-                        creía: hay que cerrar y volver a decidir el protocolo
+        APPLIED_NEWER   el device tiene aplicado algo más nuevo que la BD: la BD
+                        retrocedió y no hay nada que empujarle
         ALREADY_SENT    la config nueva ya se le mandó; falta que la aplique,
                         así que por ahora solo hay que esperar
         PUSH            hay una versión nueva en la BD que todavía no se envía,
@@ -33,10 +33,10 @@ from models import ConfigData
 
 
 class ConfigDecision(Enum):
-    # El device ya aplicó una config con versión mayor a la que el server
-    # conocía (p.ej. tras un cambio de protocolo): hay que cerrar la sesión
-    # actual y servir esa config para que el resto del sistema se entere
-    # del nuevo protocolo/parámetros.
+    # El device tiene aplicada una versión mayor que la de la BD: la BD
+    # retrocedió. No hay nada que empujarle (rechaza una config más vieja);
+    # la sesión sigue recibiendo y espera a que la BD lo supere. Ver
+    # ProtocolSession._session_loop().
     APPLIED_NEWER = auto()
 
     # El device está al día con la versión vigente en la BD: seguir

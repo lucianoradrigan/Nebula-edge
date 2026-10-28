@@ -160,6 +160,27 @@ class MqttSessionTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(task, timeout=5.0)
         self.assertEqual(result.config_version, 2)
 
+    async def test_database_behind_the_device_does_not_close_the_session(self):
+        """La BD retrocedió (v1) y el device sigue con la v5 que ya aplicó.
+
+        Antes cada paquete cerraba la sesión "para reconfigurar"; al reabrir la
+        BD seguía igual, así que se cerraba de nuevo: 157 veces en 2,5 min en
+        banco, perdiendo un tercio de los paquetes. Tiene que seguir
+        recibiendo, sin empujar nada (el device rechaza una config más vieja).
+        """
+        repo = FakeRepo(db_version=1)
+        task = asyncio.create_task(self._build_session(repo, quick_timeouts()).run())
+        self.addCleanup(task.cancel)
+
+        for _ in range(3):
+            self.data_queue.put(data_1_packet(applied_version=5))
+
+        self.assertTrue(await self._wait_until(lambda: len(repo.data_1) >= 3),
+                        "dejó de guardar telemetría")
+        await asyncio.sleep(0.3)
+        self.assertFalse(task.done(), "la sesión se cerró por una BD más vieja que el device")
+        self.assertEqual(self.published, [], "no hay que empujarle una config más vieja")
+
     async def test_deep_sleep_does_not_close_mqtt_session(self):
         """Sin conexión que cortar: se sigue escuchando el tópico."""
         repo = FakeRepo(db_version=1)

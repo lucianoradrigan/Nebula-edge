@@ -78,6 +78,7 @@ class DeviceSession:
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
         self._last_client_time: int | None = None       # Último time_client recibido (Data_1/Data_2)
         self._apply_wait_started: float | None = None   # Desde cuándo se espera que el device aplique
+        self._db_behind_warned_at: int | None = None    # versión del device ya avisada como más nueva que la BD
         self._last_client_seen_at: float | None = None  # Cuándo llegó, en reloj monótono del server
 
     def _update_last_client_time(self, data: Any):
@@ -493,8 +494,21 @@ class ProtocolSession(DeviceSession):
                 self._apply_wait_started = None
 
             if decision.decision == ConfigDecision.APPLIED_NEWER:
-                log(f"Config aplicada detectada en {tx.name} ({applied_version}) para {self.device_id}. " "Cerrando sesión para reconfigurar.")
-                return decision.db_config
+                # La BD tiene una versión MÁS VIEJA que la que el device ya
+                # aplicó (la retrocedieron a mano, o se restauró un respaldo).
+                # Antes se cerraba la sesión "para reconfigurar", pero al
+                # reabrir la BD seguía igual y el primer paquete volvía a
+                # cerrarla: medido en banco, 157 cierres en 2,5 min y un tercio
+                # de los paquetes perdidos. Tampoco sirve empujarla: el
+                # firmware rechaza una config más vieja con un ACK negativo.
+                # Se sigue recibiendo y se avisa una vez; en cuanto la BD supere
+                # la versión del device, se empuja como cualquier config nueva.
+                if self._db_behind_warned_at != applied_version:
+                    self._db_behind_warned_at = applied_version
+                    log(f"{tx.name}: {self.device_id} tiene aplicada la v{applied_version}, más nueva que la "
+                        f"v{db_config.config_version} de la BD. Se sigue recibiendo; no se le manda nada "
+                        f"hasta que la BD supere la v{applied_version}.")
+                continue
             elif decision.decision == ConfigDecision.ALREADY_SENT:
                 # Ya se envió esta config; espera que el device la aplique. La
                 # espera tiene tope: pasado config_apply_grace_sec el resolver
