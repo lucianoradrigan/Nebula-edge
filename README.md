@@ -322,7 +322,7 @@ cd server
 ../.venv/bin/python -m unittest discover -s tests
 ```
 
-Esperado: `Ran 84 tests ... OK`.
+Esperado: `Ran 89 tests ... OK`.
 
 Cobertura actual: las cuatro sesiones de protocolo (telemetria, cambio de
 config con ACK, deep sleep, cierre por timeout, resincronizacion del reloj del
@@ -330,7 +330,8 @@ device, enlace BLE perdido, ACKs viejos en las colas MQTT y base de datos con
 una version mas vieja que la del device), la sesion INFER (transferencia del
 modelo, corrida del set de prueba, reenvio de un pedido sin respuesta,
 resultados sin pedido), el cierre de sesion en el descubrimiento aunque falle
-la base, y el contrato con el firmware. Lo que **no** cubre: el SQL
+la base, el reporte de fallos de escritura en la base, y el contrato con el
+firmware (incluido que las dos copias de `schema.proto` sean iguales). Lo que **no** cubre: el SQL
 real contra Postgres, y que `bleak`/BlueZ se comporten como el doble. BLE es el
 unico de los cuatro que no se puede validar de verdad sin un ESP32 enfrente.
 

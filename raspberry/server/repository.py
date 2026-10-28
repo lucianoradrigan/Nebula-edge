@@ -97,6 +97,34 @@ class DatabaseRepository:
         finally:
             db_pool.putconn(conn)
 
+    def _write(self, what: str, sql: str, build_params) -> bool:
+        """Ejecuta un INSERT o UPDATE y confirma. True si quedó guardado.
+
+        No propaga: un fallo de base no debe cortar la sesión con un device que
+        sigue vivo y mandando. Pero sí lo REPORTA: antes se tragaba cualquier
+        excepción y PacketRouter informaba TELEMETRY -que significa
+        "insertado"- igual.
+
+        Los parámetros llegan como función, no ya armados, para que un campo
+        que falta en la dataclass caiga acá y se informe como lo que es: un
+        bug nuestro, no un fallo de base. Antes de juntar los inserts en esta
+        función eso se hacía con un `except AttributeError` en cada uno.
+        """
+        try:
+            params = build_params()
+        except AttributeError as e:
+            log(f"BUG: {what}: falta un campo que el insert esperaba: {e}")
+            return False
+        try:
+            with self._connection() as db:
+                with db.cursor() as cursor:
+                    cursor.execute(sql, params)
+                    db.commit()
+            return True
+        except Exception as e:
+            log(f"ERROR de base {what}: {e}")
+            return False
+
     @staticmethod
     def _int_to_db_datetime(value: int) -> datetime:
         """Convierte un epoch Unix (segundos, UTC) al datetime naive que
@@ -242,77 +270,53 @@ class DatabaseRepository:
         `time_sent` va con fracción de segundo (time.time(), no un epoch
         entero): la ida y vuelta se mide en milisegundos.
         """
-        try:
-            with self._connection() as db:
-                with db.cursor() as cursor:
-                    cursor.execute("""
-                        INSERT INTO nebulaedge_schema.inference_result (
-                            id_device, request_id, run_id, model_version, input_kind,
-                            dataset, sample_index, source_file, window_index,
-                            true_fault, true_severity, config_version_applied, time_sent
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        device_id, request_id, run_id, model_version, input_kind,
-                        sample.dataset, sample.sample_index, sample.source_file, sample.window_index,
-                        sample.true_fault, sample.true_severity, config_version,
-                        datetime.utcfromtimestamp(time_sent),
-                    ))
-                    db.commit()
-            return True
-        except Exception as e:
-            log(f"ERROR de base insertando el pedido de inferencia {request_id}: {e}")
-            return False
+        return self._write(f"insertando el pedido de inferencia {request_id}", """
+            INSERT INTO nebulaedge_schema.inference_result (
+                id_device, request_id, run_id, model_version, input_kind,
+                dataset, sample_index, source_file, window_index,
+                true_fault, true_severity, config_version_applied, time_sent
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, lambda: (
+            device_id, request_id, run_id, model_version, input_kind,
+            sample.dataset, sample.sample_index, sample.source_file, sample.window_index,
+            sample.true_fault, sample.true_severity, config_version,
+            datetime.utcfromtimestamp(time_sent),
+        ))
 
     def complete_inference(self, device_id: str, result: InferResultData, time_server: int) -> bool:
-        try:
-            with self._connection() as db:
-                with db.cursor() as cursor:
-                    cursor.execute("""
-                        UPDATE nebulaedge_schema.inference_result SET
-                            status = %s, pred_fault = %s, pred_severity = %s, probs = %s,
-                            feature_us = %s, inference_us = %s, features_device = %s,
-                            time_client = %s, time_server = %s
-                        WHERE id_device = %s AND request_id = %s
-                    """, (
-                        result.status, result.pred_fault, result.severity, result.probs,
-                        result.feature_us, result.inference_us, result.features or None,
-                        self._int_to_db_datetime(result.time_client),
-                        datetime.utcfromtimestamp(time_server),
-                        device_id, result.request_id,
-                    ))
-                    db.commit()
-            return True
-        except Exception as e:
-            log(f"ERROR de base guardando el resultado de inferencia {result.request_id}: {e}")
-            return False
+        return self._write(f"guardando el resultado de inferencia {result.request_id}", """
+            UPDATE nebulaedge_schema.inference_result SET
+                status = %s, pred_fault = %s, pred_severity = %s, probs = %s,
+                feature_us = %s, inference_us = %s, features_device = %s,
+                time_client = %s, time_server = %s
+            WHERE id_device = %s AND request_id = %s
+        """, lambda: (
+            result.status, result.pred_fault, result.severity, result.probs,
+            result.feature_us, result.inference_us, result.features or None,
+            self._int_to_db_datetime(result.time_client),
+            datetime.utcfromtimestamp(time_server),
+            device_id, result.request_id,
+        ))
 
     def insert_unsolicited_inference(self, device_id: str, result: InferResultData,
                                      time_server: float) -> bool:
         """Un resultado que el device publicó sin pedido (sensores propios).
         Sin request_id, sin corrida y sin verdad: request_id, run_id y true_*
         quedan en NULL."""
-        try:
-            with self._connection() as db:
-                with db.cursor() as cursor:
-                    cursor.execute("""
-                        INSERT INTO nebulaedge_schema.inference_result (
-                            id_device, model_version, input_kind, status,
-                            pred_fault, pred_severity, probs, feature_us, inference_us,
-                            features_device, config_version_applied, time_client, time_server
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        device_id, result.model_version, result.input_kind, result.status,
-                        result.pred_fault, result.severity, result.probs,
-                        result.feature_us, result.inference_us, result.features or None,
-                        result.config_version_applied,
-                        self._int_to_db_datetime(result.time_client),
-                        datetime.utcfromtimestamp(time_server),
-                    ))
-                    db.commit()
-            return True
-        except Exception as e:
-            log(f"ERROR de base guardando un resultado de inferencia sin pedido: {e}")
-            return False
+        return self._write("guardando un resultado de inferencia sin pedido", """
+            INSERT INTO nebulaedge_schema.inference_result (
+                id_device, model_version, input_kind, status,
+                pred_fault, pred_severity, probs, feature_us, inference_us,
+                features_device, config_version_applied, time_client, time_server
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, lambda: (
+            device_id, result.model_version, result.input_kind, result.status,
+            result.pred_fault, result.severity, result.probs,
+            result.feature_us, result.inference_us, result.features or None,
+            result.config_version_applied,
+            self._int_to_db_datetime(result.time_client),
+            datetime.utcfromtimestamp(time_server),
+        ))
 
     def inference_run_summary(self, run_id: int) -> dict:
         """Accuracy, MAE y tiempos de una corrida, medidos en el DEVICE."""
@@ -334,114 +338,63 @@ class DatabaseRepository:
                     inference_us=inf_us, feature_us=feat_us, rtt_s=rtt)
 
     def insert_data_1(self, data_1: Data_1) -> bool:
-        """Inserta telemetría ambiental (BME688). True si la fila quedó guardada.
-
-        No propaga: un fallo de base no debe cortar la sesión con un device que
-        sigue vivo y mandando. Pero sí lo REPORTA, que es lo que faltaba: antes
-        se tragaba cualquier excepción y PacketRouter informaba TELEMETRY -que
-        significa "insertado"- igual.
+        """Inserta telemetría ambiental (BME688). True si la fila quedó
+        guardada. Ver _write() para por qué no propaga pero sí reporta.
         """
-        _ctx = "data_1"
-        try:
-            with self._connection() as db:
-                with db.cursor() as cursor:
-                    cursor.execute("""
-                        INSERT INTO nebulaedge_schema.data_1 (
-                            id_device, temperature, press, hum, co,
-                            config_version_applied, time_client
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        data_1.id_device,
-                        data_1.temperature,
-                        data_1.press,
-                        data_1.hum,
-                        data_1.co,
-                        data_1.config_version_applied,
-                        self._int_to_db_datetime(data_1.time_client)
-                    ))
-                    db.commit()
-            return True
-        except AttributeError as e:
-            # Un campo que no existe en la dataclass es un bug nuestro, no un
-            # fallo de base. Antes se hacía `return` en silencio y el error
-            # quedaba invisible para siempre.
-            log(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
-            return False
-        except Exception as e:
-            log(f"ERROR de base insertando {_ctx}: {e}")
-            return False
+        return self._write("insertando data_1", """
+            INSERT INTO nebulaedge_schema.data_1 (
+                id_device, temperature, press, hum, co,
+                config_version_applied, time_client
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, lambda: (
+            data_1.id_device,
+            data_1.temperature,
+            data_1.press,
+            data_1.hum,
+            data_1.co,
+            data_1.config_version_applied,
+            self._int_to_db_datetime(data_1.time_client),
+        ))
 
     def insert_data_2(self, data_2: "Data_2") -> bool:
-        """Inserta telemetría inercial. True si la fila quedó guardada. Ver
-        insert_data_1 para por qué no propaga pero sí reporta.
-        """
-        _ctx = "data_2"
-        try:
-            with self._connection() as db:
-                with db.cursor() as cursor:
-                    cursor.execute("""
-                        INSERT INTO nebulaedge_schema.data_2 (
-                            id_device, acc_x, acc_y, acc_z,
-                            gyr_x, gyr_y, gyr_z,
-                            mag_x, mag_y, mag_z,
-                            config_version_applied, time_client
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        data_2.id_device,
-                        data_2.acc_x,
-                        data_2.acc_y,
-                        data_2.acc_z,
-                        data_2.gyr_x,
-                        data_2.gyr_y,
-                        data_2.gyr_z,
-                        data_2.mag_x,
-                        data_2.mag_y,
-                        data_2.mag_z,
-                        data_2.config_version_applied,
-                        self._int_to_db_datetime(data_2.time_client),
-                    ))
-                    db.commit()
-            return True
-        except AttributeError as e:
-            # Un campo que no existe en la dataclass es un bug nuestro, no un
-            # fallo de base. Antes se hacía `return` en silencio y el error
-            # quedaba invisible para siempre.
-            log(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
-            return False
-        except Exception as e:
-            log(f"ERROR de base insertando {_ctx}: {e}")
-            return False
+        """Inserta telemetría inercial. True si la fila quedó guardada."""
+        return self._write("insertando data_2", """
+            INSERT INTO nebulaedge_schema.data_2 (
+                id_device, acc_x, acc_y, acc_z,
+                gyr_x, gyr_y, gyr_z,
+                mag_x, mag_y, mag_z,
+                config_version_applied, time_client
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, lambda: (
+            data_2.id_device,
+            data_2.acc_x,
+            data_2.acc_y,
+            data_2.acc_z,
+            data_2.gyr_x,
+            data_2.gyr_y,
+            data_2.gyr_z,
+            data_2.mag_x,
+            data_2.mag_y,
+            data_2.mag_z,
+            data_2.config_version_applied,
+            self._int_to_db_datetime(data_2.time_client),
+        ))
 
     def insert_log(self, log: "Log") -> bool:
         """Inserta un evento de log. True si la fila quedó guardada."""
-        _ctx = "log"
-        try:
-            with self._connection() as db:
-                with db.cursor() as cursor:
-                    cursor.execute("""
-                        INSERT INTO nebulaedge_schema.log (
-                            id_device, status_report, protocol_report, batt_level,
-                            time_client, time_server
-                        ) VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (
-                        log.id_device,
-                        log.status_report,
-                        log.protocol_report,
-                        log.batt_level,
-                        self._int_to_db_datetime(log.time_client),
-                        self._int_to_db_datetime(log.time_server),
-                    ))
-                    db.commit()
-            return True
-        except AttributeError as e:
-            # Un campo que no existe en la dataclass es un bug nuestro, no un
-            # fallo de base. Antes se hacía `return` en silencio y el error
-            # quedaba invisible para siempre.
-            log(f"BUG: {_ctx} tiene un campo que el insert no encontró: {e}")
-            return False
-        except Exception as e:
-            log(f"ERROR de base insertando {_ctx}: {e}")
-            return False
+        return self._write("insertando log", """
+            INSERT INTO nebulaedge_schema.log (
+                id_device, status_report, protocol_report, batt_level,
+                time_client, time_server
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+        """, lambda: (
+            log.id_device,
+            log.status_report,
+            log.protocol_report,
+            log.batt_level,
+            self._int_to_db_datetime(log.time_client),
+            self._int_to_db_datetime(log.time_server),
+        ))
 
     # psycopg2 es sincrónico/bloqueante: cada método de arriba abre su propia
     # conexión y espera la red. Llamado directo desde una corutina, congela

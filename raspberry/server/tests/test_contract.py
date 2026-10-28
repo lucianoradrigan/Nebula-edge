@@ -9,6 +9,7 @@ tabla config seguirían usando los números viejos. Este test es el que se queja
 """
 from __future__ import annotations
 import unittest
+from pathlib import Path
 
 import models
 from codec import DataCodec
@@ -31,6 +32,19 @@ class ContractTests(unittest.TestCase):
             (0, 1, 2, 3, 4),
         )
         self.assertEqual(models.VALID_PROTOCOLS, frozenset(range(5)))
+
+    def test_schema_proto_is_the_same_on_both_sides(self):
+        """schema.proto está duplicado a propósito entre firmware y servidor
+        (ver nebulaedge_proto_schema/README.md). Si alguien edita una copia y
+        no la otra, cada lado compila contra un contrato distinto."""
+        server_dir = Path(__file__).resolve().parent.parent
+        server_copy = server_dir / "schema.proto"
+        firmware_copy = (server_dir.parent.parent / "esp32" / "components"
+                         / "nebulaedge_proto_schema" / "schema.proto")
+        if not firmware_copy.exists():
+            self.skipTest("sin el firmware al lado (p.ej. dentro del contenedor)")
+        self.assertEqual(server_copy.read_text(), firmware_copy.read_text(),
+                         "las dos copias de schema.proto difieren")
 
 
 if __name__ == "__main__":
