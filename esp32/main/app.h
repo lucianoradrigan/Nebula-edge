@@ -100,7 +100,7 @@ extern fxl6408_handle_t io_expander;
  * y no había dónde leer cuál era cuál.
  *
  * Los tiempos que SÍ son configurables desde el servidor no viven acá: vienen
- * en el Config (send_interval_s, env_interval_s, sleep_time_s). */
+ * en el Config (send_interval_s, sleep_time_s). */
 
 /* Los paquetes de control (ACK de config, aviso de deep sleep) no esperan
  * respuesta: se mandan varias veces seguidas para bajar la probabilidad de que

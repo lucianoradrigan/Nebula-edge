@@ -7,7 +7,7 @@ CREATE TABLE nebulaedge_schema.config (
     acc_sampling INT,
     gyro_sensibility INT,
     bme688_sampling INT,
-    send_interval_s INT,        -- Segundos entre paquetes Data_2 (flujo rapido); 0 = sin espera
+    send_interval_s INT,        -- Segundos entre paquetes (Data_1 y Data_2 comparten el intervalo); 0 = sin espera
     sleep_time_s INT,
     sleep_window_size INT,
     tcp_port INT,

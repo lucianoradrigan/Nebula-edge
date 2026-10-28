@@ -34,7 +34,6 @@ El firmware considera los siguientes sensores en la placa:
 2. **BMI270 (IMU)**
 - Aceleración en ejes X, Y, Z
 - Giroscopio en ejes X, Y, Z
-- Magnitudes derivadas (RMS/amplitud/frecuencia, según procesamiento)
 
 3. **BMM350 (magnetómetro)**
 - Campo magnético en ejes X, Y, Z
@@ -133,9 +132,13 @@ La tabla de particiones es propia (`partitions.csv`): dos ranuras de app OTA de
 - Confirmar que se incrementó `config_version` en DB.
 3. No conecta por WiFi en TCP/UDP/MQTT:
 - Verificar `ssid`, `passwd` y `host_ip_addr` entregados por la Raspberry.
-4. Al abrir el puerto serie la placa queda en `waiting for download`:
-- Bajar DTR y RTS antes de abrir el puerto; pyserial los levanta al abrir y esa
-  combinación deja al ESP32-S3 en modo descarga.
+4. Al abrir o cerrar el puerto serie la placa se reinicia o queda en `waiting for download`:
+- Las líneas DTR/RTS del USB-Serial-JTAG del ESP32-S3 resetean el chip, y el
+  efecto depende del sistema operativo.
+- En macOS: bajar DTR y RTS antes de abrir el puerto. pyserial los levanta al
+  abrir, y esa combinación deja al ESP32-S3 en modo descarga.
+- En Linux: no tocarlos. Cambiarlos, incluso para bajarlos, pasa por un
+  estado intermedio que resetea la placa.
 
 ## 10) Estructura del firmware
 
@@ -144,8 +147,19 @@ pieza reutilizable vive en `components/`.
 
 `main/main.c` es el orquestador: crea las colas de FreeRTOS, decide si la
 configuración viene de NVS (al despertar de deep sleep) o de BLE (en arranque
-en frío), levanta las tasks de sensores y la del protocolo activo, y maneja el
-ciclo de deep sleep.
+en frío), inicializa los sensores y corre el bucle que abre el protocolo
+activo y arranca sus tasks. El resto de `main/` son las piezas que usa:
+
+| Archivo | Qué hace |
+|---|---|
+| `protocols.c` | La tabla `PROTOCOLS[]`: lo propio de cada protocolo (abrir, mandar datos, mandar ACK, recibir config, cerrar). Las tasks son las mismas para todos. |
+| `data_path.c` | Las dos productoras de telemetría (traducen la lectura de cada driver al mensaje protobuf) y la task de envío. |
+| `config_task.c` | La task de respuesta: recibe cada config (también por el canal de rescate BLE), la valida, la compara y confirma con `ConfigAck`. |
+| `gate.c` | La compuerta cooperativa: pide a las tasks del camino de datos que se detengan en un punto seguro antes de cambiar de protocolo. |
+| `power.c` | El deep sleep del modo discontinuo. |
+| `diag.c` | Banner de arranque, motivo del último reinicio y monitor de memoria libre. |
+| `infer.c`, `model_runner.cc` | Modo INFER (sección 7). |
+| `app.h` | Constantes de tiempos y tamaños, e interruptores de compilación (`SD_PERSISTENCE`). |
 
 Componentes, por rol:
 
@@ -165,7 +179,7 @@ Notas:
 
 - **Los drivers de sensor son copiables a otro proyecto.** No conocen protobuf
   ni el formato de cable: cada uno devuelve su propio tipo en unidades físicas
-  (`bme688_reading_t`, `bmi270_reading_t`, `bmm350_reading_t`) y `main.c` lo
+  (`bme688_reading_t`, `bmi270_reading_t`, `bmm350_reading_t`) y `data_path.c` lo
   traduce al mensaje. Su única dependencia del proyecto es `nebulaedge_i2c`, así
   que copiar esas dos carpetas alcanza. Las constantes del chip (dirección I2C,
   ODR) viven en el header del driver, no en `nebulaedge_defs`.
@@ -173,9 +187,12 @@ Notas:
   no hay muestra nueva, NO tocan la estructura de salida: así el caller
   distingue un fallo de una medición legítima de cero, cosa que antes era
   imposible.
-- `nebulaedge_ble` cumple doble rol: es el canal por el que llega la
-  configuración inicial (siempre), y además uno de los cuatro protocolos de
-  telemetría (cuando `protocol_conf = 3`).
+- `nebulaedge_ble` cumple doble rol: es el canal de control (configuración
+  inicial y rescate, con cualquier protocolo) y además uno de los cuatro
+  protocolos de telemetría (cuando `protocol_conf = 3`). `ble_init()` corre una
+  sola vez y no se deshace: el anuncio y la característica A quedan activos
+  para que el servidor recupere un device que dejó de escucharlo por WiFi (ver
+  la sección 1.1 del README de la raíz).
 - Los UUIDs del servicio GATT deben coincidir con los declarados en
   [raspberry/server/gatt_uuids.py](../raspberry/server/gatt_uuids.py).
 - `schema.proto` está duplicado a propósito entre firmware y servidor: son dos
@@ -183,7 +200,7 @@ Notas:
   [components/nebulaedge_proto_schema/README.md](components/nebulaedge_proto_schema/README.md).
 - **La persistencia en microSD solo escribe en modo deep sleep**: las tasks de
   envío llaman a `sdstorage_write_packet()` únicamente cuando `sleep_time_s > 0`.
-  El interruptor es `SD_PERSISTENCE` en `main/main.c`; con el interruptor en 0
+  El interruptor es `SD_PERSISTENCE` en `main/app.h`; con el interruptor en 0
   esa llamada corta en `sd_is_mounted()` y no escribe nada, sin que el resto del
   código lo note. En la IM-V2 el chip select cuelga del IO0 del expansor
   FXL6408: a SDSPI se le dice que no hay chip select y lo mueve el componente,

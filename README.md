@@ -17,6 +17,20 @@ Flujo en runtime:
 `4 INFER` es distinto: no manda telemetria. El ESP32 baja por MQTT un modelo de
 deteccion de fallas, lo verifica y responde pedidos de inferencia (ver seccion 9).
 
+### 1.1) BLE como canal de control y de rescate
+
+BLE es el canal de control en todos los modos: por ahi entra la configuracion
+inicial, y el ESP32 lo deja activo (anuncio y caracteristica A) con cualquier
+protocolo. En los modos WiFi (MQTT, UDP, TCP, INFER) los datos van por WiFi y
+BLE queda solo para control; en el modo BLE lleva ademas los datos.
+
+Eso da una via de recuperacion independiente del transporte de datos. Mientras
+un device tiene sesion abierta, el servidor ignora sus anuncios BLE. Cuando la
+sesion termina (timeout sin datos, enlace perdido, reinicio del servidor), el
+escaneo lo vuelve a encontrar, le escribe la config por BLE y abre una sesion
+nueva. Es el unico camino para recuperar un device que dejo de escuchar por
+WiFi, y en el modo BLE no hay un canal aparte: se rehace la misma conexion.
+
 ## 2) Requisitos minimos
 
 Hardware:
@@ -77,7 +91,13 @@ rfkill list
 sudo rfkill unblock bluetooth
 ```
 
-Si necesitas forzar adaptador BLE:
+El servidor elige solo el adaptador: prefiere el dongle USB y, si no hay,
+usa el de la placa (con un aviso en el log). Elige por tipo de bus y no por
+nombre porque el dongle puede quedar como `hci0` o `hci1` segun el orden en que
+arranquen. La eleccion se hace una vez, al arrancar el servidor: si el dongle
+se conecta o reconecta despues, hay que reiniciar el servidor.
+
+Si necesitas forzar un adaptador:
 
 ```bash
 cd raspberry
@@ -125,6 +145,10 @@ cd raspberry
 sudo docker compose down -v
 sudo docker compose up --build -d
 ```
+
+Ojo: `down -v` borra el volumen de la base, con toda la telemetria y los
+resultados guardados. En una base con datos, es mejor agregar el device con un
+`INSERT` directo en `nebulaedge_schema.config` desde `psql`.
 
 ### Paso 6: Verificar que llega telemetria
 
@@ -178,7 +202,7 @@ Tablas principales:
 
 Qué guarda cada una:
 
-- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `env_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `host_ip_addr`, `ssid`, `passwd`, `mqtt_broker`, `model_version`, `infer_source`.
+- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `host_ip_addr`, `ssid`, `passwd`, `mqtt_broker`, `model_version`, `infer_source`. Las columnas `host_ip_addr`, `ssid` y `passwd` no se leen: la red que recibe el device la arma el servidor (ver seccion 10).
 - `data_1`: `temperature`, `press`, `hum`, `co` (hoy guarda la resistencia de gas cruda, no CO), mas `config_version_applied` y `time_client`.
 - `data_2`: `acc_x/y/z`, `gyr_x/y/z`, `mag_x/y/z`, `config_version_applied` y `time_client`.
 - `log`: `status_report`, `protocol_report`, `batt_level`, `time_client`, `time_server`.
@@ -235,7 +259,9 @@ docker compose exec -T db psql -U nebulaedge -d nebulaedge < db_init/04_infer.sq
 1. Al tener `sleep_window_size` de tamaño 1, el cambio de protocolo no funciona bien.
 2. Es fundamental hacer los cambios de protocolo de a uno, y esperar a que complete para hacer otro, de otra manera podría colapsar el servidor/no funcionar bien el sistema de ACK's.
 3. El módulo microSD está en desarrollo para la nueva versión de placa de desarrollo IM-V3.
-4. La raspberry enviará las credenciales de la SSID a la que esté actualmente conectada. Se está trabajando en un modo AP.
+4. El Bluetooth de la placa de la Raspberry es poco estable; el banco usa un dongle USB. Con el modo AP en el WiFi de la placa, el Bluetooth de la placa deja de conectar (comparten chip y antena), así que el modo AP necesita el dongle (ver seccion 10).
+5. El adaptador BLE se elige al arrancar el servidor: un dongle conectado o reconectado después no se usa hasta reiniciarlo.
+6. Si la Raspberry levanta el AP porque no encontró una red conocida, no vuelve sola al router cuando reaparece.
 
 ## 7) Estructura del repositorio
 
@@ -289,18 +315,22 @@ Postgres, ni broker MQTT, ni hardware. Postgres se reemplaza por un repositorio
 en memoria y BLE por un doble de `bleak`.
 
 ```bash
-cd raspberry/server
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r ../requirements.txt
-python -m unittest discover -s tests
+cd raspberry
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cd server
+../.venv/bin/python -m unittest discover -s tests
 ```
 
-Esperado: `Ran 67 tests ... OK`.
+Esperado: `Ran 84 tests ... OK`.
 
 Cobertura actual: las cuatro sesiones de protocolo (telemetria, cambio de
-config con ACK, deep sleep, cierre por timeout y resincronizacion del reloj del
-device) y la sesion INFER (transferencia del modelo, corrida del set de prueba,
-resultados sin pedido). Lo que **no** cubre: el SQL
+config con ACK, deep sleep, cierre por timeout, resincronizacion del reloj del
+device, enlace BLE perdido, ACKs viejos en las colas MQTT y base de datos con
+una version mas vieja que la del device), la sesion INFER (transferencia del
+modelo, corrida del set de prueba, reenvio de un pedido sin respuesta,
+resultados sin pedido), el cierre de sesion en el descubrimiento aunque falle
+la base, y el contrato con el firmware. Lo que **no** cubre: el SQL
 real contra Postgres, y que `bleak`/BlueZ se comporten como el doble. BLE es el
 unico de los cuatro que no se puede validar de verdad sin un ESP32 enfrente.
 
@@ -334,3 +364,46 @@ device suma ~190 ms.
 
 El contrato completo (mensajes, topicos y tipos de paquete 0x05-0x07) esta en
 `schema.proto`.
+
+## 10) Red WiFi de los devices y modo AP
+
+La red que recibe el device (SSID, contraseña e IP del servidor) la arma el
+servidor en cada config (`system.py` -> `LocalWifiConfig`), no la tabla
+`config`:
+
+- Si `WIFI_SSID` / `WIFI_PASSWD` estan definidas en `raspberry/.env`, se usan
+  esas. Es el caso de la Raspberry conectada por cable a un router.
+- Si estan vacias, se lee con `nmcli` la conexion activa de `WIFI_DEVICE`
+  (`wlan0` por defecto): la WiFi a la que esta conectada la Raspberry, o el AP
+  que levanto ella misma.
+
+Cuando cambia la red, el device la toma con la siguiente config. Si no logra
+conectarse, se reinicia y la recibe por BLE (seccion 1.1).
+
+Modo AP: la Raspberry publica su propia red con un perfil de NetworkManager,
+probado en Raspberry Pi OS Bookworm:
+
+```bash
+sudo rfkill unblock wifi
+sudo nmcli con add type wifi ifname wlan0 con-name nebulaedge_ap autoconnect yes \
+  ssid nebulaedge_ap 802-11-wireless.mode ap 802-11-wireless.band bg \
+  802-11-wireless.channel 6 wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn \
+  wifi-sec.pairwise ccmp wifi-sec.group ccmp wifi-sec.psk '<clave>' \
+  ipv4.method shared ipv6.method ignore connection.autoconnect-priority -10
+sudo nmcli con up nebulaedge_ap
+```
+
+- `band bg`: el ESP32-S3 solo usa 2,4 GHz.
+- `ipv4.method shared`: la Raspberry queda en `10.42.0.1` y entrega IPs por DHCP.
+- Prioridad `-10`: con `autoconnect yes`, se levanta solo si no hay una red
+  conocida a la vista.
+
+Despues se vacian `WIFI_SSID` y `WIFI_PASSWD` en `.env` y se reinicia el
+servidor. El broker y los puertos UDP/TCP ya escuchan en todas las interfaces.
+
+Con el AP en el WiFi de la placa, el Bluetooth de la placa no logra conectar:
+comparten chip y antena, y el AP le deja muy poco tiempo de radio. Medido en
+banco: sin el dongle, todos los handshakes BLE fallaron con el AP arriba, y el
+primero entro apenas se bajo. Como BLE es el canal de rescate, el modo AP
+necesita el dongle BLE USB, o un adaptador WiFi USB para el AP que deje libre la
+radio de la placa.

@@ -1,4 +1,4 @@
--- Insertar valores iniciales segun create_tables.py
+-- Valores iniciales de la tabla config (la crea 02_tables.sql)
 --
 -- send_interval_s = 1 -> un Data_1 y un Data_2 por segundo. Los dos flujos
 --    comparten el intervalo; 0 = sin espera.
