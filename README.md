@@ -202,7 +202,7 @@ Tablas principales:
 
 Qué guarda cada una:
 
-- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `host_ip_addr`, `ssid`, `passwd`, `mqtt_broker`, `model_version`, `infer_source`. Las columnas `host_ip_addr`, `ssid` y `passwd` no se leen: la red que recibe el device la arma el servidor (ver seccion 10).
+- `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `mqtt_broker`, `model_version`, `infer_source`. La red que recibe el device (SSID, contraseña e IP del servidor) no se guarda: la arma el servidor en cada config (ver seccion 10).
 - `data_1`: `temperature`, `press`, `hum`, `co` (hoy guarda la resistencia de gas cruda, no CO), mas `config_version_applied` y `time_client`.
 - `data_2`: `acc_x/y/z`, `gyr_x/y/z`, `mag_x/y/z`, `config_version_applied` y `time_client`.
 - `log`: `status_report`, `protocol_report`, `batt_level`, `time_client`, `time_server`.
@@ -241,6 +241,10 @@ puede repetir sin romper nada:
 cd raspberry
 docker compose exec -T db psql -U nebulaedge -d nebulaedge < db_init/04_infer.sql
 ```
+
+Lo mismo con [raspberry/db_init/05_drop_wifi_columns.sql](raspberry/db_init/05_drop_wifi_columns.sql),
+que saca de `config` las columnas `host_ip_addr`, `ssid` y `passwd` de las
+bases creadas antes de que se dejaran de usar.
 
 ## 5) Campos clave de configuracion
 

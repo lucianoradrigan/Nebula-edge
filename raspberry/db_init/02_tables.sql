@@ -12,9 +12,6 @@ CREATE TABLE nebulaedge_schema.config (
     sleep_window_size INT,
     tcp_port INT,
     udp_port INT,
-    host_ip_addr VARCHAR(45),
-    ssid VARCHAR(128),
-    passwd VARCHAR(128),
     mqtt_broker VARCHAR(128)
 );
 
