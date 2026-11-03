@@ -203,8 +203,9 @@ Tablas principales:
 Qué guarda cada una:
 
 - `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `mqtt_broker`, `model_version`, `infer_source`. La red que recibe el device (SSID, contraseña e IP del servidor) no se guarda: la arma el servidor en cada config (ver seccion 10).
-- `data_1`: `temperature`, `press`, `hum`, `co` (hoy guarda la resistencia de gas cruda, no CO), mas `config_version_applied` y `time_client`.
-- `data_2`: `acc_x/y/z`, `gyr_x/y/z`, `mag_x/y/z`, `config_version_applied` y `time_client`.
+- `data_1`: `temperature`, `press`, `hum`, `co` (hoy guarda la resistencia de gas cruda, no CO), mas `config_version_applied`, `time_client` y `time_server`.
+- `data_2`: `acc_x/y/z`, `gyr_x/y/z`, `mag_x/y/z`, `config_version_applied`, `time_client` y `time_server`.
+- En `data_1` y `data_2`, `time_client` es la hora del device (segundos enteros) y `time_server` la hora en que el servidor recibio el paquete, con fraccion de segundo.
 - `log`: `status_report`, `protocol_report`, `batt_level`, `time_client`, `time_server`.
 
 Consultas utiles:
@@ -244,7 +245,10 @@ docker compose exec -T db psql -U nebulaedge -d nebulaedge < db_init/04_infer.sq
 
 Lo mismo con [raspberry/db_init/05_drop_wifi_columns.sql](raspberry/db_init/05_drop_wifi_columns.sql),
 que saca de `config` las columnas `host_ip_addr`, `ssid` y `passwd` de las
-bases creadas antes de que se dejaran de usar.
+bases creadas antes de que se dejaran de usar, y con
+[raspberry/db_init/06_data_time_server.sql](raspberry/db_init/06_data_time_server.sql),
+que agrega `time_server` a `data_1` y `data_2` (las filas anteriores quedan en
+NULL).
 
 ## 5) Campos clave de configuracion
 
@@ -327,7 +331,7 @@ cd server
 ../.venv/bin/python -m unittest discover -s tests
 ```
 
-Esperado: `Ran 89 tests ... OK`.
+Esperado: `Ran 90 tests ... OK`.
 
 Cobertura actual: las cuatro sesiones de protocolo (telemetria, cambio de
 config con ACK, deep sleep, cierre por timeout, resincronizacion del reloj del

@@ -32,7 +32,8 @@ CREATE TABLE nebulaedge_schema.data_1 (
     hum INT,
     co FLOAT,                   -- OJO: hoy guarda resistencia de gas cruda, no CO
     config_version_applied INT,
-    time_client TIMESTAMP
+    time_client TIMESTAMP,          -- device, con resolución de segundos
+    time_server TIMESTAMP           -- servidor, al recibir el paquete (con fracción de segundo)
 );
 
 -- Telemetria inercial (BMI270 + BMM350). Ritmo rapido: send_interval_s.
@@ -48,5 +49,6 @@ CREATE TABLE nebulaedge_schema.data_2 (
     mag_y FLOAT,
     mag_z FLOAT,
     config_version_applied INT,
-    time_client TIMESTAMP
+    time_client TIMESTAMP,          -- device, con resolución de segundos
+    time_server TIMESTAMP           -- servidor, al recibir el paquete (con fracción de segundo)
 );

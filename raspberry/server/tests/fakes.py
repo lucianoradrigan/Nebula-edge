@@ -188,6 +188,7 @@ class FakeRepo:
         self.models = models or {}      # catálogo de la tabla `model`
         self.data_1: list[Data_1] = []
         self.data_2: list[Data_2] = []
+        self.time_server: list[float] = []     # el de cada Data_1/Data_2, en orden de llegada
         self.logs: list = []
 
     async def get_config_async(self, device_id):
@@ -246,12 +247,14 @@ class FakeRepo:
     # `insert_ok = False` simula una base caída sin tener que tener una.
     insert_ok = True
 
-    async def insert_data_1_async(self, d):
+    async def insert_data_1_async(self, d, time_server):
         self.data_1.append(d)
+        self.time_server.append(time_server)
         return self.insert_ok
 
-    async def insert_data_2_async(self, d):
+    async def insert_data_2_async(self, d, time_server):
         self.data_2.append(d)
+        self.time_server.append(time_server)
         return self.insert_ok
 
     async def insert_log_async(self, log):

@@ -337,15 +337,19 @@ class DatabaseRepository:
         return dict(sent=sent, ok=ok, accuracy=acc, mae=mae,
                     inference_us=inf_us, feature_us=feat_us, rtt_s=rtt)
 
-    def insert_data_1(self, data_1: Data_1) -> bool:
+    def insert_data_1(self, data_1: Data_1, time_server: float) -> bool:
         """Inserta telemetría ambiental (BME688). True si la fila quedó
         guardada. Ver _write() para por qué no propaga pero sí reporta.
+
+        `time_server` es el epoch UTC en que llegó el paquete, con fracción de
+        segundo; lo marca PacketRouter.route() al recibirlo, no acá, para que
+        la espera del pool de hilos no se le sume.
         """
         return self._write("insertando data_1", """
             INSERT INTO nebulaedge_schema.data_1 (
                 id_device, temperature, press, hum, co,
-                config_version_applied, time_client
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                config_version_applied, time_client, time_server
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, lambda: (
             data_1.id_device,
             data_1.temperature,
@@ -354,17 +358,19 @@ class DatabaseRepository:
             data_1.co,
             data_1.config_version_applied,
             self._int_to_db_datetime(data_1.time_client),
+            datetime.utcfromtimestamp(time_server),
         ))
 
-    def insert_data_2(self, data_2: "Data_2") -> bool:
-        """Inserta telemetría inercial. True si la fila quedó guardada."""
+    def insert_data_2(self, data_2: "Data_2", time_server: float) -> bool:
+        """Inserta telemetría inercial. True si la fila quedó guardada.
+        `time_server`, como en insert_data_1()."""
         return self._write("insertando data_2", """
             INSERT INTO nebulaedge_schema.data_2 (
                 id_device, acc_x, acc_y, acc_z,
                 gyr_x, gyr_y, gyr_z,
                 mag_x, mag_y, mag_z,
-                config_version_applied, time_client
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                config_version_applied, time_client, time_server
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, lambda: (
             data_2.id_device,
             data_2.acc_x,
@@ -378,6 +384,7 @@ class DatabaseRepository:
             data_2.mag_z,
             data_2.config_version_applied,
             self._int_to_db_datetime(data_2.time_client),
+            datetime.utcfromtimestamp(time_server),
         ))
 
     def insert_log(self, log: "Log") -> bool:
@@ -424,11 +431,11 @@ class DatabaseRepository:
     async def inference_run_summary_async(self, run_id: int) -> dict:
         return await asyncio.to_thread(self.inference_run_summary, run_id)
 
-    async def insert_data_1_async(self, data_1: "Data_1") -> bool:
-        return await asyncio.to_thread(self.insert_data_1, data_1)
+    async def insert_data_1_async(self, data_1: "Data_1", time_server: float) -> bool:
+        return await asyncio.to_thread(self.insert_data_1, data_1, time_server)
 
-    async def insert_data_2_async(self, data_2: "Data_2") -> bool:
-        return await asyncio.to_thread(self.insert_data_2, data_2)
+    async def insert_data_2_async(self, data_2: "Data_2", time_server: float) -> bool:
+        return await asyncio.to_thread(self.insert_data_2, data_2, time_server)
 
     async def insert_log_async(self, log: "Log") -> bool:
         return await asyncio.to_thread(self.insert_log, log)

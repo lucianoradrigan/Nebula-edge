@@ -9,10 +9,15 @@ fallo de base.
 from __future__ import annotations
 import unittest
 from contextlib import contextmanager
+from datetime import datetime
 from unittest import mock
 
 import repository
 from models import Data_1, Log
+
+
+# 2027-01-15 08:00:00.250 UTC: con fracción de segundo a propósito.
+RECEIVED_AT = 1_800_000_000.25
 
 
 def data_1() -> Data_1:
@@ -62,23 +67,33 @@ class WriteTests(unittest.TestCase):
 
     def test_insert_is_committed(self):
         conn = FakeConnection()
-        self.assertTrue(self._repo(conn).insert_data_1(data_1()))
+        self.assertTrue(self._repo(conn).insert_data_1(data_1(), RECEIVED_AT))
         self.assertEqual(conn.commits, 1)
         sql, params = conn.cur.executed[0]
         self.assertIn("nebulaedge_schema.data_1", sql)
         self.assertEqual(params[0], "AA:BB:CC:DD:EE:01")
 
+    def test_time_server_keeps_the_fraction_of_a_second(self):
+        """time_client viene del device en segundos enteros; time_server es
+        del servidor y tiene que conservar los milisegundos, o no sirve para
+        medir tiempos entre paquetes."""
+        conn = FakeConnection()
+        self._repo(conn).insert_data_1(data_1(), RECEIVED_AT)
+        sql, params = conn.cur.executed[0]
+        self.assertIn("time_server", sql)
+        self.assertEqual(params[-1], datetime(2027, 1, 15, 8, 0, 0, 250000))
+
     def test_database_failure_returns_false(self):
         conn = FakeConnection(fail=OSError("server closed the connection (simulado)"))
         with mock.patch.object(repository, "log") as log:
-            self.assertFalse(self._repo(conn).insert_data_1(data_1()))
+            self.assertFalse(self._repo(conn).insert_data_1(data_1(), RECEIVED_AT))
         self.assertIn("ERROR de base insertando data_1", log.call_args[0][0])
         self.assertEqual(conn.commits, 0)
 
     def test_missing_field_is_reported_as_a_bug(self):
         conn = FakeConnection()
         with mock.patch.object(repository, "log") as log:
-            self.assertFalse(self._repo(conn).insert_data_1(object()))
+            self.assertFalse(self._repo(conn).insert_data_1(object(), RECEIVED_AT))
         self.assertTrue(log.call_args[0][0].startswith("BUG: insertando data_1"))
         self.assertEqual(conn.cur.executed, [], "no debía llegar a la base")
 

@@ -80,6 +80,7 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(task.cancel)
 
         dev = await self._device_socket()
+        before = time.time()
         # Se manda repetido: UDP descarta en silencio lo que llegue antes del bind.
         for _ in range(5):
             await self._send(dev, data_1_packet(applied_version=1), port)
@@ -88,6 +89,9 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreaterEqual(len(repo.data_1), 1, "no se insertó la telemetría")
         self.assertEqual(repo.data_1[0].id_device, DEVICE_ID)
+        # La hora de llegada es la del servidor, no el time_client del paquete.
+        self.assertTrue(before <= repo.time_server[0] <= time.time(),
+                        "time_server debía ser la hora en que llegó el paquete")
         self.assertFalse(task.done(), "la sesión no debía cerrar con la config al día")
 
     async def test_new_config_in_db_is_pushed_and_confirmed_with_ack(self):
