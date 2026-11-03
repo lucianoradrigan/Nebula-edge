@@ -32,7 +32,7 @@ ACOPLAMIENTO
 """
 from __future__ import annotations
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from psycopg2.pool import ThreadedConnectionPool
 import asyncio
 import threading
@@ -124,6 +124,22 @@ class DatabaseRepository:
         except Exception as e:
             log(f"ERROR de base {what}: {e}")
             return False
+
+    _EPOCH = datetime(1970, 1, 1)
+
+    @classmethod
+    def _us_to_db_datetime(cls, value_us: int | None) -> datetime | None:
+        """Epoch en microsegundos -> datetime naive UTC, sin perder el µs.
+
+        Con aritmética entera a propósito: `utcfromtimestamp(us / 1e6)` pasa
+        por un float, que con el epoch de hoy puede redondear el último
+        microsegundo. 0 o None -> None: es lo que manda un firmware que no
+        conoce el campo, y en la base tiene que quedar como "sin dato", no como
+        1970.
+        """
+        if not value_us:
+            return None
+        return cls._EPOCH + timedelta(microseconds=int(value_us))
 
     @staticmethod
     def _int_to_db_datetime(value: int) -> datetime:
@@ -337,19 +353,21 @@ class DatabaseRepository:
         return dict(sent=sent, ok=ok, accuracy=acc, mae=mae,
                     inference_us=inf_us, feature_us=feat_us, rtt_s=rtt)
 
-    def insert_data_1(self, data_1: Data_1, time_server: float) -> bool:
+    def insert_data_1(self, data_1: Data_1, time_server_us: int) -> bool:
         """Inserta telemetría ambiental (BME688). True si la fila quedó
         guardada. Ver _write() para por qué no propaga pero sí reporta.
 
-        `time_server` es el epoch UTC en que llegó el paquete, con fracción de
-        segundo; lo marca PacketRouter.route() al recibirlo, no acá, para que
-        la espera del pool de hilos no se le sume.
+        `time_server_us` es el epoch UTC en µs en que llegó el paquete; lo
+        marca PacketRouter.route() al recibirlo, no acá, para que la espera del
+        pool de hilos no se le sume. `seq` y `time_sent` quedan en NULL con un
+        firmware que no los manda.
         """
         return self._write("insertando data_1", """
             INSERT INTO nebulaedge_schema.data_1 (
                 id_device, temperature, press, hum, co,
-                config_version_applied, time_client, time_server
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                config_version_applied, time_client, time_server,
+                seq, time_sent
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, lambda: (
             data_1.id_device,
             data_1.temperature,
@@ -358,19 +376,22 @@ class DatabaseRepository:
             data_1.co,
             data_1.config_version_applied,
             self._int_to_db_datetime(data_1.time_client),
-            datetime.utcfromtimestamp(time_server),
+            self._us_to_db_datetime(time_server_us),
+            data_1.seq or None,
+            self._us_to_db_datetime(data_1.time_sent_us),
         ))
 
-    def insert_data_2(self, data_2: "Data_2", time_server: float) -> bool:
+    def insert_data_2(self, data_2: "Data_2", time_server_us: int) -> bool:
         """Inserta telemetría inercial. True si la fila quedó guardada.
-        `time_server`, como en insert_data_1()."""
+        `time_server_us`, `seq` y `time_sent`, como en insert_data_1()."""
         return self._write("insertando data_2", """
             INSERT INTO nebulaedge_schema.data_2 (
                 id_device, acc_x, acc_y, acc_z,
                 gyr_x, gyr_y, gyr_z,
                 mag_x, mag_y, mag_z,
-                config_version_applied, time_client, time_server
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                config_version_applied, time_client, time_server,
+                seq, time_sent
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, lambda: (
             data_2.id_device,
             data_2.acc_x,
@@ -384,7 +405,9 @@ class DatabaseRepository:
             data_2.mag_z,
             data_2.config_version_applied,
             self._int_to_db_datetime(data_2.time_client),
-            datetime.utcfromtimestamp(time_server),
+            self._us_to_db_datetime(time_server_us),
+            data_2.seq or None,
+            self._us_to_db_datetime(data_2.time_sent_us),
         ))
 
     def insert_log(self, log: "Log") -> bool:
@@ -431,11 +454,11 @@ class DatabaseRepository:
     async def inference_run_summary_async(self, run_id: int) -> dict:
         return await asyncio.to_thread(self.inference_run_summary, run_id)
 
-    async def insert_data_1_async(self, data_1: "Data_1", time_server: float) -> bool:
-        return await asyncio.to_thread(self.insert_data_1, data_1, time_server)
+    async def insert_data_1_async(self, data_1: "Data_1", time_server_us: int) -> bool:
+        return await asyncio.to_thread(self.insert_data_1, data_1, time_server_us)
 
-    async def insert_data_2_async(self, data_2: "Data_2", time_server: float) -> bool:
-        return await asyncio.to_thread(self.insert_data_2, data_2, time_server)
+    async def insert_data_2_async(self, data_2: "Data_2", time_server_us: int) -> bool:
+        return await asyncio.to_thread(self.insert_data_2, data_2, time_server_us)
 
     async def insert_log_async(self, log: "Log") -> bool:
         return await asyncio.to_thread(self.insert_log, log)

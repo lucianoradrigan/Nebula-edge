@@ -65,6 +65,11 @@ message Config {
     int32 model_version = 18;               // Modelo que debe tener activo. 0 = ninguno.
     int32 infer_source = 19;                // Qué se infiere: 0 -> features del dataset (fase C1),
                                             // 1 -> ventanas crudas del dataset (C2), 2 -> sensores propios.
+
+    // Hora del servidor en microsegundos desde epoch (UTC), puesta al
+    // serializar la config. Es la que usa el device para su reloj; time_client
+    // (segundos) se sigue mandando para un firmware que no conoce este campo.
+    uint64 time_server_us = 20;
 }
 
 // ACK de configuración
@@ -186,6 +191,11 @@ message Data_1 {
     float co = 5;                           // OJO: hoy guarda la resistencia de gas cruda del BME688, no CO.
     int32 config_version_applied = 6;
     uint32 time_client = 7;
+    uint32 seq = 8;                         // Número de secuencia de este flujo; ver Data_2.seq.
+
+    // Hora de envío en µs desde epoch, ver Data_2.time_sent_us. Tiene que ser
+    // fixed64 y el campo de número más alto: test_contract.py lo verifica.
+    fixed64 time_sent_us = 9;
 }
 
 // Paquete de datos 2: telemetría inercial (BMI270 + BMM350).
@@ -207,6 +217,20 @@ message Data_2 {
     float mag_z = 10;
     int32 config_version_applied = 11;
     uint32 time_client = 12;
+
+    // Número de secuencia de este flujo, puesto al producir el paquete. Corre
+    // a través del deep sleep y vuelve a 0 en arranque frío. Un salto es un
+    // paquete perdido en cualquier punto del camino, también los que se
+    // descartan dentro del device; un seq menor que el anterior es un reinicio.
+    uint32 seq = 13;
+
+    // Hora de envío en microsegundos desde epoch (UTC), puesta justo antes del
+    // send del transporte. Es fixed64 y el campo de número más alto a
+    // propósito: así ocupa siempre los últimos 9 bytes del mensaje (tag + 8
+    // bytes little-endian) y el device la escribe sobre el paquete ya
+    // serializado, sin volver a empaquetarlo (stamp_time_sent() en
+    // data_path.c). test_contract.py verifica que siga siendo así.
+    fixed64 time_sent_us = 14;
 }
 
 // ------------------------------------------------- INFER: inferencia (fase C)

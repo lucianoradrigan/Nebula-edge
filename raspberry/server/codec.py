@@ -44,7 +44,7 @@ from models import (
     ModelInfo, ModelChunkRequestData, ModelStatusData,
     InferSample, InferResultData,
 )
-from system import log
+from system import log, utc_epoch_now_us
 
 
 class DataCodec:
@@ -116,6 +116,8 @@ class DataCodec:
         pb.co = data.co
         pb.config_version_applied = data.config_version_applied
         pb.time_client = data.time_client
+        pb.seq = data.seq
+        pb.time_sent_us = data.time_sent_us
         return pb.SerializeToString()
 
     @staticmethod
@@ -136,7 +138,9 @@ class DataCodec:
             hum=pb.hum,
             co=pb.co,
             config_version_applied=pb.config_version_applied,
-            time_client=pb.time_client
+            time_client=pb.time_client,
+            seq=pb.seq,
+            time_sent_us=pb.time_sent_us,
         )
 
     @staticmethod
@@ -155,6 +159,8 @@ class DataCodec:
         pb.mag_z = data.mag_z
         pb.config_version_applied = data.config_version_applied
         pb.time_client = data.time_client
+        pb.seq = data.seq
+        pb.time_sent_us = data.time_sent_us
         return pb.SerializeToString()
 
     @staticmethod
@@ -180,6 +186,8 @@ class DataCodec:
             mag_z=pb.mag_z,
             config_version_applied=pb.config_version_applied,
             time_client=pb.time_client,
+            seq=pb.seq,
+            time_sent_us=pb.time_sent_us,
         )
 
     @staticmethod
@@ -204,6 +212,10 @@ class DataCodec:
         pb.time_client = config.time_client
         pb.model_version = config.model_version
         pb.infer_source = config.infer_source
+        # La hora en µs se pone acá, al serializar, y no en get_config(): entre
+        # leer la base y mandar la config puede pasar un handshake BLE entero, y
+        # esa demora quedaría como atraso en el reloj del device.
+        pb.time_server_us = utc_epoch_now_us()
         return pb.SerializeToString()
 
     @staticmethod

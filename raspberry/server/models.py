@@ -133,6 +133,8 @@ class Data_1:
     co: float               # OJO: hoy trae la resistencia de gas cruda, no CO
     config_version_applied: int
     time_client: int
+    seq: int = 0            # Número de secuencia del flujo; 0 = firmware sin seq
+    time_sent_us: int = 0   # Hora de envío del device, µs desde epoch; 0 = sin dato
 
 @dataclass
 class Data_2:
@@ -152,6 +154,8 @@ class Data_2:
     mag_z: float
     config_version_applied: int
     time_client: int
+    seq: int = 0            # Ver Data_1.seq
+    time_sent_us: int = 0   # Ver Data_1.time_sent_us
 
 @dataclass
 class ConfigData:

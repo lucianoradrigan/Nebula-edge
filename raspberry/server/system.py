@@ -86,6 +86,17 @@ def utc_epoch_now() -> int:
     """
     return int(time.time())
 
+
+def utc_epoch_now_us() -> int:
+    """El epoch Unix actual en microsegundos, como entero.
+
+    Sale de `time.time_ns()` y no de `time.time() * 1e6`: un float de 64 bits
+    con el epoch de hoy redondea en el último microsegundo. Es la unidad de las
+    marcas de tiempo que se usan para medir (Config.time_server_us, la hora de
+    llegada de cada paquete), que no pasan por segundos en ningún punto.
+    """
+    return time.time_ns() // 1000
+
 # Valores por defecto de la base. Son los mismos que docker-compose.yml le pasa
 # al contenedor de Postgres, y están acá para que el servidor arranque sin
 # configuración extra: clonar el repo y levantarlo tiene que seguir funcionando

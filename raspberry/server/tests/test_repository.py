@@ -16,13 +16,16 @@ import repository
 from models import Data_1, Log
 
 
-# 2027-01-15 08:00:00.250 UTC: con fracción de segundo a propósito.
-RECEIVED_AT = 1_800_000_000.25
+# 2027-01-15 08:00:00.250001 UTC, en µs: el último microsegundo es justo el que
+# se perdería pasando por un float.
+RECEIVED_AT_US = 1_800_000_000_250_001
 
 
-def data_1() -> Data_1:
-    return Data_1(id_device="AA:BB:CC:DD:EE:01", temperature=21.5, press=101325,
+def data_1(**kw) -> Data_1:
+    fields = dict(id_device="AA:BB:CC:DD:EE:01", temperature=21.5, press=101325,
                   hum=40, co=1.0, config_version_applied=1, time_client=1_800_000_000)
+    fields.update(kw)
+    return Data_1(**fields)
 
 
 class FakeCursor:
@@ -67,33 +70,46 @@ class WriteTests(unittest.TestCase):
 
     def test_insert_is_committed(self):
         conn = FakeConnection()
-        self.assertTrue(self._repo(conn).insert_data_1(data_1(), RECEIVED_AT))
+        self.assertTrue(self._repo(conn).insert_data_1(data_1(), RECEIVED_AT_US))
         self.assertEqual(conn.commits, 1)
         sql, params = conn.cur.executed[0]
         self.assertIn("nebulaedge_schema.data_1", sql)
         self.assertEqual(params[0], "AA:BB:CC:DD:EE:01")
 
-    def test_time_server_keeps_the_fraction_of_a_second(self):
-        """time_client viene del device en segundos enteros; time_server es
-        del servidor y tiene que conservar los milisegundos, o no sirve para
-        medir tiempos entre paquetes."""
+    def test_times_keep_the_microsecond(self):
+        """time_server y time_sent son para medir latencia y deriva: tienen que
+        llegar a la base con el µs exacto, sin pasar por segundos ni por un
+        float."""
         conn = FakeConnection()
-        self._repo(conn).insert_data_1(data_1(), RECEIVED_AT)
+        self._repo(conn).insert_data_1(
+            data_1(seq=42, time_sent_us=1_800_000_000_123_457), RECEIVED_AT_US)
         sql, params = conn.cur.executed[0]
-        self.assertIn("time_server", sql)
-        self.assertEqual(params[-1], datetime(2027, 1, 15, 8, 0, 0, 250000))
+        self.assertIn("time_sent", sql)
+        time_server, seq, time_sent = params[-3:]
+        self.assertEqual(time_server, datetime(2027, 1, 15, 8, 0, 0, 250001))
+        self.assertEqual(seq, 42)
+        self.assertEqual(time_sent, datetime(2027, 1, 15, 8, 0, 0, 123457))
+
+    def test_firmware_without_seq_or_time_sent_stores_null(self):
+        """Un firmware viejo no manda seq ni time_sent_us y llegan en 0. En la
+        base tienen que quedar en NULL: un 0 se confundiría con el primer
+        paquete, y un time_sent de 1970 con una latencia de 57 años."""
+        conn = FakeConnection()
+        self._repo(conn).insert_data_1(data_1(), RECEIVED_AT_US)
+        _, params = conn.cur.executed[0]
+        self.assertEqual(params[-2:], (None, None))
 
     def test_database_failure_returns_false(self):
         conn = FakeConnection(fail=OSError("server closed the connection (simulado)"))
         with mock.patch.object(repository, "log") as log:
-            self.assertFalse(self._repo(conn).insert_data_1(data_1(), RECEIVED_AT))
+            self.assertFalse(self._repo(conn).insert_data_1(data_1(), RECEIVED_AT_US))
         self.assertIn("ERROR de base insertando data_1", log.call_args[0][0])
         self.assertEqual(conn.commits, 0)
 
     def test_missing_field_is_reported_as_a_bug(self):
         conn = FakeConnection()
         with mock.patch.object(repository, "log") as log:
-            self.assertFalse(self._repo(conn).insert_data_1(object(), RECEIVED_AT))
+            self.assertFalse(self._repo(conn).insert_data_1(object(), RECEIVED_AT_US))
         self.assertTrue(log.call_args[0][0].startswith("BUG: insertando data_1"))
         self.assertEqual(conn.cur.executed, [], "no debía llegar a la base")
 

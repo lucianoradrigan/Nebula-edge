@@ -8,10 +8,12 @@ tabla config seguirían usando los números viejos. Este test es el que se queja
     cd raspberry/server && python -m unittest discover -s tests
 """
 from __future__ import annotations
+import time
 import unittest
 from pathlib import Path
 
 import models
+import schema_pb2
 from codec import DataCodec
 
 
@@ -32,6 +34,39 @@ class ContractTests(unittest.TestCase):
             (0, 1, 2, 3, 4),
         )
         self.assertEqual(models.VALID_PROTOCOLS, frozenset(range(5)))
+
+    def test_time_sent_us_is_the_last_fixed64_field(self):
+        """El device escribe time_sent_us sobre el paquete ya serializado,
+        en los últimos 9 bytes (stamp_time_sent() en data_path.c). Eso solo
+        funciona mientras sea fixed64 y el campo de número más alto del
+        mensaje: si alguien agrega un campo con un número mayor, la marca de
+        envío pisaría otra cosa."""
+        for msg in (schema_pb2.Data_1, schema_pb2.Data_2):
+            fields = msg.DESCRIPTOR.fields
+            last = max(fields, key=lambda f: f.number)
+            self.assertEqual(last.name, "time_sent_us", msg.DESCRIPTOR.name)
+            self.assertEqual(last.type, last.TYPE_FIXED64, msg.DESCRIPTOR.name)
+
+    def test_time_sent_us_occupies_the_last_9_bytes(self):
+        """Lo mismo, visto desde los bytes: tag de un byte y 8 de valor
+        little-endian al final, con el valor de relleno que pone el device."""
+        for msg, tag in ((schema_pb2.Data_1(), 0x49), (schema_pb2.Data_2(), 0x71)):
+            msg.id_device = "AA:BB:CC:DD:EE:01"
+            msg.seq = 7
+            msg.time_sent_us = 1
+            raw = msg.SerializeToString()
+            self.assertEqual(raw[-9], tag, msg.DESCRIPTOR.name)
+            self.assertEqual(int.from_bytes(raw[-8:], "little"), 1)
+
+    def test_config_carries_the_server_time_in_us_from_serialization(self):
+        """La hora en µs se pone al serializar, no al leer la base: una config
+        armada hace rato tiene que salir igual con la hora de ahora."""
+        from tests.fakes import make_config
+        cfg = make_config(1)
+        before = time.time_ns() // 1000
+        pb = schema_pb2.Config()
+        pb.ParseFromString(DataCodec.serialize_config(cfg))
+        self.assertTrue(before <= pb.time_server_us <= time.time_ns() // 1000)
 
     def test_schema_proto_is_the_same_on_both_sides(self):
         """schema.proto está duplicado a propósito entre firmware y servidor

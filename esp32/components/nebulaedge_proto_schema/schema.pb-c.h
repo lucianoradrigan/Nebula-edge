@@ -219,10 +219,16 @@ struct  Config
    * Qué se infiere: 0 -> features del dataset (fase C1),
    */
   int32_t infer_source;
+  /*
+   * Hora del servidor en microsegundos desde epoch (UTC), puesta al
+   * serializar la config. Es la que usa el device para su reloj; time_client
+   * (segundos) se sigue mandando para un firmware que no conoce este campo.
+   */
+  uint64_t time_server_us;
 };
 #define CONFIG__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&config__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, 0, 0 }
 
 
 /*
@@ -394,10 +400,19 @@ struct  Data1
   float co;
   int32_t config_version_applied;
   uint32_t time_client;
+  /*
+   * Número de secuencia de este flujo; ver Data_2.seq.
+   */
+  uint32_t seq;
+  /*
+   * Hora de envío en µs desde epoch, ver Data_2.time_sent_us. Tiene que ser
+   * fixed64 y el campo de número más alto: test_contract.py lo verifica.
+   */
+  uint64_t time_sent_us;
 };
 #define DATA_1__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&data_1__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 
 /*
@@ -422,10 +437,26 @@ struct  Data2
   float mag_z;
   int32_t config_version_applied;
   uint32_t time_client;
+  /*
+   * Número de secuencia de este flujo, puesto al producir el paquete. Corre
+   * a través del deep sleep y vuelve a 0 en arranque frío. Un salto es un
+   * paquete perdido en cualquier punto del camino, también los que se
+   * descartan dentro del device; un seq menor que el anterior es un reinicio.
+   */
+  uint32_t seq;
+  /*
+   * Hora de envío en microsegundos desde epoch (UTC), puesta justo antes del
+   * send del transporte. Es fixed64 y el campo de número más alto a
+   * propósito: así ocupa siempre los últimos 9 bytes del mensaje (tag + 8
+   * bytes little-endian) y el device la escribe sobre el paquete ya
+   * serializado, sin volver a empaquetarlo (stamp_time_sent() en
+   * data_path.c). test_contract.py verifica que siga siendo así.
+   */
+  uint64_t time_sent_us;
 };
 #define DATA_2__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&data_2__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 
 struct  InferRequest

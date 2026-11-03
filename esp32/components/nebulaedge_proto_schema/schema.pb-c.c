@@ -457,7 +457,7 @@ void   infer_result__free_unpacked
   assert(message->base.descriptor == &infer_result__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor config__field_descriptors[18] =
+static const ProtobufCFieldDescriptor config__field_descriptors[19] =
 {
   {
     "id_device",
@@ -675,6 +675,18 @@ static const ProtobufCFieldDescriptor config__field_descriptors[18] =
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "time_server_us",
+    20,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(Config, time_server_us),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned config__field_indices_by_name[] = {
   3,   /* field[3] = acc_sampling */
@@ -694,13 +706,14 @@ static const unsigned config__field_indices_by_name[] = {
   12,   /* field[12] = ssid */
   9,   /* field[9] = tcp_port */
   15,   /* field[15] = time_client */
+  18,   /* field[18] = time_server_us */
   10,   /* field[10] = udp_port */
 };
 static const ProtobufCIntRange config__number_ranges[2 + 1] =
 {
   { 1, 0 },
   { 18, 16 },
-  { 0, 18 }
+  { 0, 19 }
 };
 const ProtobufCMessageDescriptor config__descriptor =
 {
@@ -710,7 +723,7 @@ const ProtobufCMessageDescriptor config__descriptor =
   "Config",
   "",
   sizeof(Config),
-  18,
+  19,
   config__field_descriptors,
   config__field_indices_by_name,
   2,  config__number_ranges,
@@ -1362,7 +1375,7 @@ const ProtobufCMessageDescriptor model_status__descriptor =
   (ProtobufCMessageInit) model_status__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor data_1__field_descriptors[7] =
+static const ProtobufCFieldDescriptor data_1__field_descriptors[9] =
 {
   {
     "id_device",
@@ -1448,6 +1461,30 @@ static const ProtobufCFieldDescriptor data_1__field_descriptors[7] =
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "seq",
+    8,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Data1, seq),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "time_sent_us",
+    9,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FIXED64,
+    0,   /* quantifier_offset */
+    offsetof(Data1, time_sent_us),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned data_1__field_indices_by_name[] = {
   4,   /* field[4] = co */
@@ -1455,13 +1492,15 @@ static const unsigned data_1__field_indices_by_name[] = {
   3,   /* field[3] = hum */
   0,   /* field[0] = id_device */
   2,   /* field[2] = press */
+  7,   /* field[7] = seq */
   1,   /* field[1] = temperature */
   6,   /* field[6] = time_client */
+  8,   /* field[8] = time_sent_us */
 };
 static const ProtobufCIntRange data_1__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 7 }
+  { 0, 9 }
 };
 const ProtobufCMessageDescriptor data_1__descriptor =
 {
@@ -1471,14 +1510,14 @@ const ProtobufCMessageDescriptor data_1__descriptor =
   "Data1",
   "",
   sizeof(Data1),
-  7,
+  9,
   data_1__field_descriptors,
   data_1__field_indices_by_name,
   1,  data_1__number_ranges,
   (ProtobufCMessageInit) data_1__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor data_2__field_descriptors[12] =
+static const ProtobufCFieldDescriptor data_2__field_descriptors[14] =
 {
   {
     "id_device",
@@ -1624,6 +1663,30 @@ static const ProtobufCFieldDescriptor data_2__field_descriptors[12] =
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "seq",
+    13,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Data2, seq),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "time_sent_us",
+    14,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_FIXED64,
+    0,   /* quantifier_offset */
+    offsetof(Data2, time_sent_us),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned data_2__field_indices_by_name[] = {
   1,   /* field[1] = acc_x */
@@ -1637,12 +1700,14 @@ static const unsigned data_2__field_indices_by_name[] = {
   7,   /* field[7] = mag_x */
   8,   /* field[8] = mag_y */
   9,   /* field[9] = mag_z */
+  12,   /* field[12] = seq */
   11,   /* field[11] = time_client */
+  13,   /* field[13] = time_sent_us */
 };
 static const ProtobufCIntRange data_2__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 12 }
+  { 0, 14 }
 };
 const ProtobufCMessageDescriptor data_2__descriptor =
 {
@@ -1652,7 +1717,7 @@ const ProtobufCMessageDescriptor data_2__descriptor =
   "Data2",
   "",
   sizeof(Data2),
-  12,
+  14,
   data_2__field_descriptors,
   data_2__field_indices_by_name,
   1,  data_2__number_ranges,

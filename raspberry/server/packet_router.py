@@ -32,11 +32,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Protocol
-import time
 
 from codec import DataCodec
 from models import Data_1, Data_2
-from system import log
+from system import log, utc_epoch_now_us
 
 
 class TelemetryRepository(Protocol):
@@ -46,8 +45,8 @@ class TelemetryRepository(Protocol):
     de esto. Sirve para poder testear PacketRouter con un stub en memoria,
     sin tocar Postgres.
     """
-    async def insert_data_1_async(self, data_1: Data_1, time_server: float) -> bool: ...
-    async def insert_data_2_async(self, data_2: Data_2, time_server: float) -> bool: ...
+    async def insert_data_1_async(self, data_1: Data_1, time_server_us: int) -> bool: ...
+    async def insert_data_2_async(self, data_2: Data_2, time_server_us: int) -> bool: ...
 
 
 class PacketOutcome(Enum):
@@ -85,13 +84,13 @@ class PacketRouter:
         `source` es solo para el prefijo del log (p.ej. "UDP", "BLE"),
         igual que hacía cada sesión antes.
 
-        La hora de llegada (`time_server` en la BD) se toma acá, antes de
+        La hora de llegada (`time_server` en la BD, en µs) se toma acá, antes de
         decodificar e insertar. Es la hora en que la sesión leyó el paquete de
         su transporte: en MQTT eso puede ser hasta un sondeo de cola después
         de que llegó (MqttTransport._QUEUE_POLL_SEC), y un paquete que esperaba
         en cola de una sesión anterior queda con la hora en que se leyó.
         """
-        received_at = time.time()
+        received_at_us = utc_epoch_now_us()
         data, data_type = self.codec.deserialize_typed_packet(packet)
         if data is None or data_type == -1:
             return RoutedPacket(PacketOutcome.IGNORED)
@@ -103,10 +102,10 @@ class PacketRouter:
 
         if data_type == self.codec.TYPE_DATA_1:
             log(f"{prefix}Paquete Data_1 recibido de {device_id}")
-            persisted = await self.database_repo.insert_data_1_async(data, received_at)
+            persisted = await self.database_repo.insert_data_1_async(data, received_at_us)
         elif data_type == self.codec.TYPE_DATA_2:
             log(f"{prefix}Paquete Data_2 recibido de {device_id}")
-            persisted = await self.database_repo.insert_data_2_async(data, received_at)
+            persisted = await self.database_repo.insert_data_2_async(data, received_at_us)
         else:
             return RoutedPacket(PacketOutcome.IGNORED)
 

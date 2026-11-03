@@ -203,9 +203,13 @@ Tablas principales:
 Qué guarda cada una:
 
 - `config`: `id_device`, `config_version`, `protocol_conf`, `acc_sampling`, `gyro_sensibility`, `bme688_sampling`, `send_interval_s`, `sleep_time_s`, `sleep_window_size`, `tcp_port`, `udp_port`, `mqtt_broker`, `model_version`, `infer_source`. La red que recibe el device (SSID, contraseña e IP del servidor) no se guarda: la arma el servidor en cada config (ver seccion 10).
-- `data_1`: `temperature`, `press`, `hum`, `co` (hoy guarda la resistencia de gas cruda, no CO), mas `config_version_applied`, `time_client` y `time_server`.
-- `data_2`: `acc_x/y/z`, `gyr_x/y/z`, `mag_x/y/z`, `config_version_applied`, `time_client` y `time_server`.
-- En `data_1` y `data_2`, `time_client` es la hora del device (segundos enteros) y `time_server` la hora en que el servidor recibio el paquete, con fraccion de segundo.
+- `data_1`: `temperature`, `press`, `hum`, `co` (hoy guarda la resistencia de gas cruda, no CO), mas `config_version_applied`, `time_client`, `time_server`, `seq` y `time_sent`.
+- `data_2`: `acc_x/y/z`, `gyr_x/y/z`, `mag_x/y/z`, `config_version_applied`, `time_client`, `time_server`, `seq` y `time_sent`.
+- En `data_1` y `data_2`:
+  - `time_sent`: hora del device justo antes de enviar, en µs;
+  - `time_server`: hora en que el servidor recibio el paquete, en µs;
+  - `seq`: numero de secuencia del flujo, puesto por el device al producir el paquete;
+  - `time_client`: hora del device al leer el sensor, en segundos enteros. Solo la llena el firmware anterior a `seq`/`time_sent`.
 - `log`: `status_report`, `protocol_report`, `batt_level`, `time_client`, `time_server`.
 
 Consultas utiles:
@@ -231,6 +235,31 @@ ORDER BY time_server DESC
 LIMIT 20;
 ```
 
+Latencia de un sentido (incluye el desfase del reloj del device, que es fijo
+entre dos ajustes de hora) y perdida por flujo:
+
+```sql
+-- Latencia en ms de los ultimos 20 paquetes de un device
+SELECT seq, extract(epoch FROM time_server - time_sent) * 1000 AS latencia_ms
+FROM nebulaedge_schema.data_1
+WHERE id_device = '34:85:18:A2:DE:1A' AND time_sent IS NOT NULL
+ORDER BY time_server DESC
+LIMIT 20;
+
+-- Perdidos, duplicados y reinicios en la ultima hora, por flujo
+WITH d AS (
+    SELECT seq - lag(seq) OVER (ORDER BY time_server) AS paso
+    FROM nebulaedge_schema.data_1
+    WHERE id_device = '34:85:18:A2:DE:1A' AND seq IS NOT NULL
+      AND time_server > now() AT TIME ZONE 'UTC' - interval '1 hour'
+)
+SELECT count(*)                                  AS recibidos,
+       sum(paso - 1) FILTER (WHERE paso > 1)     AS perdidos,
+       count(*) FILTER (WHERE paso = 0)          AS duplicados,
+       count(*) FILTER (WHERE paso < 0)          AS reinicios
+FROM d;
+```
+
 Si quieres modificar los dispositivos que arrancan con datos precargados, edita [raspberry/db_init/03_seed.sql](raspberry/db_init/03_seed.sql).
 
 Los scripts de `db_init/` los corre Postgres solo una vez, al crear el volumen.
@@ -248,7 +277,8 @@ que saca de `config` las columnas `host_ip_addr`, `ssid` y `passwd` de las
 bases creadas antes de que se dejaran de usar, y con
 [raspberry/db_init/06_data_time_server.sql](raspberry/db_init/06_data_time_server.sql),
 que agrega `time_server` a `data_1` y `data_2` (las filas anteriores quedan en
-NULL).
+NULL), y con [raspberry/db_init/07_seq_time_sent.sql](raspberry/db_init/07_seq_time_sent.sql),
+que agrega `seq` y `time_sent`.
 
 ## 5) Campos clave de configuracion
 
@@ -331,7 +361,7 @@ cd server
 ../.venv/bin/python -m unittest discover -s tests
 ```
 
-Esperado: `Ran 90 tests ... OK`.
+Esperado: `Ran 94 tests ... OK`.
 
 Cobertura actual: las cuatro sesiones de protocolo (telemetria, cambio de
 config con ACK, deep sleep, cierre por timeout, resincronizacion del reloj del
