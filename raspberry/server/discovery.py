@@ -181,8 +181,6 @@ class DeviceDiscovery:
                 self.devices.pop(addr, None)
                 continue
 
-            serialized_config = DataCodec.serialize_config(config)
-
             # Cierra scanner activo para realizar conexión BT (recomendado en documentación de Bleak)
             if self.scanner is not None:
                 async with self.scanner_lock:
@@ -205,7 +203,12 @@ class DeviceDiscovery:
                 await client.connect()
                 log(f"Conectado exitosamente a {addr}")
                 self.devices[addr] = self.State.CONNECTED
-                await client.write_gatt_char(UUID_CHAR_A, serialized_config, response=True)
+                # Se serializa recién acá, ya conectado: la config lleva la hora
+                # del servidor en µs (time_server_us, puesta al serializar), y
+                # serializada antes de connect() le quedaba encima lo que tardó
+                # la conexión, ~3,5 s medidos en banco, como atraso del reloj.
+                await client.write_gatt_char(UUID_CHAR_A, DataCodec.serialize_config(config),
+                                             response=True)
 
                 # Registra envío de configuración inicial al dispositivo.
                 await DatabaseRepository(self.db_dsn).insert_log_async(
