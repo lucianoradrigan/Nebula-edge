@@ -311,6 +311,7 @@ void app_main() {
     }
     else {
         config_store_clear();
+        data_path_reset_seq();
     }
 
     /********************************************************************/

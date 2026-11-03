@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nebulaedge_defs.h"
@@ -29,6 +30,71 @@ static void enqueue_packet(packet_t *pkt, const char *tag) {
     else {
         ESP_LOGW(tag, "xQueueSend falló (code=%d), paquete descartado y memoria liberada", send);
         free(pkt->data);
+    }
+}
+
+/* NÚMERO DE SECUENCIA
+ *
+ * Uno por flujo, asignado al producir el paquete (Data_1.seq / Data_2.seq). Un
+ * salto en el servidor es un paquete perdido en cualquier punto del camino,
+ * también los que se descartan acá adentro: la cola llena, o la cola vaciada
+ * en un cambio de protocolo (gate.c). Arranca en 1: el 0 es "sin seq".
+ *
+ * En memoria RTC para que siga a través del deep sleep; en arranque frío lo
+ * pone en cero data_path_reset_seq(). */
+RTC_DATA_ATTR static uint32_t s_seq_environmental = 0;
+RTC_DATA_ATTR static uint32_t s_seq_inertial = 0;
+
+void data_path_reset_seq(void) {
+    s_seq_environmental = 0;
+    s_seq_inertial = 0;
+}
+
+/* HORA DE ENVÍO
+ *
+ * Data_1.time_sent_us / Data_2.time_sent_us se escriben justo antes del send
+ * del transporte, sobre el paquete ya serializado. Funciona porque el campo es
+ * fixed64 y el de número más alto del mensaje: protobuf-c lo deja siempre en
+ * los últimos 9 bytes, un byte de tag y 8 de valor little-endian
+ * (test_contract.py lo verifica del lado del servidor).
+ *
+ * La productora lo empaqueta con un valor de relleno no nulo: proto3 omite los
+ * campos en 0, y entonces esos 9 bytes no existirían. */
+#define TIME_SENT_PLACEHOLDER   1ULL
+#define TIME_SENT_TAG(field)    (((field) << 3) | 1)    // wire type 1 = 64 bits
+#define TIME_SENT_DATA_1_TAG    TIME_SENT_TAG(9)        // 0x49
+#define TIME_SENT_DATA_2_TAG    TIME_SENT_TAG(14)       // 0x71
+#define TIME_SENT_TRAILER_LEN   9
+
+/* Escribe la hora actual en el time_sent_us de un paquete [tipo][protobuf].
+ * Antes de escribir verifica el tag: si no calza (otro tipo de paquete, o el
+ * contrato cambió sin actualizar esto) no toca nada y lo loguea. Un reloj que
+ * todavía no está en hora deja 0, que el servidor guarda como "sin dato". */
+static void stamp_time_sent(uint8_t *data, size_t size, const char *tag) {
+    if (size < 1 + TIME_SENT_TRAILER_LEN) {
+        return;
+    }
+    uint8_t expected;
+    if (data[0] == PACKET_TYPE__PACKET_TYPE_DATA_1) {
+        expected = TIME_SENT_DATA_1_TAG;
+    }
+    else if (data[0] == PACKET_TYPE__PACKET_TYPE_DATA_2) {
+        expected = TIME_SENT_DATA_2_TAG;
+    }
+    else {
+        return;
+    }
+
+    uint8_t *trailer = data + size - TIME_SENT_TRAILER_LEN;
+    if (trailer[0] != expected) {
+        ESP_LOGE(tag, "No se pudo marcar la hora de envío: tag 0x%02x, se esperaba 0x%02x",
+                 trailer[0], expected);
+        return;
+    }
+
+    uint64_t now_us = device_clock_now_us();
+    for (int i = 0; i < 8; i++) {
+        trailer[1 + i] = (uint8_t)(now_us >> (8 * i));
     }
 }
 
@@ -64,6 +130,8 @@ void vTaskCollectInertial(void *pvParameters) {
         data_2.id_device = device_id();
         data_2.config_version_applied = current_config ? current_config->config_version : 0;
         data_2.time_client = device_clock_now_s();
+        data_2.seq = ++s_seq_inertial;
+        data_2.time_sent_us = TIME_SENT_PLACEHOLDER;     // lo reemplaza vTaskSendData
 
         /* Recogida de datos inerciales. Cada driver devuelve su propio tipo en
          * unidades físicas; traducirlo al mensaje protobuf es trabajo de acá,
@@ -136,6 +204,8 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         data_1.id_device = device_id();
         data_1.config_version_applied = current_config ? current_config->config_version : 0;
         data_1.time_client = device_clock_now_s();
+        data_1.seq = ++s_seq_environmental;
+        data_1.time_sent_us = TIME_SENT_PLACEHOLDER;     // lo reemplaza vTaskSendData
 
         /* Recogida de datos ambientales. El driver devuelve su propio tipo en
          * unidades físicas; traducirlo al mensaje protobuf es trabajo de acá,
@@ -253,6 +323,8 @@ void vTaskSendData(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(proto->pre_send_delay_ms));
         }
 
+        // Lo último antes de mandar: después del delay de precaución de BLE.
+        stamp_time_sent(packet.data, packet.size, proto->send_tag);
         esp_err_t send_ret = proto->send_data(packet.data, packet.size);
         if (send_ret != ESP_OK) {
             ESP_LOGE(proto->send_tag, "Paquete perdido: el envío falló (%s)",

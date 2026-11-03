@@ -10,4 +10,9 @@ void vTaskCollectInertial(void *pvParameters);
 void vTaskCollectEnvironmental(void *pvParameters);
 void vTaskSendData(void *pvParameters);
 
+/* Pone en cero los números de secuencia de Data_1 y Data_2. Se llama en
+ * arranque frío: a través del deep sleep los contadores siguen, para que un
+ * salto de seq siga significando "paquete perdido". */
+void data_path_reset_seq(void);
+
 #endif
