@@ -23,7 +23,7 @@ RECEIVED_AT_US = 1_800_000_000_250_001
 
 def data_1(**kw) -> Data_1:
     fields = dict(id_device="AA:BB:CC:DD:EE:01", temperature=21.5, press=101325,
-                  hum=40, co=1.0, config_version_applied=1, time_client=1_800_000_000)
+                  hum=40, co=1.0, config_version_applied=1)
     fields.update(kw)
     return Data_1(**fields)
 
@@ -119,7 +119,8 @@ class WriteTests(unittest.TestCase):
         fallo terminaba llamando al Log como si fuera la función."""
         conn = FakeConnection(fail=OSError("the database system is shutting down (simulado)"))
         event = Log(id_device="AA:BB:CC:DD:EE:01", status_report=1, protocol_report=1,
-                    batt_level=None, time_client=1_800_000_000, time_server=1_800_000_000)
+                    batt_level=None, time_client_us=1_800_000_000_000_000,
+                    time_server_us=1_800_000_000_000_000)
         with mock.patch.object(repository, "log") as log:
             self.assertFalse(self._repo(conn).insert_log(event))
         self.assertIn("ERROR de base insertando log", log.call_args[0][0])

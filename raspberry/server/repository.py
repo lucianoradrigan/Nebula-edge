@@ -365,9 +365,8 @@ class DatabaseRepository:
         return self._write("insertando data_1", """
             INSERT INTO nebulaedge_schema.data_1 (
                 id_device, temperature, press, hum, co,
-                config_version_applied, time_client, time_server,
-                seq, time_sent
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                config_version_applied, time_server, seq, time_sent
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, lambda: (
             data_1.id_device,
             data_1.temperature,
@@ -375,7 +374,6 @@ class DatabaseRepository:
             data_1.hum,
             data_1.co,
             data_1.config_version_applied,
-            self._int_to_db_datetime(data_1.time_client),
             self._us_to_db_datetime(time_server_us),
             data_1.seq or None,
             self._us_to_db_datetime(data_1.time_sent_us),
@@ -389,9 +387,8 @@ class DatabaseRepository:
                 id_device, acc_x, acc_y, acc_z,
                 gyr_x, gyr_y, gyr_z,
                 mag_x, mag_y, mag_z,
-                config_version_applied, time_client, time_server,
-                seq, time_sent
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                config_version_applied, time_server, seq, time_sent
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, lambda: (
             data_2.id_device,
             data_2.acc_x,
@@ -404,7 +401,6 @@ class DatabaseRepository:
             data_2.mag_y,
             data_2.mag_z,
             data_2.config_version_applied,
-            self._int_to_db_datetime(data_2.time_client),
             self._us_to_db_datetime(time_server_us),
             data_2.seq or None,
             self._us_to_db_datetime(data_2.time_sent_us),
@@ -422,8 +418,8 @@ class DatabaseRepository:
             log.status_report,
             log.protocol_report,
             log.batt_level,
-            self._int_to_db_datetime(log.time_client),
-            self._int_to_db_datetime(log.time_server),
+            self._us_to_db_datetime(log.time_client_us),
+            self._us_to_db_datetime(log.time_server_us),
         ))
 
     # psycopg2 es sincrónico/bloqueante: cada método de arriba abre su propia

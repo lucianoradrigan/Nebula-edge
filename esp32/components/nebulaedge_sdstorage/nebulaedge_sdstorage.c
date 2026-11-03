@@ -62,7 +62,10 @@ static esp_err_t data_1_to_ndjson(Data1 *env, FILE *f) {
     cJSON_AddNumberToObject(json, "press", env->press);
     cJSON_AddNumberToObject(json, "hum", env->hum);
     cJSON_AddNumberToObject(json, "co", env->co);
-    cJSON_AddNumberToObject(json, "time_client", (double)env->time_client);
+    /* En double sin pérdida: el epoch en µs de hoy (~1,8e15) está muy por
+     * debajo de 2^53, el mayor entero que un double representa exacto. */
+    cJSON_AddNumberToObject(json, "seq", env->seq);
+    cJSON_AddNumberToObject(json, "time_sent_us", (double)env->time_sent_us);
     cJSON_AddNumberToObject(json, "config_version_applied", env->config_version_applied);
 
     esp_err_t ret = append_ndjson_line(f, json);
@@ -90,7 +93,8 @@ static esp_err_t data_2_to_ndjson(Data2 *ine, FILE *f) {
     cJSON_AddNumberToObject(json, "mag_x", ine->mag_x);
     cJSON_AddNumberToObject(json, "mag_y", ine->mag_y);
     cJSON_AddNumberToObject(json, "mag_z", ine->mag_z);
-    cJSON_AddNumberToObject(json, "time_client", (double)ine->time_client);
+    cJSON_AddNumberToObject(json, "seq", ine->seq);
+    cJSON_AddNumberToObject(json, "time_sent_us", (double)ine->time_sent_us);    // ver data_1_to_ndjson
     cJSON_AddNumberToObject(json, "config_version_applied", ine->config_version_applied);
 
     esp_err_t ret = append_ndjson_line(f, json);

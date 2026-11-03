@@ -6,7 +6,7 @@
 /* Lo que el dispositivo sabe de sí mismo: quién es y qué hora es.
  *
  * No es un cajón de sastre. Son las dos cosas que van en TODOS los paquetes de
- * telemetría (`id_device` y `time_client`), y las dos tienen la misma
+ * telemetría (`id_device` y `time_sent_us`), y las dos tienen la misma
  * particularidad: hay que reconstruirlas en cada arranque, porque la ESP32
  * despierta del deep sleep sin reloj y sin haber leído todavía su MAC.
  *
@@ -31,7 +31,7 @@ char *device_id(void);
 /* -------------------------------------------------------------------- RELOJ */
 
 /* La ESP32 no tiene RTC con batería: la hora llega desde el servidor en el
- * campo `time_client` del Config, y se pierde en cada reinicio. Lo único que
+ * campo `time_server_us` del Config, y se pierde en cada reinicio. Lo único que
  * sobrevive al deep sleep es la memoria RTC, así que la hora se estaciona ahí
  * antes de dormir y se restaura al volver. */
 

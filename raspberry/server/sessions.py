@@ -43,7 +43,7 @@ from typing import Callable, Any
 
 from models import BleContext, Timeouts, ConfigData, Log, VALID_PROTOCOLS
 from codec import DataCodec
-from system import utc_epoch_now, log
+from system import utc_epoch_now_us, log
 from config_resolver import ConfigResolver, ConfigDecision
 from packet_router import PacketRouter, PacketOutcome
 from repository import DatabaseRepository
@@ -76,7 +76,7 @@ class DeviceSession:
         self.timeouts = Timeouts() if timeouts is None else timeouts  # Timeouts centralizados
         self.ble = ble                                  # Contexto BLE, o None en los otros tres
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
-        self._last_client_time: int | None = None       # Último time_client recibido (Data_1/Data_2)
+        self._last_client_time: int | None = None       # Último time_sent_us recibido (Data_1/Data_2), en µs
         self._apply_wait_started: float | None = None   # Desde cuándo se espera que el device aplique
         self._db_behind_warned_at: int | None = None    # versión del device ya avisada como más nueva que la BD
         self._last_client_seen_at: float | None = None  # Cuándo llegó, en reloj monótono del server
@@ -89,8 +89,8 @@ class DeviceSession:
         ese se atrasa con cada deep sleep, así que restarlo contra el del
         server no dice nada sobre la antigüedad del paquete.
         """
-        ts = getattr(data, "time_client", None)
-        if isinstance(ts, int):
+        ts = getattr(data, "time_sent_us", None)
+        if isinstance(ts, int) and ts > 0:
             self._last_client_time = ts
             self._last_client_seen_at = time.monotonic()
 
@@ -109,7 +109,7 @@ class DeviceSession:
             await asyncio.sleep(interval_sec)
             if self._last_client_time is None:
                 continue
-            server_time = utc_epoch_now()
+            server_time_us = utc_epoch_now_us()
             seen_at = self._last_client_seen_at
             fresh = seen_at is not None and (time.monotonic() - seen_at) <= interval_sec
             try:
@@ -119,8 +119,8 @@ class DeviceSession:
                         status_report=2,
                         protocol_report=self.config.protocol_conf,
                         batt_level=None,      # el device no mide batería
-                        time_client=self._last_client_time if fresh else None,
-                        time_server=server_time,
+                        time_client_us=self._last_client_time if fresh else None,
+                        time_server_us=server_time_us,
                     )
                 )
             except Exception as e:

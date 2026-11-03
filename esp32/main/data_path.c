@@ -129,7 +129,6 @@ void vTaskCollectInertial(void *pvParameters) {
         Data2 data_2 = DATA_2__INIT;
         data_2.id_device = device_id();
         data_2.config_version_applied = current_config ? current_config->config_version : 0;
-        data_2.time_client = device_clock_now_s();
         data_2.seq = ++s_seq_inertial;
         data_2.time_sent_us = TIME_SENT_PLACEHOLDER;     // lo reemplaza vTaskSendData
 
@@ -203,7 +202,6 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         Data1 data_1 = DATA_1__INIT;
         data_1.id_device = device_id();
         data_1.config_version_applied = current_config ? current_config->config_version : 0;
-        data_1.time_client = device_clock_now_s();
         data_1.seq = ++s_seq_environmental;
         data_1.time_sent_us = TIME_SENT_PLACEHOLDER;     // lo reemplaza vTaskSendData
 

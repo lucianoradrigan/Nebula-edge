@@ -399,7 +399,9 @@ struct  Data1
    */
   float co;
   int32_t config_version_applied;
-  uint32_t time_client;
+  /*
+   * La reemplaza time_sent_us; ver Data_2.
+   */
   /*
    * Número de secuencia de este flujo; ver Data_2.seq.
    */
@@ -412,7 +414,7 @@ struct  Data1
 };
 #define DATA_1__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&data_1__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0 }
 
 
 /*
@@ -436,7 +438,6 @@ struct  Data2
   float mag_y;
   float mag_z;
   int32_t config_version_applied;
-  uint32_t time_client;
   /*
    * Número de secuencia de este flujo, puesto al producir el paquete. Corre
    * a través del deep sleep y vuelve a 0 en arranque frío. Un salto es un
@@ -456,7 +457,7 @@ struct  Data2
 };
 #define DATA_2__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&data_2__descriptor) \
-, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+, (char *)protobuf_c_empty_string, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 
 struct  InferRequest

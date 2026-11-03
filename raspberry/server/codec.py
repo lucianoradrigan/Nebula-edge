@@ -115,7 +115,6 @@ class DataCodec:
         pb.hum = data.hum
         pb.co = data.co
         pb.config_version_applied = data.config_version_applied
-        pb.time_client = data.time_client
         pb.seq = data.seq
         pb.time_sent_us = data.time_sent_us
         return pb.SerializeToString()
@@ -138,7 +137,6 @@ class DataCodec:
             hum=pb.hum,
             co=pb.co,
             config_version_applied=pb.config_version_applied,
-            time_client=pb.time_client,
             seq=pb.seq,
             time_sent_us=pb.time_sent_us,
         )
@@ -158,7 +156,6 @@ class DataCodec:
         pb.mag_y = data.mag_y
         pb.mag_z = data.mag_z
         pb.config_version_applied = data.config_version_applied
-        pb.time_client = data.time_client
         pb.seq = data.seq
         pb.time_sent_us = data.time_sent_us
         return pb.SerializeToString()
@@ -185,7 +182,6 @@ class DataCodec:
             mag_y=pb.mag_y,
             mag_z=pb.mag_z,
             config_version_applied=pb.config_version_applied,
-            time_client=pb.time_client,
             seq=pb.seq,
             time_sent_us=pb.time_sent_us,
         )

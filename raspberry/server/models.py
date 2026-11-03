@@ -137,7 +137,6 @@ class Data_1:
     hum: int
     co: float               # OJO: hoy trae la resistencia de gas cruda, no CO
     config_version_applied: int
-    time_client: int
     seq: int = 0            # Número de secuencia del flujo; 0 = firmware sin seq
     time_sent_us: int = 0   # Hora de envío del device, µs desde epoch; 0 = sin dato
 
@@ -158,7 +157,6 @@ class Data_2:
     mag_y: float
     mag_z: float
     config_version_applied: int
-    time_client: int
     seq: int = 0            # Ver Data_1.seq
     time_sent_us: int = 0   # Ver Data_1.time_sent_us
 
@@ -306,5 +304,5 @@ class Log:
     status_report: int
     protocol_report: int
     batt_level: int | None      # None: el firmware no mide batería
-    time_client: int
-    time_server: int
+    time_client_us: int | None  # Hora del device en µs; None si no hay un dato fresco
+    time_server_us: int         # Hora del servidor en µs

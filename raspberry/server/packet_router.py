@@ -14,7 +14,7 @@ DÓNDE TERMINA SU RESPONSABILIDAD
     config, cerrar la sesión- queda deliberadamente afuera: eso es control de
     flujo y vive en `ProtocolSession` (sessions.py).
 
-    Tampoco lleva la cuenta del último `time_client` visto: eso es estado de la
+    Tampoco lleva la cuenta del último `time_sent_us` visto: eso es estado de la
     sesión, no del enrutado. El caller lo lee de `RoutedPacket.data` si lo
     necesita.
 

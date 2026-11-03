@@ -37,7 +37,7 @@ from bleak.backends.device import BLEDevice
 from gatt_uuids import UUID_CHAR_A
 from models import BleContext, Timeouts, ConfigData, Log
 from codec import DataCodec
-from system import utc_epoch_now, database_dsn, log, BLEAdapterResolver
+from system import utc_epoch_now_us, database_dsn, log, BLEAdapterResolver
 from repository import DatabaseRepository
 from protocol_dispatch import handle_protocol, PROTOCOL_BLE, VALID_PROTOCOLS
 
@@ -209,6 +209,7 @@ class DeviceDiscovery:
                 # la conexión, ~3,5 s medidos en banco, como atraso del reloj.
                 await client.write_gatt_char(UUID_CHAR_A, DataCodec.serialize_config(config),
                                              response=True)
+                sent_at_us = utc_epoch_now_us()
 
                 # Registra envío de configuración inicial al dispositivo.
                 await DatabaseRepository(self.db_dsn).insert_log_async(
@@ -217,8 +218,8 @@ class DeviceDiscovery:
                         status_report=1,
                         protocol_report=config.protocol_conf,
                         batt_level=None,      # el device no mide batería
-                        time_client=config.time_client,
-                        time_server=config.time_client
+                        time_client_us=sent_at_us,
+                        time_server_us=sent_at_us,
                     )
                 )
 
@@ -284,7 +285,7 @@ class DeviceDiscovery:
                     pass
             addr = device.address
             self.active_tasks.pop(addr, None)
-            server_time = utc_epoch_now()
+            server_time_us = utc_epoch_now_us()
             # Permite re-descubrimiento si se pierde la conexión. Va ANTES de
             # tocar la base: si el INSERT de abajo falla (Postgres caído o
             # reiniciándose), la excepción cortaba el finally y el device quedaba
@@ -301,8 +302,8 @@ class DeviceDiscovery:
                         status_report=0,
                         protocol_report=last_protocol,
                         batt_level=None,      # el device no mide batería
-                        time_client=server_time,
-                        time_server=server_time
+                        time_client_us=server_time_us,
+                        time_server_us=server_time_us,
                     )
                 )
             except Exception as e:

@@ -190,7 +190,8 @@ message Data_1 {
     int32 hum = 4;
     float co = 5;                           // OJO: hoy guarda la resistencia de gas cruda del BME688, no CO.
     int32 config_version_applied = 6;
-    uint32 time_client = 7;
+    reserved 7;                             // Era time_client: la hora al leer el sensor, en segundos.
+                                            // La reemplaza time_sent_us; ver Data_2.
     uint32 seq = 8;                         // Número de secuencia de este flujo; ver Data_2.seq.
 
     // Hora de envío en µs desde epoch, ver Data_2.time_sent_us. Tiene que ser
@@ -216,7 +217,12 @@ message Data_2 {
     float mag_y = 9;
     float mag_z = 10;
     int32 config_version_applied = 11;
-    uint32 time_client = 12;
+
+    // 12 era time_client: la hora al leer el sensor, en segundos enteros. La
+    // reemplaza time_sent_us, en µs y tomada al enviar. Queda reservado para
+    // que el número no se reuse; la columna time_client de la base conserva
+    // las filas anteriores.
+    reserved 12;
 
     // Número de secuencia de este flujo, puesto al producir el paquete. Corre
     // a través del deep sleep y vuelve a 0 en arranque frío. Un salto es un

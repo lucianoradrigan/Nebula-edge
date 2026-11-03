@@ -145,7 +145,7 @@ def data_1_packet(applied_version: int, device_id: str = DEVICE_ID) -> bytes:
     """Paquete ambiental tal como lo arma el firmware: [tipo][protobuf]."""
     d = Data_1(
         id_device=device_id, temperature=21.0, press=101000, hum=40, co=100.0,
-        config_version_applied=applied_version, time_client=1_735_000_001,
+        config_version_applied=applied_version, seq=1, time_sent_us=1_735_000_001_000_000,
     )
     return bytes([DataCodec.TYPE_DATA_1]) + DataCodec.serialize_data_1(d)
 
@@ -156,7 +156,7 @@ def data_2_packet(applied_version: int, device_id: str = DEVICE_ID) -> bytes:
         id_device=device_id, acc_x=0.5, acc_y=-9.8, acc_z=0.1,
         gyr_x=0.001, gyr_y=-0.002, gyr_z=0.003,
         mag_x=7, mag_y=8, mag_z=9,
-        config_version_applied=applied_version, time_client=1_735_000_002,
+        config_version_applied=applied_version, seq=1, time_sent_us=1_735_000_002_000_000,
     )
     return bytes([DataCodec.TYPE_DATA_2]) + DataCodec.serialize_data_2(d)
 
