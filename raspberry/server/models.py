@@ -36,8 +36,9 @@ AJUSTAR LOS TIEMPOS
     protocolos; para tocar solo uno, el lugar es su Transport (transport.py).
 """
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
+import os
 from typing import Any
 
 import schema_pb2
@@ -108,8 +109,12 @@ class Timeouts:
     config_poll_sec: float = 15.0       # Cada cuánto se consulta la BD aunque no llegue telemetría
 
     # --- resincronización de la hora (sessions.py) ---
-    clock_resync_sec: float = 300.0     # Cada cuánto se reenvía la config vigente solo para poner el reloj
-                                        # del device en hora. Ver _resync_device_clock().
+    # Cada cuánto se reenvía la config vigente solo para poner el reloj del
+    # device en hora. Ver _resync_device_clock(). 0 la apaga: sirve para medir
+    # la deriva del reloj del device corriendo libre. Se toma de
+    # CLOCK_RESYNC_SEC (docker-compose.yml) al construir, no al importar.
+    clock_resync_sec: float = field(
+        default_factory=lambda: float(os.getenv("CLOCK_RESYNC_SEC") or 300.0))
 
     # --- handshake de configuración (sessions.py) ---
     config_ack_sec: float = 2.0         # Ventana de espera del ACK, por intento

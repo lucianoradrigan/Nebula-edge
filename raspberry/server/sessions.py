@@ -532,7 +532,8 @@ class ProtocolSession(DeviceSession):
                     # acumular ninguna. El costo es que un device que ya venía
                     # corriendo espera un intervalo antes de su primer ajuste.
                     self._clock_resync_at[self.device_id] = now
-                elif now - last >= self.timeouts.clock_resync_sec:
+                elif (self.timeouts.clock_resync_sec > 0
+                      and now - last >= self.timeouts.clock_resync_sec):
                     self._clock_resync_at[self.device_id] = now
                     await self._resync_device_clock(tx, db_config)
 

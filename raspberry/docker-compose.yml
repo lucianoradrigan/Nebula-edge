@@ -8,6 +8,9 @@ services:
       # auto = el dongle USB si hay, si no el de la placa. Ver system.py ->
       # BLEAdapterResolver.
       BLE_ADAPTER: ${BLE_ADAPTER:-auto}
+      # Cada cuánto se le pone la hora al device, en segundos. 0 = nunca, solo
+      # para medir la deriva de su reloj. Ver models.py -> Timeouts.
+      CLOCK_RESYNC_SEC: ${CLOCK_RESYNC_SEC:-300}
       # Las mismas cuatro variables que recibe el contenedor de la base, para
       # que la credencial se defina UNA vez (en .env, o en los defaults de acá)
       # y no haya dos copias que se puedan desincronizar. El servidor las lee

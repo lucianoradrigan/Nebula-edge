@@ -251,6 +251,31 @@ class UdpSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(resent.time_client, 0, "el resync tiene que traer hora")
         self.assertFalse(task.done(), "el reenvío de hora no debía cerrar la sesión")
 
+    async def test_clock_resync_can_be_turned_off(self):
+        """Con clock_resync_sec = 0 (CLOCK_RESYNC_SEC=0) el server no le pone
+        la hora nunca: es lo que permite medir la deriva del reloj del device
+        corriendo libre."""
+        port = free_port()
+        repo = FakeRepo(db_version=1, udp_port=port)
+        session = self._build_session(repo, port, quick_timeouts(clock_resync_sec=0))
+        # Como en el test anterior: un device que viene corriendo hace rato.
+        type(session)._clock_resync_at[session.device_id] = time.monotonic() - 1000.0
+        self.addCleanup(type(session)._clock_resync_at.pop, session.device_id, None)
+
+        task = asyncio.create_task(session.run())
+        self.addCleanup(task.cancel)
+        dev = await self._device_socket()
+        loop = asyncio.get_running_loop()
+
+        need = sessions.ProtocolSession._CLOCK_RESYNC_MIN_PACKETS
+        for _ in range(need + 10):
+            await self._send(dev, data_1_packet(applied_version=1), port)
+            await asyncio.sleep(0.05)
+        self.assertGreaterEqual(len(repo.data_1), need, "no se insertó la telemetría")
+
+        with self.assertRaises(asyncio.TimeoutError, msg="no debía llegar ninguna config"):
+            await asyncio.wait_for(loop.sock_recv(dev, 2048), timeout=1.0)
+
     async def test_clock_is_not_resent_right_after_the_session_opens(self):
         """Recién abierta la sesión no se reenvía la hora, aunque toque.
 

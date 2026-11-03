@@ -361,7 +361,7 @@ cd server
 ../.venv/bin/python -m unittest discover -s tests
 ```
 
-Esperado: `Ran 94 tests ... OK`.
+Esperado: `Ran 95 tests ... OK`.
 
 Cobertura actual: las cuatro sesiones de protocolo (telemetria, cambio de
 config con ACK, deep sleep, cierre por timeout, resincronizacion del reloj del
