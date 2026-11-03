@@ -355,7 +355,7 @@ void app_main() {
             current_config = NULL;
             continue;
         }
-        device_clock_set(current_config->time_client);
+        config_apply_time(current_config);
         data_window_count = 0;
         ESP_LOGI(TAG, "configuración leída correctamente");
     }

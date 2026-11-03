@@ -110,6 +110,15 @@ static void send_config_ack(protocol_t over, const Config *cfg, bool applied) {
  *
  * Lo único propio de cada protocolo es de dónde sale la config y cómo se cierra
  * el transporte: las dos cosas las pone la tabla. */
+void config_apply_time(const Config *c) {
+    if (c->time_server_us > 0) {
+        device_clock_set_us(c->time_server_us);
+    }
+    else if (c->time_client > 0) {
+        device_clock_set(c->time_client);
+    }
+}
+
 void vTaskGetResponse(void *pvParameters) {
     const protocol_ops_t *proto = pvParameters;
 
@@ -160,8 +169,8 @@ void vTaskGetResponse(void *pvParameters) {
 
         /* PONER EL RELOJ EN HORA, ANTES DE MIRAR LA VERSIÓN
          *
-         * El servidor estampa `time_client` con la hora del momento en CADA
-         * Config que arma (repository.py: time_cli = utc_epoch_now()), así que
+         * El servidor estampa la hora del momento en CADA Config que manda
+         * (time_server_us, al serializarla en codec.py), así que
          * cualquier config que llegue —nueva, repetida o vieja— trae hora
          * fresca. Antes solo se usaba la de la primera config por BLE, y las
          * demás se descartaban junto con la config: el reloj quedaba corriendo
@@ -173,11 +182,9 @@ void vTaskGetResponse(void *pvParameters) {
          * caso de la resincronización periódica del servidor— se descartaría
          * sin que su hora llegara nunca al reloj.
          *
-         * La excepción es una config RETENIDA de MQTT, que llega con
-         * time_client = 0 (ver mqtt_recv_config): su hora es vieja. */
-        if (new_config->time_client > 0) {
-            device_clock_set(new_config->time_client);
-        }
+         * La excepción es una config RETENIDA de MQTT, que llega sin hora
+         * (ver mqtt_recv_config): su hora es vieja. */
+        config_apply_time(new_config);
 
         /* Config más vieja que la aplicada: se rechaza con un ACK negativo, para
          * que el servidor sepa que llegó y que NO se aplicó. */

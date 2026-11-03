@@ -35,9 +35,23 @@ char *device_id(void);
  * sobrevive al deep sleep es la memoria RTC, así que la hora se estaciona ahí
  * antes de dormir y se restaura al volver. */
 
-/* Pone el reloj del sistema en el epoch UNIX dado, y deja copia en memoria RTC.
- * Ignora valores <= 0 (un `time_client` sin poner), registrándolo en el log. */
+/* Pone el reloj del sistema en el epoch UNIX dado, en microsegundos, y deja
+ * copia en memoria RTC. Ignora el 0 (un campo sin poner), registrándolo en el
+ * log.
+ *
+ * Si el reloj ya estaba en hora, loguea la corrección aplicada (hora nueva
+ * menos hora vieja, en µs): con la resincronización del servidor activa, es la
+ * medida directa de cuánto derivó el reloj desde el ajuste anterior, más lo
+ * que tardó la config en llegar. */
+void device_clock_set_us(uint64_t unix_time_us);
+
+/* Lo mismo con segundos. Es la hora del `time_client` de un servidor que no
+ * manda `time_server_us`; se pasa a µs sin pérdida. */
 void device_clock_set(int64_t unix_time_s);
+
+/* Epoch actual en microsegundos, o 0 si el reloj todavía no está en hora. Es
+ * la que se usa para medir (la hora de envío de cada paquete). */
+uint64_t device_clock_now_us(void);
 
 /* Epoch actual en segundos, o 0 si el reloj todavía no está en hora. El 0 es
  * deliberado: un paquete con time_client = 0 es identificable como "sin hora"

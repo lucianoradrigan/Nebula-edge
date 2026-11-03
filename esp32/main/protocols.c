@@ -50,8 +50,8 @@ static esp_err_t mqtt_send_ack(const Config *cfg, const uint8_t *buf, size_t siz
  * los componentes de transporte mueven bytes y no conocen el formato de cable.
  *
  * Por MQTT llega como [retenida][protobuf] (ver rx_dispatch() en
- * nebulaedge_mqtt.c). De una retenida se borra time_client: su hora es la de
- * cuando se publicó, no la de ahora, y no debe tocar el reloj. */
+ * nebulaedge_mqtt.c). De una retenida se borran los dos campos de hora: es la
+ * de cuando se publicó, no la de ahora, y no debe tocar el reloj. */
 static Config *mqtt_recv_config(void) {
     packet_t pkt;
 
@@ -74,6 +74,7 @@ static Config *mqtt_recv_config(void) {
     else if (retained) {
         ESP_LOGI(TAG_GET_RSP_MQTT, "Config v%ld retenida: no se usa su hora", (long)cfg->config_version);
         cfg->time_client = 0;
+        cfg->time_server_us = 0;
     }
     return cfg;
 }

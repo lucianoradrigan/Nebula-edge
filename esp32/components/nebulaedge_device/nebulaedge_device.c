@@ -41,19 +41,32 @@ char *device_id(void) {
  * perdía ~1 s por ciclo y llegó a 70 s de atraso en tres cuartos de hora. */
 RTC_DATA_ATTR static uint64_t s_rtc_unix_us = 0;
 
-void device_clock_set(int64_t unix_time_s) {
-    if (unix_time_s <= 0) {
-        ESP_LOGW(TAG, "time_client inválido: %lld", (long long)unix_time_s);
+/* Por debajo de esto el reloj no está en hora: arranca en 1970. 2020-01-01. */
+#define CLOCK_VALID_FROM_US 1577836800000000ULL
+
+uint64_t device_clock_now_us(void) {
+    struct timeval tv = {0};
+    gettimeofday(&tv, NULL);
+    uint64_t now_us = (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+    return now_us >= CLOCK_VALID_FROM_US ? now_us : 0;
+}
+
+void device_clock_set_us(uint64_t unix_time_us) {
+    if (unix_time_us == 0) {
+        ESP_LOGW(TAG, "Hora inválida (0): el reloj no se toca");
         return;
     }
 
+    uint64_t before_us = device_clock_now_us();
+
     struct timeval tv = {
-        .tv_sec = (time_t)unix_time_s,
-        .tv_usec = 0,
+        .tv_sec  = (time_t)(unix_time_us / 1000000ULL),
+        .tv_usec = (suseconds_t)(unix_time_us % 1000000ULL),
     };
 
     if (settimeofday(&tv, NULL) != 0) {
-        ESP_LOGW(TAG, "No se pudo ajustar la hora del sistema a %lld", (long long)unix_time_s);
+        ESP_LOGW(TAG, "No se pudo ajustar la hora del sistema a %llu us",
+                 (unsigned long long)unix_time_us);
         return;
     }
 
@@ -61,11 +74,26 @@ void device_clock_set(int64_t unix_time_s) {
      * invariante "la memoria RTC refleja la última hora conocida" se sostiene
      * en un solo lugar. Antes el caller de la config inicial tenía que
      * acordarse de escribirla a mano después de poner el reloj. */
-    s_rtc_unix_us = (uint64_t)unix_time_s * 1000000ULL;
+    s_rtc_unix_us = unix_time_us;
 
-    time_t now = 0;
-    time(&now);
-    ESP_LOGI(TAG, "Hora del sistema ajustada a %lld", (long long)now);
+    /* La corrección es el dato que permite medir la deriva: positiva = el
+     * reloj iba atrasado. Con el formato fijo para poder sacarla del log. */
+    if (before_us) {
+        ESP_LOGI(TAG, "Hora ajustada a %llu us (corrección %+lld us)",
+                 (unsigned long long)unix_time_us,
+                 (long long)(unix_time_us - before_us));
+    }
+    else {
+        ESP_LOGI(TAG, "Hora ajustada a %llu us (primera vez)", (unsigned long long)unix_time_us);
+    }
+}
+
+void device_clock_set(int64_t unix_time_s) {
+    if (unix_time_s <= 0) {
+        ESP_LOGW(TAG, "time_client inválido: %lld", (long long)unix_time_s);
+        return;
+    }
+    device_clock_set_us((uint64_t)unix_time_s * 1000000ULL);
 }
 
 uint32_t device_clock_now_s(void) {
