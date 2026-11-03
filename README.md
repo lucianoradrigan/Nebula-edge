@@ -263,9 +263,10 @@ bases creadas antes de que se dejaran de usar.
 1. Al tener `sleep_window_size` de tamaño 1, el cambio de protocolo no funciona bien.
 2. Es fundamental hacer los cambios de protocolo de a uno, y esperar a que complete para hacer otro, de otra manera podría colapsar el servidor/no funcionar bien el sistema de ACK's.
 3. El módulo microSD está en desarrollo para la nueva versión de placa de desarrollo IM-V3.
-4. El Bluetooth de la placa de la Raspberry es poco estable; el banco usa un dongle USB. Con el modo AP en el WiFi de la placa, el Bluetooth de la placa deja de conectar (comparten chip y antena), así que el modo AP necesita el dongle (ver seccion 10).
+4. El Bluetooth de la placa de la Raspberry es poco estable; el banco usa un dongle USB. Con el modo AP en el WiFi de la placa, el Bluetooth de la placa deja de conectar (comparten chip y antena), así que el modo AP va en un dongle WiFi USB, con el BLE en el dongle Bluetooth (ver seccion 10.1).
 5. El adaptador BLE se elige al arrancar el servidor: un dongle conectado o reconectado después no se usa hasta reiniciarlo.
-6. Si la Raspberry levanta el AP porque no encontró una red conocida, no vuelve sola al router cuando reaparece.
+6. Si el AP se levanta en el WiFi de la placa porque no encontró una red conocida, no vuelve sola al router cuando reaparece. Con el AP en un dongle propio (seccion 10.1) no aplica.
+7. Cambiar la Raspberry de red (router <-> AP) exige subir `config_version` de cada device (seccion 10).
 
 ## 7) Estructura del repositorio
 
@@ -382,33 +383,84 @@ servidor en cada config (`system.py` -> `LocalWifiConfig`), no la tabla
   (`wlan0` por defecto): la WiFi a la que esta conectada la Raspberry, o el AP
   que levanto ella misma.
 
-Cuando cambia la red, el device la toma con la siguiente config. Si no logra
-conectarse, se reinicia y la recibe por BLE (seccion 1.1).
+El device solo cambia de red con una config de `config_version` mayor: una
+config con la misma version se descarta como ya aplicada, aunque traiga otro
+SSID. Al pasar la Raspberry del router al AP (o al reves) hay que subir
+`config_version` de cada device; reiniciar el servidor no alcanza. Si el device
+no logra conectarse a la red nueva, se reinicia y la recibe por BLE
+(seccion 1.1).
 
-Modo AP: la Raspberry publica su propia red con un perfil de NetworkManager,
-probado en Raspberry Pi OS Bookworm:
+### 10.1) Modo AP en un dongle WiFi USB
 
-```bash
-sudo rfkill unblock wifi
-sudo nmcli con add type wifi ifname wlan0 con-name nebulaedge_ap autoconnect yes \
-  ssid nebulaedge_ap 802-11-wireless.mode ap 802-11-wireless.band bg \
-  802-11-wireless.channel 6 wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn \
-  wifi-sec.pairwise ccmp wifi-sec.group ccmp wifi-sec.psk '<clave>' \
-  ipv4.method shared ipv6.method ignore connection.autoconnect-priority -10
-sudo nmcli con up nebulaedge_ap
-```
+La Raspberry publica su propia red desde un adaptador WiFi USB, y el BLE va por
+el dongle Bluetooth USB. El WiFi de la placa queda sin usar: con el AP en el
+WiFi de la placa, el Bluetooth de la placa no logra conectar (comparten chip y
+antena, y el AP le deja muy poco tiempo de radio). Medido en banco: con el AP
+arriba en `wlan0`, todos los handshakes BLE por `hci0` fallaron, y el primero
+entro apenas se bajo. Como BLE es el canal de rescate, el modo AP necesita los
+dos dongles.
 
-- `band bg`: el ESP32-S3 solo usa 2,4 GHz.
-- `ipv4.method shared`: la Raspberry queda en `10.42.0.1` y entrega IPs por DHCP.
-- Prioridad `-10`: con `autoconnect yes`, se levanta solo si no hay una red
-  conocida a la vista.
+Probado en Raspberry Pi OS Bookworm (NetworkManager 1.42) con un TP-Link
+TL-WN823N (RTL8192EU, driver `rtl8xxxu`) y un dongle Bluetooth TP-Link.
 
-Despues se vacian `WIFI_SSID` y `WIFI_PASSWD` en `.env` y se reinicia el
-servidor. El broker y los puertos UDP/TCP ya escuchan en todas las interfaces.
+1. Nombre fijo para el dongle WiFi. Sin esto puede quedar como `wlan1` o
+   `wlan0` segun el orden de arranque. En
+   `/etc/systemd/network/10-nebulaedge-wlan-ap.link` (con la MAC del dongle,
+   `ip link`):
 
-Con el AP en el WiFi de la placa, el Bluetooth de la placa no logra conectar:
-comparten chip y antena, y el AP le deja muy poco tiempo de radio. Medido en
-banco: sin el dongle, todos los handshakes BLE fallaron con el AP arriba, y el
-primero entro apenas se bajo. Como BLE es el canal de rescate, el modo AP
-necesita el dongle BLE USB, o un adaptador WiFi USB para el AP que deje libre la
-radio de la placa.
+   ```ini
+   [Match]
+   MACAddress=<mac del dongle>
+
+   [Link]
+   Name=wlan_ap
+   ```
+
+   Se aplica al reconectar el dongle o al reiniciar.
+
+2. Sacar el WiFi de la placa de NetworkManager, en
+   `/etc/NetworkManager/conf.d/90-nebulaedge-wlan0-unmanaged.conf`:
+
+   ```ini
+   [keyfile]
+   unmanaged-devices=interface-name:wlan0
+   ```
+
+   y `sudo systemctl reload NetworkManager`. **No usar `rfkill` para esto**:
+   NetworkManager toma cualquier radio WiFi bloqueada como "WiFi apagado" y baja
+   tambien el dongle; y `nmcli radio wifi on` las desbloquea todas.
+
+3. El perfil del AP, amarrado al dongle:
+
+   ```bash
+   sudo nmcli con add type wifi ifname wlan_ap con-name nebulaedge_ap autoconnect yes \
+     ssid nebulaedge_ap 802-11-wireless.mode ap 802-11-wireless.band bg \
+     802-11-wireless.channel 6 wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn \
+     wifi-sec.pairwise ccmp wifi-sec.group ccmp wifi-sec.psk '<clave>' \
+     ipv4.method shared ipv6.method ignore connection.autoconnect-priority 10
+   sudo nmcli con up nebulaedge_ap
+   ```
+
+   - `band bg`: el ESP32-S3 solo usa 2,4 GHz.
+   - `ipv4.method shared`: la Raspberry queda en `10.42.0.1` y entrega IPs por
+     DHCP.
+   - Como el dongle solo sirve para el AP, el perfil se levanta siempre al
+     arrancar; la Raspberry sigue saliendo a internet por cable.
+
+4. En `raspberry/.env`: `WIFI_DEVICE=wlan_ap`, y `WIFI_SSID` / `WIFI_PASSWD`
+   vacios. Reiniciar el servidor (`docker compose up -d server`) y subir
+   `config_version` de cada device. El broker y los puertos UDP/TCP ya escuchan
+   en todas las interfaces.
+
+5. Si el servidor registra `start scan falló: NotReady`, el dongle Bluetooth
+   quedo bloqueado: `rfkill list`, `sudo rfkill unblock <id>`,
+   `sudo hciconfig hci1 up` y reiniciar el servidor.
+
+Probado en banco sobre el AP: TCP, MQTT y UDP (el device se une al AP en unos
+14 s), reinicio de la placa (vuelve por BLE en unos 60 s, casi todo la espera
+del cierre de la sesion anterior) e INFER con ventanas crudas (769/769
+respondidas, 99,09 % de accuracy, 354 ms de ida y vuelta, igual que con el
+router).
+
+Para volver al router: restaurar `WIFI_SSID` / `WIFI_PASSWD` en `.env`,
+reiniciar el servidor y subir `config_version`.
