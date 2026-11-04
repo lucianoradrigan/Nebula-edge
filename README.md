@@ -155,9 +155,9 @@ resultados guardados. En una base con datos, es mejor agregar el device con un
 En `psql`:
 
 ```sql
-SELECT id_device, config_version_applied, temperature, press, time_client
+SELECT id_device, config_version_applied, temperature, press, time_server, time_sent
 FROM nebulaedge_schema.data_1
-ORDER BY time_client DESC
+ORDER BY time_server DESC
 LIMIT 20;
 ```
 
@@ -209,7 +209,7 @@ Qué guarda cada una:
   - `time_sent`: hora del device justo antes de enviar, en µs;
   - `time_server`: hora en que el servidor recibio el paquete, en µs;
   - `seq`: numero de secuencia del flujo, puesto por el device al producir el paquete;
-  - `time_client`: hora del device al leer el sensor, en segundos enteros. Solo la llena el firmware anterior a `seq`/`time_sent`.
+  - `time_client`: hora del device al leer el sensor, en segundos enteros. Solo la tienen las filas guardadas antes de `seq`/`time_sent`: el servidor actual ya no lee ese campo del protobuf. Un device con firmware anterior sigue mandando datos, pero sus filas quedan sin hora del device (`time_client`, `seq` y `time_sent` en NULL) y su sesion no escribe heartbeat en `log`. Hay que reflashear todos los devices.
 - `log`: `status_report`, `protocol_report`, `batt_level`, `time_client`, `time_server`.
 
 Consultas utiles:
@@ -217,14 +217,14 @@ Consultas utiles:
 ```sql
 SELECT *
 FROM nebulaedge_schema.data_1
-ORDER BY time_client DESC
+ORDER BY time_server DESC
 LIMIT 20;
 ```
 
 ```sql
 SELECT *
 FROM nebulaedge_schema.data_2
-ORDER BY time_client DESC
+ORDER BY time_server DESC
 LIMIT 20;
 ```
 

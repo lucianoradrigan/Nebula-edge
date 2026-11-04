@@ -32,7 +32,7 @@ CREATE TABLE nebulaedge_schema.data_1 (
     hum INT,
     co FLOAT,                   -- OJO: hoy guarda resistencia de gas cruda, no CO
     config_version_applied INT,
-    time_client TIMESTAMP,          -- device, al leer el sensor, en segundos (firmware viejo)
+    time_client TIMESTAMP,          -- device, al leer el sensor, en segundos; solo filas antiguas, ya no se escribe
     time_server TIMESTAMP,          -- servidor, al recibir el paquete, con µs
     seq INT,                        -- número de secuencia del flujo (ver 07_seq_time_sent.sql)
     time_sent TIMESTAMP             -- device, justo antes de enviar, con µs
@@ -51,7 +51,7 @@ CREATE TABLE nebulaedge_schema.data_2 (
     mag_y FLOAT,
     mag_z FLOAT,
     config_version_applied INT,
-    time_client TIMESTAMP,          -- device, al leer el sensor, en segundos (firmware viejo)
+    time_client TIMESTAMP,          -- device, al leer el sensor, en segundos; solo filas antiguas, ya no se escribe
     time_server TIMESTAMP,          -- servidor, al recibir el paquete, con µs
     seq INT,                        -- número de secuencia del flujo (ver 07_seq_time_sent.sql)
     time_sent TIMESTAMP             -- device, justo antes de enviar, con µs
