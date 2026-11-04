@@ -17,7 +17,7 @@ import infer_session
 import sessions
 import transport
 from codec import DataCodec
-from models import InferInput, ModelState, Timeouts
+from models import InferInput, ModelState, ModelStatusData, Timeouts
 from protocol_dispatch import PROTOCOL_INFER
 from tests.fakes import (
     DEVICE_ID, FakeRepo, config_ack_packet, data_1_packet,
@@ -197,6 +197,22 @@ class InferSessionTests(_InferHarness):
 
         result = await asyncio.wait_for(task, timeout=5.0)
         self.assertIsNone(result, "sin más status, la sesión cierra por timeout")
+
+    def test_status_feeds_heartbeat_client_time_in_us(self):
+        """ModelStatus trae time_client en segundos y sin time_sent_us: igual
+        tiene que alimentar el heartbeat, en µs. Si no, en INFER no se escribe
+        ninguna fila de heartbeat en log."""
+        session = infer_session.InferDeviceSession(
+            DEVICE_ID, make_config(1, protocol_conf=PROTOCOL_INFER),
+            FakeRepo(db_version=1), quick_timeouts(),
+        )
+        session._update_last_client_time(ModelStatusData(
+            id_device=DEVICE_ID, model_version=1, state=ModelState.READY,
+            chunks_received=0, error=0, config_version_applied=1,
+            time_client=1_735_000_004,
+        ))
+        self.assertEqual(session._last_client_time, 1_735_000_004_000_000)
+        self.assertIsNotNone(session._last_client_seen_at)
 
     async def test_config_change_is_seen_while_chunks_stream(self):
         """La BD se consulta por reloj: un pedido de trozos tras otro no puede

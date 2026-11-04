@@ -76,7 +76,7 @@ class DeviceSession:
         self.timeouts = Timeouts() if timeouts is None else timeouts  # Timeouts centralizados
         self.ble = ble                                  # Contexto BLE, o None en los otros tres
         self._router = PacketRouter(database_repo)      # Decodifica + persiste paquetes de telemetría
-        self._last_client_time: int | None = None       # Último time_sent_us recibido (Data_1/Data_2), en µs
+        self._last_client_time: int | None = None       # Última hora del device recibida, en µs (ver _update_last_client_time)
         self._apply_wait_started: float | None = None   # Desde cuándo se espera que el device aplique
         self._db_behind_warned_at: int | None = None    # versión del device ya avisada como más nueva que la BD
         self._last_client_seen_at: float | None = None  # Cuándo llegó, en reloj monótono del server
@@ -88,8 +88,15 @@ class DeviceSession:
         falta para saber si el dato sigue fresco sin usar el reloj del device:
         ese se atrasa con cada deep sleep, así que restarlo contra el del
         server no dice nada sobre la antigüedad del paquete.
+
+        Data_1/Data_2 traen `time_sent_us`. ModelStatus (INFER) trae solo
+        `time_client` en segundos: se pasa a µs para que el heartbeat lo
+        trate igual que a la telemetría.
         """
         ts = getattr(data, "time_sent_us", None)
+        if not ts:
+            secs = getattr(data, "time_client", None)
+            ts = secs * 1_000_000 if isinstance(secs, int) else None
         if isinstance(ts, int) and ts > 0:
             self._last_client_time = ts
             self._last_client_seen_at = time.monotonic()
