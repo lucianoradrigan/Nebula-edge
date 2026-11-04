@@ -15,6 +15,7 @@
 #include "protocols.h"
 #include "gate.h"
 #include "power.h"
+#include "data_path.h"
 #include "config_task.h"
 
 /* Si la tabla de protocolos tiene una entrada para el protocol_conf de `c`.
@@ -235,7 +236,7 @@ void vTaskGetResponse(void *pvParameters) {
          * pausa, cuando ya nadie la puede estar usando. */
         Config *old_config = current_config;
         current_config = new_config;
-        data_window_count = 0;
+        data_path_window_reset();
 
         /* El ACK sale ANTES de detener nada, y por `proto->id` en vez de por el
          * protocolo de la config nueva: el transporte abierto sigue siendo

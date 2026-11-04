@@ -50,6 +50,44 @@ void data_path_reset_seq(void) {
     s_seq_inertial = 0;
 }
 
+/* VENTANA DESPIERTA
+ *
+ * Muestras encoladas por cada flujo en la ventana actual. Cada productora
+ * cuenta las suyas y se detiene al llegar a sleep_window_size; la task de envío
+ * duerme cuando las dos llegaron y la cola quedó vacía.
+ *
+ * Antes la ventana contaba ENVÍOS de los dos flujos juntos. Al completarse,
+ * las productoras seguían produciendo y la pausa del deep sleep vaciaba la
+ * cola: los paquetes que quedaban, ya con su seq, se perdían sin enviarse.
+ * Pasaba en ~10 % de los ciclos. Contando al producir, la ventana termina sin
+ * nada en la cola y no hay qué descartar.
+ *
+ * En RAM normal: el deep sleep reinicia el chip y los deja en cero. */
+static uint32_t s_window_environmental = 0;
+static uint32_t s_window_inertial = 0;
+
+void data_path_window_reset(void) {
+    s_window_environmental = 0;
+    s_window_inertial = 0;
+}
+
+/* Con deep sleep activo, si el flujo ya produjo su ventana completa. */
+static bool window_full(uint32_t produced) {
+    if (!current_config || current_config->sleep_time_s <= 0) {
+        return false;
+    }
+    int32_t size = current_config->sleep_window_size;
+    return produced >= (uint32_t)(size > 0 ? size : 1);   // <= 0 se toma como 1, igual que antes
+}
+
+/* La ventana terminó: los dos flujos la produjeron y ya se mandó todo. Como
+ * cada productora cuenta DESPUÉS de encolar, cola vacía aquí significa que
+ * no queda nada por enviar. */
+static bool window_done(void) {
+    return window_full(s_window_environmental) && window_full(s_window_inertial) &&
+           uxQueueMessagesWaiting(xQueueData) == 0;
+}
+
 /* HORA DE ENVÍO
  *
  * Data_1.time_sent_us / Data_2.time_sent_us se escriben justo antes del send
@@ -121,7 +159,8 @@ void vTaskCollectInertial(void *pvParameters) {
         // Punto seguro: acá no hay memoria reservada ni bus tomado.
         sensor_gate_wait(GATE_INERTIAL_IDLE);
 
-        if (!telemetry_enabled()) {
+        // Sin telemetría (INFER) o con la ventana ya producida: no lee ni encola.
+        if (!telemetry_enabled() || window_full(s_window_inertial)) {
             sensor_gate_sleep(TASK_POLL_MS);
             continue;
         }
@@ -175,6 +214,7 @@ void vTaskCollectInertial(void *pvParameters) {
         ESP_LOGD(TAG_COLLECT_INERTIAL, "Paquete Data_2 generado");
 
         enqueue_packet(&packet, TAG_COLLECT_INERTIAL);
+        s_window_inertial++;    // después de encolar: ver VENTANA DESPIERTA
 
         // Ritma la producción. Despierta antes si se pide una pausa.
         sensor_gate_sleep(packet_interval_s() * 1000U);
@@ -194,7 +234,8 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         // Punto seguro: acá no hay memoria reservada ni bus tomado.
         sensor_gate_wait(GATE_ENV_IDLE);
 
-        if (!telemetry_enabled()) {
+        // Sin telemetría (INFER) o con la ventana ya producida: no lee ni encola.
+        if (!telemetry_enabled() || window_full(s_window_environmental)) {
             sensor_gate_sleep(TASK_POLL_MS);
             continue;
         }
@@ -257,6 +298,7 @@ void vTaskCollectEnvironmental(void *pvParameters) {
         ESP_LOGD(TAG_COLLECT_ENV, "Paquete Data_1 generado");
 
         enqueue_packet(&packet, TAG_COLLECT_ENV);
+        s_window_environmental++;
 
         // Ritma la producción. Despierta antes si se pide una pausa.
         sensor_gate_sleep(packet_interval_s() * 1000U);
@@ -313,6 +355,11 @@ void vTaskSendData(void *pvParameters) {
 
         // Con timeout, para poder volver acá arriba si se pide una pausa.
         if (xQueueReceive(xQueueData, &packet, pdMS_TO_TICKS(TASK_POLL_MS)) != pdTRUE) {
+            /* También acá: si el último paquete de la ventana ya salió, la cola
+             * queda vacía y nadie más volvería a preguntar. */
+            if (window_done()) {
+                deep_sleep_if_needed();
+            }
             continue;
         }
 
@@ -336,13 +383,8 @@ void vTaskSendData(void *pvParameters) {
 
         free(packet.data);
 
-        /* Respiro antes del último paquete de la ventana, para que no se pierda
-         * al cortarse el enlace por el deep sleep. Solo BLE lo declara. */
-        if (proto->last_packet_delay_ms > 0 &&
-            data_window_count + 1 == (uint32_t)current_config->sleep_window_size) {
-            vTaskDelay(pdMS_TO_TICKS(proto->last_packet_delay_ms));
+        if (window_done()) {
+            deep_sleep_if_needed();
         }
-
-        deep_sleep_if_needed();
     }
 }

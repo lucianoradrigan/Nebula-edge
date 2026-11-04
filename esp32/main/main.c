@@ -306,7 +306,7 @@ void app_main() {
         if (current_config) {
             ESP_LOGI(TAG, "Config cargada desde NVS (wake-up por deep sleep)");
             device_clock_restore_after_deep_sleep();
-            data_window_count = 0;
+            data_path_window_reset();
         }
     }
     else {
@@ -357,7 +357,7 @@ void app_main() {
             continue;
         }
         config_apply_time(current_config);
-        data_window_count = 0;
+        data_path_window_reset();
         ESP_LOGI(TAG, "configuración leída correctamente");
     }
 

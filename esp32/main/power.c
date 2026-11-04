@@ -17,36 +17,14 @@
 #include "gate.h"
 #include "power.h"
 
-uint32_t data_window_count = 0;     // ver power.h
-
-/* Deep sleep helper para modo discontinuo.
- * Se llama en la función de envío de cada protocolo. */
+/* Deep sleep helper para modo discontinuo. La llama la task de envío cuando la
+ * ventana despierta terminó (data_path.c). */
 void deep_sleep_if_needed(void) {
 
-    // Si no existe configuración actual
-    if (!current_config) {
+    if (!current_config || current_config->sleep_time_s <= 0) {
         return;
     }
 
-    data_window_count++;
-
-    // Caso en que deep sleep está desactivado
-    if (current_config->sleep_time_s <= 0) {
-        return;
-    }
-
-    int window_size = current_config->sleep_window_size;
-    if (window_size <= 0) {
-        window_size = 1;
-    }
-
-    // Aún no se envía toda la ventana, retorna
-    if (data_window_count < (uint32_t)window_size) {
-        return;
-    }
-    data_window_count = 0;
-
-    // Acá se tiene condición de ventana completa, ya se puede entrar en deep sleep
     uint64_t sleep_us = (uint64_t)current_config->sleep_time_s * 1000000ULL;
     
     const protocol_ops_t *proto = &PROTOCOLS[current_config->protocol_conf];
@@ -58,6 +36,12 @@ void deep_sleep_if_needed(void) {
      * A la task de ENVÍO no se la espera: es la que está ejecutando esto. */
     ESP_LOGI(TAG, "Deteniendo tasks antes de dormir");
     pause_for_deep_sleep(proto->id);
+
+    /* Respiro para que el último paquete de la ventana alcance a salir antes
+     * de que el deep sleep corte el enlace. Solo BLE lo declara. */
+    if (proto->last_packet_delay_ms > 0) {
+        vTaskDelay(pdMS_TO_TICKS(proto->last_packet_delay_ms));
+    }
 
     /* Avisa al server que se va a dormir, antes de cerrar. No se espera
      * respuesta, así que se repite lo que diga la tabla: tres veces en los de

@@ -15,4 +15,8 @@ void vTaskSendData(void *pvParameters);
  * salto de seq siga significando "paquete perdido". */
 void data_path_reset_seq(void);
 
+/* Empieza una ventana despierta nueva: pone en cero las muestras producidas
+ * por cada flujo. Se llama al aplicar una config nueva y al arrancar. */
+void data_path_window_reset(void);
+
 #endif
