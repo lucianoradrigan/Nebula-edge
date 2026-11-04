@@ -1,0 +1,5 @@
+B60 1793753077.400 v3047 sleep_time_s=60 window=20
+B150 1793754877.474 v3048 sleep_time_s=150 window=20
+B300 1793756977.566 v3049 sleep_time_s=300 window=20
+fin 1793759677.660 v3050 sleep_time_s=0 window=20
+resync 300

@@ -1,0 +1,35 @@
+resync 0
+B300 1793760702.195 v3052 sleep_time_s=300 window=20 n=5
+B90 1793762292.291 v3053 sleep_time_s=90 window=20 n=5
+B420 1793762832.365 v3054 sleep_time_s=420 window=20 n=5
+B240 1793765022.465 v3055 sleep_time_s=240 window=20 n=5
+B540 1793766312.564 v3056 sleep_time_s=540 window=20 n=5
+B45 1793769102.655 v3057 sleep_time_s=45 window=20 n=5
+B10 1793769417.749 v3058 sleep_time_s=10 window=20 n=5
+B180 1793769557.841 v3059 sleep_time_s=180 window=20 n=5
+B480 1793770547.937 v3060 sleep_time_s=480 window=20 n=5
+B30 1793773038.029 v3061 sleep_time_s=30 window=20 n=5
+B600 1793773278.128 v3062 sleep_time_s=600 window=20 n=5
+B120 1793776368.224 v3063 sleep_time_s=120 window=20 n=5
+B360 1793777058.318 v3064 sleep_time_s=360 window=20 n=5
+B20 1793778948.411 v3065 sleep_time_s=20 window=20 n=5
+B60 1793779138.502 v3066 sleep_time_s=60 window=20 n=5
+B150 1793779528.600 v3067 sleep_time_s=150 window=20 n=5
+B150 1793780368.691 v3068 sleep_time_s=150 window=20 n=5
+B60 1793781208.788 v3069 sleep_time_s=60 window=20 n=5
+B20 1793781598.886 v3070 sleep_time_s=20 window=20 n=5
+B360 1793781788.982 v3071 sleep_time_s=360 window=20 n=5
+B120 1793783679.079 v3072 sleep_time_s=120 window=20 n=5
+B600 1793784369.173 v3073 sleep_time_s=600 window=20 n=5
+B30 1793787459.275 v3074 sleep_time_s=30 window=20 n=5
+B480 1793787699.375 v3075 sleep_time_s=480 window=20 n=5
+B180 1793790189.469 v3076 sleep_time_s=180 window=20 n=5
+B10 1793791179.566 v3077 sleep_time_s=10 window=20 n=5
+B45 1793791319.666 v3078 sleep_time_s=45 window=20 n=5
+B540 1793791634.763 v3079 sleep_time_s=540 window=20 n=5
+B240 1793794424.862 v3080 sleep_time_s=240 window=20 n=5
+B420 1793795714.965 v3081 sleep_time_s=420 window=20 n=5
+B90 1793797905.152 v3082 sleep_time_s=90 window=20 n=5
+B300 1793798445.251 v3083 sleep_time_s=300 window=20 n=5
+fin 1793800035.352 v3084 sleep_time_s=0 window=20
+resync 300
