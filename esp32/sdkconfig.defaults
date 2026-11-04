@@ -43,3 +43,12 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 # orden de aparición.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# No validar la imagen de la app al despertar del deep sleep (en arranque frío
+# se sigue validando). Medido en banco: ahorra ~0,5 s de arranque por ciclo, que
+# el reloj del device no contaba. Sin secure boot, la validación solo protege
+# contra corrupción de la flash durante el sueño.
+# OJO: sdkconfig.defaults solo llena lo que falta en sdkconfig. Si ya existe un
+# esp32/sdkconfig de un build anterior, esta línea no tiene efecto: borrarlo (o
+# `idf.py fullclean` y borrarlo) antes de compilar.
+CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
