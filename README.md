@@ -301,6 +301,7 @@ que agrega `seq` y `time_sent`.
 5. El adaptador BLE se elige al arrancar el servidor: un dongle conectado o reconectado después no se usa hasta reiniciarlo.
 6. Si el AP se levanta en el WiFi de la placa porque no encontró una red conocida, no vuelve sola al router cuando reaparece. Con el AP en un dongle propio (seccion 10.1) no aplica.
 7. Cambiar la Raspberry de red (router <-> AP) exige subir `config_version` de cada device (seccion 10).
+8. El reloj del device se desvia en cada deep sleep: por ciclo, ~+0,2 s fijos (arranque no contado) menos ~0,55 % del sueño (el oscilador RC interno cuenta de mas). Con sueños de 5 min son ~1,5 s por ciclo; despierto, solo −2,8 ppm. El servidor reenvia la hora cada `CLOCK_RESYNC_SEC` (300 s) y `time_server` es la hora de referencia. Corregirlo de fondo exige un cristal de 32 kHz. Medido en una sola placa; detalle y datos en [mediciones/deriva/](mediciones/deriva/README.md).
 
 ## 7) Estructura del repositorio
 

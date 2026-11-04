@@ -173,10 +173,12 @@ class DeviceSession:
 
         POR QUÉ HACE FALTA
             La ESP32 no tiene RTC con batería: su hora entra en el campo
-            `time_client` de la config y después corre sola. Y corre mal: el
-            atraso medido en banco es de ~0,75 s por minuto, unos 45 s en una
-            hora. La única hora confiable que el device puede ver es la que le
-            mandamos nosotros.
+            `time_client` de la config y después corre sola. Despierta deriva
+            poco (−2,8 ppm), pero cada deep sleep la mueve: el oscilador RC
+            cuenta de más ~0,55 % del sueño y el arranque no contado suma
+            ~0,2 s por ciclo. Con sueños de 5 min son ~1,5 s por ciclo
+            (mediciones/deriva/). La única hora confiable que el device puede
+            ver es la que le mandamos nosotros.
 
         POR QUÉ REENVIAR LA MISMA VERSIÓN Y NO INVENTAR UNA NUEVA
             `get_config()` estampa `time_client` con la hora del momento en
