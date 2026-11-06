@@ -33,6 +33,33 @@ static bool s_handlers_registered = false;
 static esp_event_handler_instance_t s_instance_any_id;
 static esp_event_handler_instance_t s_instance_got_ip;
 
+/* Copia propia de la config, con las cadenas adentro. El handler de eventos
+ * recibe un puntero a ella y puede correr en cualquier momento, también
+ * durante wifi_deinit_sta(). Antes recibía el puntero que pasaba el caller:
+ * una variable local de main.c, cuyas cadenas además apuntaban dentro de
+ * current_config. Al terminar el bloque y liberarse la config, el handler leía
+ * memoria muerta (se vio como un SSID con basura en el log). */
+static global_wifi_config s_cfg;
+static char s_ssid[33];
+static char s_password[65];
+
+/* Tope para conectarse. Con portMAX_DELAY, una red que no genera ni
+ * "conectado" ni "desconectado" (p.ej. un SSID vacío, que esp_wifi_connect()
+ * rechaza sin evento) dejaba al device esperando para siempre, sin procesar
+ * siquiera la config de rescate por BLE. Se vio 4 h en la prueba del 05-11. */
+#define WIFI_CONNECT_TIMEOUT_MS 30000
+
+/* Pérdida de la red CON el device ya en operación. Pasada la conexión inicial
+ * nadie espera WIFI_FAIL_BIT: la task principal está bloqueada hasta un cambio
+ * de protocolo. Antes, al agotar los reintentos el device quedaba para siempre
+ * mandando a una red que ya no estaba ("Host is unreachable" con UDP, visto el
+ * 04-11 al bajar el AP). Ahora reintenta durante WIFI_LOST_RESTART_MS y, si no
+ * vuelve, se reinicia para recibir config por BLE. */
+#define WIFI_LOST_RESTART_MS 60000
+static bool s_connected_once = false;   // ya hubo IP en esta sesión WiFi
+static bool s_stopping = false;         // wifi_deinit_sta() en curso: las desconexiones son esperadas
+static TickType_t s_lost_at = 0;        // cuándo se perdió la red en operación (0 = conectado)
+
 /**
  * @brief Event handler for Wi-Fi and IP events.
  *
@@ -54,11 +81,36 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     // Handle the event when the station starts
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         // Attempt to connect to the configured Wi-Fi network
-        esp_wifi_connect();
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_connect() rechazó la red: %s", esp_err_to_name(err));
+            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+        }
     } 
 
     // Handle the event when the station is disconnected
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+
+        if (s_stopping) {
+            return;
+        }
+
+        // En operación: reintentar con plazo y, si no vuelve, reiniciar.
+        if (s_connected_once) {
+            TickType_t now = xTaskGetTickCount();
+            if (s_lost_at == 0) {
+                s_lost_at = now ? now : 1;
+                ESP_LOGW(TAG, "Se perdió la red %s: se reintenta hasta %d s", config->ssid,
+                         WIFI_LOST_RESTART_MS / 1000);
+            }
+            if (now - s_lost_at > pdMS_TO_TICKS(WIFI_LOST_RESTART_MS)) {
+                ESP_LOGE(TAG, "La red %s no volvió. Restarting...", config->ssid);
+                vTaskDelay(pdMS_TO_TICKS(1500));
+                esp_restart();
+            }
+            esp_wifi_connect();
+            return;
+        }
 
         // Check if the maximum number of retries has not been reached
         if (s_retry_num < config->max_retry) {
@@ -99,6 +151,11 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 
         // Reset the retry counter
         s_retry_num = 0;
+        if (s_lost_at != 0) {
+            ESP_LOGI(TAG, "Red recuperada");
+        }
+        s_connected_once = true;
+        s_lost_at = 0;
 
         // Set the connected bit in the event group
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
@@ -116,8 +173,27 @@ static void event_handler(void* arg, esp_event_base_t event_base,
  *
  * @param global_wifi_config Pointer to the global Wi-Fi configuration structure.
  */
-static void wifi_init_sta(global_wifi_config *global_wifi_config) {
+static void wifi_init_sta(global_wifi_config *caller_config) {
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+
+    // Copia propia: ver s_cfg.
+    strlcpy(s_ssid, caller_config->ssid ? caller_config->ssid : "", sizeof s_ssid);
+    strlcpy(s_password, caller_config->password ? caller_config->password : "", sizeof s_password);
+    s_cfg = *caller_config;
+    s_cfg.ssid = s_ssid;
+    s_cfg.password = s_password;
+    global_wifi_config *global_wifi_config = &s_cfg;
+    s_retry_num = 0;
+    s_connected_once = false;
+    s_lost_at = 0;
+
+    /* Sin SSID no hay a qué conectarse: se reinicia para volver por BLE, igual
+     * que cuando se agotan los reintentos. */
+    if (s_ssid[0] == '\0') {
+        ESP_LOGE(TAG, "La config no trae SSID. Restarting...");
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        esp_restart();
+    }
 
     // Create an event group to handle Wi-Fi connection states
     if (s_wifi_event_group == NULL) {
@@ -181,7 +257,7 @@ static void wifi_init_sta(global_wifi_config *global_wifi_config) {
             WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
             pdFALSE,
             pdFALSE,
-            portMAX_DELAY);
+            pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
 
     // xEventGroupWaitBits() returns the bits before the call returned, hence 
     // we can test which event actually happened.
@@ -202,7 +278,11 @@ static void wifi_init_sta(global_wifi_config *global_wifi_config) {
         esp_restart();
     } 
     else {
-        ESP_LOGE(TAG, "UNEXPECTED EVENT");
+        // Venció el tope sin conectar ni fallar: mismo camino que el fallo.
+        ESP_LOGE(TAG, "Sin conexión a SSID %s tras %d ms. Restarting...", global_wifi_config->ssid,
+                 WIFI_CONNECT_TIMEOUT_MS);
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        esp_restart();
     }
 }
 
@@ -228,6 +308,7 @@ void wifi_deinit_sta(void) {
         return;
     }
     ESP_LOGI(TAG, "wifi_deinit_sta: stop/deinit wifi");
+    s_stopping = true;          // la desconexión que sigue es pedida, no una pérdida
     esp_wifi_stop();
     esp_wifi_deinit();
     if (s_handlers_registered) {
@@ -247,4 +328,7 @@ void wifi_deinit_sta(void) {
         s_wifi_event_group = NULL;
     }
     s_wifi_active = false;
+    s_stopping = false;
+    s_connected_once = false;
+    s_lost_at = 0;
 }
