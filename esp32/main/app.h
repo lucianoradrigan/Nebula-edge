@@ -126,6 +126,8 @@ extern fxl6408_handle_t io_expander;
  * configurar la sesión (BLE); si se le manda antes, ese primer paquete se
  * pierde. */
 #define SERVER_READY_MS 5000
+/* Cuánto espera ble_open() a que el servidor se conecte por BLE. Ver protocols.c. */
+#define BLE_OPEN_TIMEOUT_MS 60000
 
 /* Intentos de asociación al AP antes de que nebulaedge_wifi reinicie el chip.
  * Estaba repetido en las tres ramas del switch con el valor 15, y dos de los

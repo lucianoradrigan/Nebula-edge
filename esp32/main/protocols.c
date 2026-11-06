@@ -16,6 +16,7 @@
 #include "schema.pb-c.h"
 #include "app.h"
 #include "protocols.h"
+#include "power.h"
 
 /* Tamaño del buffer donde se recibe una config cruda en UDP y TCP. Vive en la
  * pila de la task de respuesta (4096 B), así que hay espacio de sobra. */
@@ -267,9 +268,19 @@ static void ble_close(void) { }
 static bool ble_open(void) {
     ESP_LOGI(TAG, "esperando conexión BLE para iniciar tasks...");
 
-    if (xSemaphoreTake(ble_start_semaphore, portMAX_DELAY)) {
-        ESP_LOGI(TAG, "toma semáforo, empieza recepción BLE");
+    /* Con tope. Con portMAX_DELAY, en deep sleep un device al que el servidor
+     * no alcanzaba a reconectar quedaba despierto para siempre (visto con 7
+     * placas en BLE el 04-11: el dongle no da abasto). Vencido el tope, en deep
+     * sleep se salta esta ventana y se vuelve a dormir; en continuo, open()
+     * devuelve false y el bucle de protocolos vuelve a esperar. */
+    if (xSemaphoreTake(ble_start_semaphore, pdMS_TO_TICKS(BLE_OPEN_TIMEOUT_MS)) != pdTRUE) {
+        ESP_LOGW(TAG, "BLE: el servidor no se conectó en %d s", BLE_OPEN_TIMEOUT_MS / 1000);
+        if (current_config && current_config->sleep_time_s > 0) {
+            deep_sleep_if_needed();     // no vuelve
+        }
+        return false;
     }
+    ESP_LOGI(TAG, "toma semáforo, empieza recepción BLE");
 
     // Le da tiempo a la Raspberry para estar lista.
     vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
