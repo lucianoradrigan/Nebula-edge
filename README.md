@@ -302,6 +302,10 @@ que agrega `seq` y `time_sent`.
 6. Si el AP se levanta en el WiFi de la placa porque no encontró una red conocida, no vuelve sola al router cuando reaparece. Con el AP en un dongle propio (seccion 10.1) no aplica.
 7. Cambiar la Raspberry de red (router <-> AP) exige subir `config_version` de cada device (seccion 10).
 8. El reloj del device se desvia en cada deep sleep: por ciclo, ~+0,2 s fijos (arranque no contado) menos ~0,55 % del sueño (el oscilador RC interno cuenta de mas). Con sueños de 5 min son ~1,5 s por ciclo; despierto, solo −2,8 ppm. El servidor reenvia la hora cada `CLOCK_RESYNC_SEC` (300 s) y `time_server` es la hora de referencia. Corregirlo de fondo exige un cristal de 32 kHz. Medido en una sola placa; detalle y datos en [mediciones/deriva/](mediciones/deriva/README.md).
+9. UDP pierde ~0,1-0,25 % de los paquetes en el aire (no confirma ni reenvia). TCP y MQTT, con el AP en el WiFi de la placa, 0 %. Ver [mediciones/perdidas/](mediciones/perdidas/README.md).
+10. Un paquete que no se puede enviar se descarta, no se retiene: con el enlace BLE cortado o la red caida se pierde. El `seq` de `data_1`/`data_2` permite contarlo.
+11. BLE en deep sleep no escala a 5-7 placas con un solo dongle: no alcanza a reconectarlas a todas en cada ciclo.
+12. El dongle WiFi TP-Link TL-WN823N (`rtl8xxxu`) pierde 3-5 % como AP y no sostiene el modo cliente; el AP va en el WiFi de la placa (`wlan0`).
 
 ## 7) Estructura del repositorio
 
@@ -434,6 +438,14 @@ no logra conectarse a la red nueva, se reinicia y la recibe por BLE
 (seccion 1.1).
 
 ### 10.1) Modo AP en un dongle WiFi USB
+
+> **Actualización (06-11-2026):** medido con 7 placas, el AP en este dongle
+> pierde 3-5 % de los paquetes UDP (la radio del ESP32 recibe el ACK de cada
+> trama, pero no llegan a Linux), y con el AP en el WiFi de la placa (`wlan0`)
+> se pierde ~0,1-0,25 %. La configuracion recomendada es el AP en `wlan0`, con
+> el BLE en el dongle Bluetooth (`hci1`), que no se ve afectado. Los pasos de
+> abajo sirven igual cambiando `wlan_ap` por `wlan0` y quitando el archivo del
+> paso 2 (`wlan0` tiene que estar en NetworkManager).
 
 La Raspberry publica su propia red desde un adaptador WiFi USB, y el BLE va por
 el dongle Bluetooth USB. El WiFi de la placa queda sin usar: con el AP en el
