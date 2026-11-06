@@ -3,8 +3,11 @@
     cd raspberry/server && python -m unittest discover -s tests
 """
 from __future__ import annotations
+import asyncio
 import unittest
 from unittest import mock
+
+from bleak.exc import BleakError
 
 import discovery
 from tests.fakes import FakeBLEDevice, make_config
@@ -42,6 +45,56 @@ class SessionCleanupTests(unittest.IsolatedAsyncioTestCase):
         await self._end_session(db_down)
         self.assertNotIn(self.device.address, self.disc.devices,
                          "el device quedó marcado y no se va a volver a descubrir")
+
+
+class ScannerErrorTests(unittest.IsolatedAsyncioTestCase):
+    """Un error del adaptador BLE al pausar o reanudar el escaneo no puede
+    matar a connection_worker: es la única task que entrega la config inicial,
+    y sin ella el servidor sigue escaneando pero no atiende a ningún device."""
+
+    class AdapterGoneScanner:
+        """Como bleak con el dongle desconectado: BleakError, no BleakDBusError."""
+        async def start(self):
+            raise BleakError("adapter 'hci1' not found")
+
+        async def stop(self):
+            raise BleakError("adapter 'hci1' not found")
+
+    class UnreachableClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def connect(self):
+            raise OSError("no conecta (simulado)")
+
+        async def disconnect(self):
+            pass
+
+    async def test_worker_survives_an_adapter_error(self):
+        with mock.patch.object(discovery.BLEAdapterResolver, "resolve", return_value="hci1"):
+            disc = discovery.DeviceDiscovery(db_dsn="postgresql://nadie")
+        disc.scanner = self.AdapterGoneScanner()
+        disc.scanner_running = True     # para que _scanner_stop() también lo intente
+
+        asked = []
+
+        async def get_config(_repo, addr):
+            asked.append(addr)
+            return make_config(1)
+
+        with mock.patch.object(discovery.DatabaseRepository, "get_config_async", get_config), \
+             mock.patch.object(discovery, "BleakClient", self.UnreachableClient):
+            worker = asyncio.create_task(disc.connection_worker())
+            self.addCleanup(worker.cancel)
+
+            disc.shared_queue.put_nowait(FakeBLEDevice("AA:BB:CC:DD:EE:01"))
+            await asyncio.sleep(0.1)
+            self.assertFalse(worker.done(), "connection_worker murió con el error del adaptador")
+
+            disc.shared_queue.put_nowait(FakeBLEDevice("AA:BB:CC:DD:EE:02"))
+            await asyncio.sleep(0.1)
+            self.assertEqual(asked, ["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"],
+                             "el segundo device no se atendió")
 
 
 if __name__ == "__main__":

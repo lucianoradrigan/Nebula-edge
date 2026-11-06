@@ -31,7 +31,7 @@ from enum import Enum
 from typing import Dict
 
 from bleak import BleakScanner, BleakClient
-from bleak.exc import BleakDBusError
+from bleak.exc import BleakError
 from bleak.backends.device import BLEDevice
 
 from gatt_uuids import UUID_CHAR_A
@@ -79,19 +79,33 @@ class DeviceDiscovery:
         log(f"[BLE] Usando adaptador: {self.ble_adapter}")
 
     async def _scanner_stop(self):
-        """Detiene el escaneo BLE si está activo."""
+        """Detiene el escaneo BLE si está activo.
+
+        Atrapa BleakError y no solo BleakDBusError (que es una subclase). Con el
+        adaptador desaparecido de BlueZ -un dongle que se resetea por USB, un
+        bluetoothd que se reinicia- bleak lanza BleakError("adapter ... not
+        found"). Antes eso salía de acá y mataba a connection_worker, la única
+        task que entrega la config inicial: el servidor seguía escaneando sin
+        atender a nadie, sin ningún aviso. Lo cubre test_discovery.py.
+
+        El escaneo queda marcado como detenido aunque stop() falle: bleak suelta
+        su handle de parada ANTES de llamarlo, así que para él ya está detenido,
+        y dejarlo en True impedía que el próximo _scanner_start() lo rearmara.
+        """
         if self.scanner is None:
             return
         if not self.scanner_running:
             return
+        self.scanner_running = False
         try:
             await self.scanner.stop()
-            self.scanner_running = False
-        except BleakDBusError as e:
+        except BleakError as e:
             log(f"[BLE] stop scan falló: {e}")
 
     async def _scanner_start(self):
-        """Inicia el escaneo BLE si está detenido."""
+        """Inicia el escaneo BLE si está detenido. Si falla, queda detenido y se
+        reintenta en el próximo llamado (a más tardar en el reinicio periódico
+        de run(), cada scan_restart_sec). Ver _scanner_stop() por qué BleakError."""
         if self.scanner is None:
             return
         if self.scanner_running:
@@ -99,7 +113,7 @@ class DeviceDiscovery:
         try:
             await self.scanner.start()
             self.scanner_running = True
-        except BleakDBusError as e:
+        except BleakError as e:
             log(f"[BLE] start scan falló: {e}")
 
     def _is_target_advertisement(self, device, adv) -> bool:
