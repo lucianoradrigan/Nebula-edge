@@ -1,0 +1,228 @@
+1793840683 MODO noche
+1793840683 INICIO A_udp_ds proto=1 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793840683.863 v3155 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793840683.934 v3156 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793840684.004 v3157 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793840684.075 v3158 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793840684.146 v3159 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793840684.215 v3160 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793840684.290 v3161 proto=1 sleep_time_s=30 window=10
+1793842664 FIN A_udp_ds
+1793842664 INICIO A_udp_cont proto=1 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793842664.385 v3162 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793842664.455 v3163 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793842664.524 v3164 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793842664.596 v3165 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793842664.665 v3166 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793842664.734 v3167 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793842664.804 v3168 proto=1 sleep_time_s=0 window=20
+1793844644 FIN A_udp_cont
+1793844644 INICIO A_tcp_ds proto=2 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793844644.904 v3169 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793844644.978 v3170 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793844645.048 v3171 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793844645.118 v3172 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793844645.187 v3173 proto=2 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793844645.258 v3174 proto=2 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793844645.328 v3175 proto=2 sleep_time_s=30 window=10
+1793846625 FIN A_tcp_ds
+1793846625 INICIO A_tcp_cont proto=2 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793846625.425 v3176 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793846625.494 v3177 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793846625.563 v3178 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793846625.636 v3179 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793846625.706 v3180 proto=2 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793846625.776 v3181 proto=2 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793846625.845 v3182 proto=2 sleep_time_s=0 window=20
+1793848605 FIN A_tcp_cont
+1793848605 INICIO A_mqtt_ds proto=0 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793848605.917 v3183 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793848606.014 v3184 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793848606.088 v3185 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793848606.158 v3186 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793848606.232 v3187 proto=0 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793848606.304 v3188 proto=0 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793848606.380 v3189 proto=0 sleep_time_s=30 window=10
+1793850586 FIN A_mqtt_ds
+1793850586 INICIO A_mqtt_cont proto=0 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793850586.472 v3190 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793850586.553 v3191 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793850586.627 v3192 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793850586.698 v3193 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793850586.768 v3194 proto=0 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793850586.838 v3195 proto=0 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793850586.907 v3196 proto=0 sleep_time_s=0 window=20
+1793852566 FIN A_mqtt_cont
+1793852566 INICIO F_server_udp proto=1 sleep=0 window=20 regimen_min=10
+  34:85:18:A2:DB:4E 1793852567.002 v3197 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793852567.083 v3198 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793852567.159 v3199 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793852567.229 v3200 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793852567.301 v3201 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793852567.376 v3202 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793852567.445 v3203 proto=1 sleep_time_s=0 window=20
+1793853047 EVENTO F_server_udp
+1793853057 EVENTO_FIN F_server_udp
+1793853357 FIN F_server_udp
+1793853357 INICIO F_server_tcp proto=2 sleep=0 window=20 regimen_min=10
+  34:85:18:A2:DB:4E 1793853357.966 v3204 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793853358.044 v3205 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793853358.119 v3206 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793853358.204 v3207 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793853358.277 v3208 proto=2 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793853358.348 v3209 proto=2 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793853358.419 v3210 proto=2 sleep_time_s=0 window=20
+1793853838 EVENTO F_server_tcp
+1793853848 EVENTO_FIN F_server_tcp
+1793854148 FIN F_server_tcp
+1793854148 INICIO F_broker_mqtt proto=0 sleep=0 window=20 regimen_min=10
+  34:85:18:A2:DB:4E 1793854148.928 v3211 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793854149.001 v3212 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793854149.075 v3213 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793854149.165 v3214 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793854149.241 v3215 proto=0 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793854149.332 v3216 proto=0 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793854149.403 v3217 proto=0 sleep_time_s=0 window=20
+1793854629 EVENTO F_broker_mqtt
+1793854630 EVENTO_FIN F_broker_mqtt
+1793854930 FIN F_broker_mqtt
+1793854930 INICIO F_db_udp proto=1 sleep=0 window=20 regimen_min=10
+  34:85:18:A2:DB:4E 1793854930.362 v3218 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793854930.443 v3219 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793854930.513 v3220 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793854930.584 v3221 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793854930.659 v3222 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793854930.734 v3223 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793854930.815 v3224 proto=1 sleep_time_s=0 window=20
+1793855410 EVENTO F_db_udp
+1793855411 EVENTO_FIN F_db_udp
+1793855711 FIN F_db_udp
+1793855711 INICIO F_reset_cercanas_udp proto=1 sleep=0 window=20 regimen_min=10
+  34:85:18:A2:DB:4E 1793855711.500 v3225 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793855711.571 v3226 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793855711.645 v3227 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793855711.725 v3228 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793855711.802 v3229 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793855711.872 v3230 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793855711.944 v3231 proto=1 sleep_time_s=0 window=20
+1793856191 EVENTO F_reset_cercanas_udp
+1793856195 EVENTO_FIN F_reset_cercanas_udp
+1793856495 FIN F_reset_cercanas_udp
+1793856506 RESYNC 0
+1793856506 INICIO D_udp_b60 proto=1 sleep=60 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793856506.985 v3232 proto=1 sleep_time_s=60 window=10
+  34:85:18:A2:DE:16 1793856507.064 v3233 proto=1 sleep_time_s=60 window=10
+  34:85:18:A2:DE:1A 1793856507.145 v3234 proto=1 sleep_time_s=60 window=10
+  34:85:18:A2:DB:A2 1793856507.221 v3235 proto=1 sleep_time_s=60 window=10
+  34:85:18:A2:DB:06 1793856507.293 v3236 proto=1 sleep_time_s=60 window=10
+  1C:DB:D4:66:51:CE 1793856507.366 v3237 proto=1 sleep_time_s=60 window=10
+  1C:DB:D4:66:52:16 1793856507.438 v3238 proto=1 sleep_time_s=60 window=10
+1793858487 FIN D_udp_b60
+1793858487 INICIO D_udp_b300 proto=1 sleep=300 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793858487.534 v3239 proto=1 sleep_time_s=300 window=10
+  34:85:18:A2:DE:16 1793858487.612 v3240 proto=1 sleep_time_s=300 window=10
+  34:85:18:A2:DE:1A 1793858487.681 v3241 proto=1 sleep_time_s=300 window=10
+  34:85:18:A2:DB:A2 1793858487.750 v3242 proto=1 sleep_time_s=300 window=10
+  34:85:18:A2:DB:06 1793858487.820 v3243 proto=1 sleep_time_s=300 window=10
+  1C:DB:D4:66:51:CE 1793858487.896 v3244 proto=1 sleep_time_s=300 window=10
+  1C:DB:D4:66:52:16 1793858487.967 v3245 proto=1 sleep_time_s=300 window=10
+1793860467 FIN D_udp_b300
+  34:85:18:A2:DB:4E 1793860468.065 v3246 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793860468.141 v3247 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793860468.212 v3248 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793860468.283 v3249 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793860468.353 v3250 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793860468.424 v3251 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793860468.494 v3252 proto=1 sleep_time_s=30 window=10
+1793860490 RED router wlan0:connected:Casa azul int
+1793860501 RESYNC 300
+1793861401 MANDAN 7 de 7
+1793861401 INICIO B_udp_ds proto=1 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793861401.587 v3253 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793861401.658 v3254 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793861401.734 v3255 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793861401.821 v3256 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793861401.932 v3257 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793861402.025 v3258 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793861402.101 v3259 proto=1 sleep_time_s=30 window=10
+1793863382 FIN B_udp_ds
+1793863382 INICIO B_udp_cont proto=1 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793863382.176 v3260 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793863382.246 v3261 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793863382.319 v3262 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793863382.392 v3263 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793863382.463 v3264 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793863382.537 v3265 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793863382.607 v3266 proto=1 sleep_time_s=0 window=20
+1793865362 FIN B_udp_cont
+1793865362 INICIO B_tcp_ds proto=2 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793865362.679 v3267 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793865362.749 v3268 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793865362.820 v3269 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793865362.891 v3270 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793865362.962 v3271 proto=2 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793865363.031 v3272 proto=2 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793865363.119 v3273 proto=2 sleep_time_s=30 window=10
+1793867343 FIN B_tcp_ds
+1793867343 INICIO B_tcp_cont proto=2 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793867343.222 v3274 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793867343.304 v3275 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793867343.375 v3276 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793867343.444 v3277 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793867343.513 v3278 proto=2 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793867343.583 v3279 proto=2 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793867343.652 v3280 proto=2 sleep_time_s=0 window=20
+1793869323 FIN B_tcp_cont
+1793869323 INICIO B_mqtt_ds proto=0 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793869323.753 v3281 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793869323.828 v3282 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793869323.898 v3283 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793869323.968 v3284 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793869324.041 v3285 proto=0 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793869324.111 v3286 proto=0 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793869324.182 v3287 proto=0 sleep_time_s=30 window=10
+1793871304 FIN B_mqtt_ds
+1793871304 INICIO B_mqtt_cont proto=0 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793871304.281 v3288 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793871304.361 v3289 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793871304.433 v3290 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793871304.505 v3291 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793871304.575 v3292 proto=0 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793871304.647 v3293 proto=0 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793871304.720 v3294 proto=0 sleep_time_s=0 window=20
+1793873284 FIN B_mqtt_cont
+  34:85:18:A2:DB:4E 1793873284.814 v3295 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793873284.895 v3296 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793873284.967 v3297 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793873285.038 v3298 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793873285.108 v3299 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793873285.177 v3300 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793873285.247 v3301 proto=1 sleep_time_s=30 window=10
+1793873483 RED ap wlan0:connected:nebulaedge_ap_int
+1793874203 MANDAN 0 de 7
+1793874203 INICIO Z_ble_ds proto=3 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793874203.476 v3302 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793874203.547 v3303 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793874203.617 v3304 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793874203.690 v3305 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793874203.761 v3306 proto=3 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793874203.838 v3307 proto=3 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793874203.908 v3308 proto=3 sleep_time_s=30 window=10
+1793876183 FIN Z_ble_ds
+1793876183 INICIO Z_ble_cont proto=3 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793876184.002 v3309 proto=3 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793876184.074 v3310 proto=3 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793876184.146 v3311 proto=3 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793876184.216 v3312 proto=3 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793876184.286 v3313 proto=3 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793876184.356 v3314 proto=3 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793876184.435 v3315 proto=3 sleep_time_s=0 window=20
+1793878164 FIN Z_ble_cont
+  34:85:18:A2:DB:4E 1793878164.507 v3316 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793878164.588 v3317 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793878164.661 v3318 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793878164.732 v3319 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793878164.803 v3320 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793878164.873 v3321 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793878164.946 v3322 proto=1 sleep_time_s=0 window=20
+1793878164 TERMINADO

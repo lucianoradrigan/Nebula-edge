@@ -1,0 +1,200 @@
+corrida              proto modo  flujo  recibidos perdidos   %     dup reinic  lat_med lat_p95  transición(med)
+A_udp_ds             UDP   B30   D1         2434        6   0.25    0      1      220     437       10 s (7/7 placas)
+A_udp_ds             UDP   B30   D2         2434        6   0.25    0      1      224     446       10 s (7/7 placas)
+    51:CE: D1 348/2  D2 350/0  reinicios 0  posiciones [(2, 1), (9, 1)]
+    52:16: D1 350/0  D2 349/1  reinicios 0  posiciones [(5, 1)]
+    DB:06: D1 350/0  D2 348/2  reinicios 0  posiciones [(1, 1), (3, 1)]
+    DB:4E: D1 349/1  D2 350/0  reinicios 0  posiciones [(0, 1)]
+    DB:A2: D1 350/0  D2 349/1  reinicios 0  posiciones [(1, 1)]
+    DE:16: D1 348/2  D2 349/1  reinicios 0  posiciones [(7, 1), (9, 2)]
+    DE:1A: D1 339/1  D2 339/1  reinicios 2  posiciones [(5, 1), (9, 1)]
+A_udp_cont           UDP   cont  D1        12181       37   0.30    0      0       17      63       31 s (7/7 placas)
+A_udp_cont           UDP   cont  D2        12193       26   0.21    0      0       27      82       31 s (7/7 placas)
+    51:CE: D1 1779/3  D2 1744/4  reinicios 0  posiciones []
+    52:16: D1 1782/0  D2 1748/0  reinicios 0  posiciones []
+    DB:06: D1 1725/6  D2 1740/7  reinicios 0  posiciones []
+    DB:4E: D1 1722/9  D2 1742/4  reinicios 0  posiciones []
+    DB:A2: D1 1729/1  D2 1738/4  reinicios 0  posiciones []
+    DE:16: D1 1727/4  D2 1741/0  reinicios 0  posiciones []
+    DE:1A: D1 1717/14  D2 1740/7  reinicios 0  posiciones []
+A_tcp_ds             TCP   B30   D1         2450        0   0.00    0      0      210     450       10 s (7/7 placas)
+A_tcp_ds             TCP   B30   D2         2450        0   0.00    0      0      214     430       10 s (7/7 placas)
+    51:CE: D1 350/0  D2 350/0  reinicios 0  posiciones []
+    52:16: D1 350/0  D2 350/0  reinicios 0  posiciones []
+    DB:06: D1 350/0  D2 350/0  reinicios 0  posiciones []
+    DB:4E: D1 350/0  D2 350/0  reinicios 0  posiciones []
+    DB:A2: D1 350/0  D2 350/0  reinicios 0  posiciones []
+    DE:16: D1 350/0  D2 350/0  reinicios 0  posiciones []
+    DE:1A: D1 350/0  D2 350/0  reinicios 0  posiciones []
+A_tcp_cont           TCP   cont  D1        12216        0   0.00    0      0       15      61       41 s (7/7 placas)
+A_tcp_cont           TCP   cont  D2        12211        0   0.00    0      0       17      61       40 s (7/7 placas)
+    51:CE: D1 1782/0  D2 1747/0  reinicios 0  posiciones []
+    52:16: D1 1782/0  D2 1747/0  reinicios 0  posiciones []
+    DB:06: D1 1731/0  D2 1743/0  reinicios 0  posiciones []
+    DB:4E: D1 1730/0  D2 1745/0  reinicios 0  posiciones []
+    DB:A2: D1 1730/0  D2 1747/0  reinicios 0  posiciones []
+    DE:16: D1 1731/0  D2 1740/0  reinicios 0  posiciones []
+    DE:1A: D1 1730/0  D2 1742/0  reinicios 0  posiciones []
+A_mqtt_ds            MQTT  B30   D1         2240        0   0.00    0      0      213     458       15 s (7/7 placas)
+A_mqtt_ds            MQTT  B30   D2         2240        0   0.00    0      0      208     443       15 s (7/7 placas)
+    51:CE: D1 320/0  D2 320/0  reinicios 0  posiciones []
+    52:16: D1 320/0  D2 320/0  reinicios 0  posiciones []
+    DB:06: D1 320/0  D2 320/0  reinicios 0  posiciones []
+    DB:4E: D1 320/0  D2 320/0  reinicios 0  posiciones []
+    DB:A2: D1 320/0  D2 320/0  reinicios 0  posiciones []
+    DE:16: D1 320/0  D2 320/0  reinicios 0  posiciones []
+    DE:1A: D1 320/0  D2 320/0  reinicios 0  posiciones []
+A_mqtt_cont          MQTT  cont  D1        12216        0   0.00    0      0       27      73       35 s (7/7 placas)
+A_mqtt_cont          MQTT  cont  D2        12211        0   0.00    0      0       29      80       35 s (7/7 placas)
+    51:CE: D1 1782/0  D2 1748/0  reinicios 0  posiciones []
+    52:16: D1 1781/0  D2 1747/0  reinicios 0  posiciones []
+    DB:06: D1 1730/0  D2 1741/0  reinicios 0  posiciones []
+    DB:4E: D1 1731/0  D2 1741/0  reinicios 0  posiciones []
+    DB:A2: D1 1730/0  D2 1748/0  reinicios 0  posiciones []
+    DE:16: D1 1731/0  D2 1742/0  reinicios 0  posiciones []
+    DE:1A: D1 1731/0  D2 1744/0  reinicios 0  posiciones []
+F_server_udp         UDP   cont  D1         3969      179   4.32    0      0       60     461       10 s (7/7 placas)
+F_server_udp         UDP   cont  D2         3978      173   4.17    0      0       63     466       10 s (7/7 placas)
+    51:CE: D1 593/12  D2 582/11  reinicios 0  posiciones []
+    52:16: D1 573/32  D2 563/31  reinicios 0  posiciones []
+    DB:06: D1 559/28  D2 567/25  reinicios 0  posiciones []
+    DB:4E: D1 545/43  D2 550/43  reinicios 0  posiciones []
+    DB:A2: D1 568/19  D2 573/19  reinicios 0  posiciones []
+    DE:16: D1 551/37  D2 557/38  reinicios 0  posiciones []
+    DE:1A: D1 580/8  D2 586/6  reinicios 0  posiciones []
+    EVENTO a los 481 s
+    EVENTO_FIN a los 491 s
+F_server_tcp         TCP   cont  D1         3997      150   3.62    0      0       60    1046       10 s (7/7 placas)
+F_server_tcp         TCP   cont  D2         3996      149   3.59    0      0       60    1046       10 s (7/7 placas)
+    51:CE: D1 571/34  D2 560/33  reinicios 0  posiciones []
+    52:16: D1 584/21  D2 573/20  reinicios 0  posiciones []
+    DB:06: D1 584/3  D2 586/4  reinicios 0  posiciones []
+    DB:4E: D1 544/43  D2 548/43  reinicios 0  posiciones []
+    DB:A2: D1 561/27  D2 565/27  reinicios 0  posiciones []
+    DE:16: D1 575/13  D2 580/13  reinicios 0  posiciones []
+    DE:1A: D1 578/9  D2 584/9  reinicios 0  posiciones []
+    EVENTO a los 481 s
+    EVENTO_FIN a los 491 s
+F_broker_mqtt        MQTT  cont  D1         3999       88   2.15    0      0       30      75       14 s (7/7 placas)
+F_broker_mqtt        MQTT  cont  D2         4000       88   2.15    0      0       32      83       14 s (7/7 placas)
+    51:CE: D1 581/15  D2 570/15  reinicios 0  posiciones []
+    52:16: D1 581/15  D2 571/14  reinicios 0  posiciones []
+    DB:06: D1 569/10  D2 573/10  reinicios 0  posiciones []
+    DB:4E: D1 565/14  D2 571/15  reinicios 0  posiciones []
+    DB:A2: D1 569/10  D2 573/10  reinicios 0  posiciones []
+    DE:16: D1 565/14  D2 572/14  reinicios 0  posiciones []
+    DE:1A: D1 569/10  D2 570/10  reinicios 0  posiciones []
+    EVENTO a los 481 s
+    EVENTO_FIN a los 482 s
+F_db_udp             UDP   cont  D1         4041       38   0.93    0      0       17      63        9 s (7/7 placas)
+F_db_udp             UDP   cont  D2         4038       37   0.91    0      0       17      64        9 s (7/7 placas)
+    51:CE: D1 595/0  D2 583/0  reinicios 0  posiciones []
+    52:16: D1 595/0  D2 584/0  reinicios 0  posiciones []
+    DB:06: D1 558/20  D2 563/19  reinicios 0  posiciones []
+    DB:4E: D1 573/5  D2 576/5  reinicios 0  posiciones []
+    DB:A2: D1 577/0  D2 583/0  reinicios 0  posiciones []
+    DE:16: D1 578/0  D2 580/0  reinicios 0  posiciones []
+    DE:1A: D1 565/13  D2 569/13  reinicios 0  posiciones []
+    EVENTO a los 480 s
+    EVENTO_FIN a los 481 s
+F_reset_cercanas_udp UDP   cont  D1         3971        0   0.00    0      2       16      62        9 s (7/7 placas)
+F_reset_cercanas_udp UDP   cont  D2         3973        0   0.00    0      2       19      61        9 s (7/7 placas)
+    51:CE: D1 598/0  D2 586/0  reinicios 0  posiciones []
+    52:16: D1 598/0  D2 586/0  reinicios 0  posiciones []
+    DB:06: D1 581/0  D2 586/0  reinicios 0  posiciones []
+    DB:4E: D1 515/0  D2 521/0  reinicios 2  posiciones []
+    DB:A2: D1 581/0  D2 585/0  reinicios 0  posiciones []
+    DE:16: D1 517/0  D2 523/0  reinicios 2  posiciones []
+    DE:1A: D1 581/0  D2 586/0  reinicios 0  posiciones []
+    EVENTO a los 480 s
+    EVENTO_FIN a los 484 s
+D_udp_b60            UDP   B60   D1         1600        1   0.06    0      0      842    1918       29 s (7/7 placas)
+D_udp_b60            UDP   B60   D2         1601        1   0.06    0      0      857    1903       29 s (7/7 placas)
+    51:CE: D1 230/0  D2 230/0  reinicios 0  posiciones []
+    52:16: D1 222/0  D2 223/0  reinicios 0  posiciones []
+    DB:06: D1 228/1  D2 229/0  reinicios 0  posiciones [(7, 1)]
+    DB:4E: D1 230/0  D2 229/1  reinicios 0  posiciones [(4, 1)]
+    DB:A2: D1 230/0  D2 230/0  reinicios 0  posiciones []
+    DE:16: D1 230/0  D2 230/0  reinicios 0  posiciones []
+    DE:1A: D1 230/0  D2 230/0  reinicios 0  posiciones []
+D_udp_b300           UDP   B300  D1          417        3   0.71    0      0     3357    6519       19 s (7/7 placas)
+D_udp_b300           UDP   B300  D2          419        1   0.24    0      0     3363    6518       17 s (7/7 placas)
+    51:CE: D1 60/0  D2 59/1  reinicios 0  posiciones [(3, 1)]
+    52:16: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    DB:06: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    DB:4E: D1 58/2  D2 60/0  reinicios 0  posiciones [(7, 1), (8, 1)]
+    DB:A2: D1 59/1  D2 60/0  reinicios 0  posiciones [(2, 1)]
+    DE:16: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    DE:1A: D1 60/0  D2 60/0  reinicios 0  posiciones []
+B_udp_ds             UDP   B30   D1         1619       16   0.98    0      0      327     544       30 s (7/7 placas)
+B_udp_ds             UDP   B30   D2         1623       13   0.79    0      0      318     556       30 s (7/7 placas)
+    51:CE: D1 224/3  D2 223/3  reinicios 0  posiciones [(0, 1), (2, 1), (3, 1), (5, 1), (8, 1), (9, 1)]
+    52:16: D1 218/2  D2 220/0  reinicios 0  posiciones [(2, 1), (6, 1)]
+    DB:06: D1 224/4  D2 225/5  reinicios 0  posiciones [(1, 2), (2, 1), (3, 2), (4, 1), (5, 1), (9, 2)]
+    DB:4E: D1 227/3  D2 228/2  reinicios 0  posiciones [(3, 1), (4, 2), (8, 1), (9, 1)]
+    DB:A2: D1 239/1  D2 239/1  reinicios 0  posiciones [(1, 1), (9, 1)]
+    DE:16: D1 248/2  D2 250/0  reinicios 0  posiciones [(6, 1), (7, 1)]
+    DE:1A: D1 239/1  D2 238/2  reinicios 0  posiciones [(2, 1), (6, 1), (7, 1)]
+B_udp_cont           UDP   cont  D1            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+B_udp_cont           UDP   cont  D2            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+    51:CE: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    52:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:06: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:4E: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:A2: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:1A: D1 0/0  D2 0/0  reinicios 0  posiciones []
+B_tcp_ds             TCP   B30   D1            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+B_tcp_ds             TCP   B30   D2            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+    51:CE: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    52:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:06: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:4E: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:A2: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:1A: D1 0/0  D2 0/0  reinicios 0  posiciones []
+B_tcp_cont           TCP   cont  D1            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+B_tcp_cont           TCP   cont  D2            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+    51:CE: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    52:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:06: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:4E: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:A2: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:1A: D1 0/0  D2 0/0  reinicios 0  posiciones []
+B_mqtt_ds            MQTT  B30   D1            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+B_mqtt_ds            MQTT  B30   D2            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+    51:CE: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    52:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:06: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:4E: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:A2: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:1A: D1 0/0  D2 0/0  reinicios 0  posiciones []
+B_mqtt_cont          MQTT  cont  D1            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+B_mqtt_cont          MQTT  cont  D2            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+    51:CE: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    52:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:06: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:4E: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:A2: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:1A: D1 0/0  D2 0/0  reinicios 0  posiciones []
+Z_ble_ds             BLE   B30   D1            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+Z_ble_ds             BLE   B30   D2            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+    51:CE: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    52:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:06: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:4E: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:A2: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:1A: D1 0/0  D2 0/0  reinicios 0  posiciones []
+Z_ble_cont           BLE   cont  D1            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+Z_ble_cont           BLE   cont  D2            0        0   0.00    0      0      nan     nan      nan s (0/7 placas)
+    51:CE: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    52:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:06: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:4E: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DB:A2: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:16: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:1A: D1 0/0  D2 0/0  reinicios 0  posiciones []

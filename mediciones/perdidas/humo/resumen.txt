@@ -1,0 +1,37 @@
+corrida              proto modo  flujo  recibidos perdidos   %     dup reinic  lat_med lat_p95  transición(med)
+humo_udp             UDP   B30   D1          387       18   4.44    0      0      265     369        9 s (7/7 placas)
+humo_udp             UDP   B30   D2          391       13   3.22    0      0      268     373        9 s (7/7 placas)
+    51:CE: D1 54/0  D2 53/0  reinicios 0  posiciones []
+    52:16: D1 59/0  D2 59/0  reinicios 0  posiciones []
+    DB:06: D1 52/4  D2 53/3  reinicios 0  posiciones [(2, 1), (3, 1), (5, 1), (7, 1), (8, 1), (9, 2)]
+    DB:4E: D1 53/3  D2 54/2  reinicios 0  posiciones [(2, 1), (8, 1), (9, 3)]
+    DB:A2: D1 54/6  D2 59/1  reinicios 0  posiciones [(2, 1), (4, 2), (5, 2), (7, 1), (9, 1)]
+    DE:16: D1 58/2  D2 55/5  reinicios 0  posiciones [(2, 1), (3, 3), (4, 1), (6, 1), (9, 1)]
+    DE:1A: D1 57/3  D2 58/2  reinicios 0  posiciones [(2, 1), (3, 2), (5, 2)]
+humo_tcp             TCP   B30   D1          420        0   0.00    0      0      263     649        9 s (7/7 placas)
+humo_tcp             TCP   B30   D2          420        0   0.00    0      0      269     512        9 s (7/7 placas)
+    51:CE: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    52:16: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    DB:06: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    DB:4E: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    DB:A2: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    DE:16: D1 60/0  D2 60/0  reinicios 0  posiciones []
+    DE:1A: D1 60/0  D2 60/0  reinicios 0  posiciones []
+humo_mqtt            MQTT  B30   D1          355        0   0.00    0      0      178     319       40 s (7/7 placas)
+humo_mqtt            MQTT  B30   D2          355        0   0.00    0      0      161     316       40 s (7/7 placas)
+    51:CE: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    52:16: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    DB:06: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    DB:4E: D1 55/0  D2 55/0  reinicios 0  posiciones []
+    DB:A2: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    DE:16: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    DE:1A: D1 50/0  D2 50/0  reinicios 0  posiciones []
+humo_ble             BLE   B30   D1          270        0   0.00    0      0      237     648       27 s (7/7 placas)
+humo_ble             BLE   B30   D2          270        0   0.00    0      0      215     546       27 s (7/7 placas)
+    51:CE: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    52:16: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    DB:06: D1 40/0  D2 40/0  reinicios 0  posiciones []
+    DB:4E: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    DB:A2: D1 0/0  D2 0/0  reinicios 0  posiciones []
+    DE:16: D1 50/0  D2 50/0  reinicios 0  posiciones []
+    DE:1A: D1 30/0  D2 30/0  reinicios 0  posiciones []

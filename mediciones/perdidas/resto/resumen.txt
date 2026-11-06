@@ -1,0 +1,57 @@
+corrida              proto modo  flujo  recibidos perdidos   %     dup reinic  lat_med lat_p95  transición(med)
+B_udp_ds             UDP   B30   D1         1655       14   0.84    0      0      336     598       38 s (5/5 placas)
+B_udp_ds             UDP   B30   D2         1664        5   0.30    1      0      333     572       38 s (5/5 placas)
+    51:CE: D1 319/1  D2 319/1  reinicios 0  posiciones [(2, 1), (7, 1)]
+    52:16: D1 318/2  D2 319/1  reinicios 0  posiciones [(3, 1), (5, 1), (9, 1)]
+    DB:06: D1 335/5  D2 338/2  reinicios 0  posiciones [(1, 2), (2, 1), (5, 1), (6, 1), (7, 1), (9, 1)]
+    DB:4E: D1 347/2  D2 348/1  reinicios 0  posiciones [(1, 1), (5, 2)]
+    DE:16: D1 336/4  D2 340/0  reinicios 0  posiciones [(2, 1), (5, 1), (8, 1), (9, 1)]
+B_udp_cont           UDP   cont  D1         8758        3   0.03    0      0       25      83       15 s (5/5 placas)
+B_udp_cont           UDP   cont  D2         8722        4   0.05    0      0       26      86       14 s (5/5 placas)
+    51:CE: D1 1783/0  D2 1748/0  reinicios 0  posiciones []
+    52:16: D1 1783/0  D2 1749/0  reinicios 0  posiciones []
+    DB:06: D1 1732/0  D2 1741/1  reinicios 0  posiciones []
+    DB:4E: D1 1731/0  D2 1741/0  reinicios 0  posiciones []
+    DE:16: D1 1729/3  D2 1743/3  reinicios 0  posiciones []
+B_tcp_ds             TCP   B30   D1         1184       13   1.09    0      0      173     609        9 s (5/5 placas)
+B_tcp_ds             TCP   B30   D2         1186       12   1.00    0      0      171     610        9 s (5/5 placas)
+    51:CE: D1 238/0  D2 238/0  reinicios 0  posiciones []
+    52:16: D1 239/0  D2 240/0  reinicios 0  posiciones []
+    DB:06: D1 240/0  D2 240/0  reinicios 0  posiciones []
+    DB:4E: D1 227/13  D2 228/12  reinicios 0  posiciones [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (7, 3), (8, 4), (9, 4)]
+    DE:16: D1 240/0  D2 240/0  reinicios 0  posiciones []
+B_tcp_cont           TCP   cont  D1         8760        0   0.00    0      0       17      65       21 s (5/5 placas)
+B_tcp_cont           TCP   cont  D2         8730        0   0.00    0      0       19      65       21 s (5/5 placas)
+    51:CE: D1 1783/0  D2 1749/0  reinicios 0  posiciones []
+    52:16: D1 1783/0  D2 1749/0  reinicios 0  posiciones []
+    DB:06: D1 1731/0  D2 1744/0  reinicios 0  posiciones []
+    DB:4E: D1 1732/0  D2 1740/0  reinicios 0  posiciones []
+    DE:16: D1 1731/0  D2 1748/0  reinicios 0  posiciones []
+B_mqtt_ds            MQTT  B30   D1         1503       24   1.57    0      1      348     963       14 s (5/5 placas)
+B_mqtt_ds            MQTT  B30   D2         1502       24   1.57    0      1      337     799       14 s (5/5 placas)
+    51:CE: D1 270/10  D2 270/10  reinicios 2  posiciones [(5, 4), (6, 4), (7, 4), (8, 4), (9, 4)]
+    52:16: D1 297/0  D2 296/0  reinicios 0  posiciones []
+    DB:06: D1 320/0  D2 320/0  reinicios 0  posiciones []
+    DB:4E: D1 306/14  D2 306/14  reinicios 0  posiciones [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 4), (7, 4), (8, 4), (9, 4)]
+    DE:16: D1 310/0  D2 310/0  reinicios 0  posiciones []
+B_mqtt_cont          MQTT  cont  D1         8718       35   0.40    0      0       57     118       24 s (5/5 placas)
+B_mqtt_cont          MQTT  cont  D2         8688       35   0.40    0      0       59     123       24 s (5/5 placas)
+    51:CE: D1 1782/0  D2 1747/0  reinicios 0  posiciones []
+    52:16: D1 1782/0  D2 1747/0  reinicios 0  posiciones []
+    DB:06: D1 1730/0  D2 1740/0  reinicios 0  posiciones []
+    DB:4E: D1 1731/0  D2 1744/0  reinicios 0  posiciones []
+    DE:16: D1 1693/35  D2 1710/35  reinicios 0  posiciones []
+Z_ble_ds             BLE   B30   D1         1484       57   3.70    0      0      313    7019      110 s (5/5 placas)
+Z_ble_ds             BLE   B30   D2         1484       57   3.70    0      0      323    7007      110 s (5/5 placas)
+    51:CE: D1 307/8  D2 307/8  reinicios 0  posiciones [(2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (7, 2), (8, 2), (9, 2)]
+    52:16: D1 260/26  D2 260/26  reinicios 0  posiciones [(0, 4), (1, 4), (2, 4), (3, 4), (4, 6), (5, 6), (6, 6), (7, 6), (8, 6), (9, 6)]
+    DB:06: D1 302/8  D2 302/8  reinicios 0  posiciones [(7, 4), (8, 6), (9, 6)]
+    DB:4E: D1 320/0  D2 320/0  reinicios 0  posiciones []
+    DE:16: D1 295/15  D2 295/15  reinicios 0  posiciones [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2), (5, 4), (6, 4), (7, 4), (8, 4), (9, 4)]
+Z_ble_cont           BLE   cont  D1         8582      178   2.03    0      0       57     168       39 s (5/5 placas)
+Z_ble_cont           BLE   cont  D2         8548      177   2.03    0      0       62     192       39 s (5/5 placas)
+    51:CE: D1 1783/0  D2 1748/0  reinicios 0  posiciones []
+    52:16: D1 1698/85  D2 1666/83  reinicios 0  posiciones []
+    DB:06: D1 1716/16  D2 1726/16  reinicios 0  posiciones []
+    DB:4E: D1 1654/77  D2 1666/78  reinicios 0  posiciones []
+    DE:16: D1 1731/0  D2 1742/0  reinicios 0  posiciones []

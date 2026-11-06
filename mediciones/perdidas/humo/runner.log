@@ -1,0 +1,45 @@
+1793838040 MODO humo
+1793838040 INICIO humo_udp proto=1 sleep=30 window=10 regimen_min=5
+  34:85:18:A2:DB:4E 1793838040.630 v3120 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793838040.701 v3121 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793838040.770 v3122 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793838040.841 v3123 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793838040.911 v3124 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793838040.982 v3125 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793838041.053 v3126 proto=1 sleep_time_s=30 window=10
+1793838521 FIN humo_udp
+1793838521 INICIO humo_tcp proto=2 sleep=30 window=10 regimen_min=5
+  34:85:18:A2:DB:4E 1793838521.124 v3127 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793838521.196 v3128 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793838521.268 v3129 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793838521.336 v3130 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793838521.409 v3131 proto=2 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793838521.482 v3132 proto=2 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793838521.555 v3133 proto=2 sleep_time_s=30 window=10
+1793839001 FIN humo_tcp
+1793839001 INICIO humo_mqtt proto=0 sleep=30 window=10 regimen_min=5
+  34:85:18:A2:DB:4E 1793839001.654 v3134 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793839001.729 v3135 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793839001.799 v3136 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793839001.873 v3137 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793839001.944 v3138 proto=0 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793839002.014 v3139 proto=0 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793839002.084 v3140 proto=0 sleep_time_s=30 window=10
+1793839482 FIN humo_mqtt
+1793839482 INICIO humo_ble proto=3 sleep=30 window=10 regimen_min=5
+  34:85:18:A2:DB:4E 1793839482.181 v3141 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793839482.258 v3142 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DE:1A 1793839482.330 v3143 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DB:A2 1793839482.401 v3144 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793839482.477 v3145 proto=3 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793839482.548 v3146 proto=3 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793839482.639 v3147 proto=3 sleep_time_s=30 window=10
+1793839962 FIN humo_ble
+  34:85:18:A2:DB:4E 1793839962.716 v3148 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793839962.788 v3149 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:1A 1793839962.860 v3150 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:A2 1793839962.930 v3151 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793839963.003 v3152 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793839963.074 v3153 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793839963.143 v3154 proto=1 sleep_time_s=0 window=20
+1793839963 TERMINADO

@@ -1,0 +1,78 @@
+1793906328 MODO resto
+  34:85:18:A2:DB:4E 1793906328.246 v3328 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793906328.316 v3329 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793906328.385 v3330 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793906328.455 v3331 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793906328.525 v3332 proto=1 sleep_time_s=30 window=10
+1793906530 RED router wlan0:connected:Casa azul int
+1793907430 MANDAN 5 de 5
+1793907430 INICIO B_udp_ds proto=1 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793907430.661 v3333 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793907430.742 v3334 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793907430.826 v3335 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793907430.909 v3336 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793907430.984 v3337 proto=1 sleep_time_s=30 window=10
+1793909410 FIN B_udp_ds
+1793909410 INICIO B_udp_cont proto=1 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793909411.059 v3338 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793909411.129 v3339 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793909411.200 v3340 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793909411.272 v3341 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793909411.360 v3342 proto=1 sleep_time_s=0 window=20
+1793911391 FIN B_udp_cont
+1793911391 INICIO B_tcp_ds proto=2 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793911391.452 v3343 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793911391.533 v3344 proto=2 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793911391.604 v3345 proto=2 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793911391.678 v3346 proto=2 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793911391.749 v3347 proto=2 sleep_time_s=30 window=10
+1793912914 NOTA wlan0 perdió el router a las 18:00:09 (ssid-not-found, perfil sin autoconnect); reconectado a mano
+1793913371 FIN B_tcp_ds
+1793913371 INICIO B_tcp_cont proto=2 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793913371.830 v3348 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793913371.903 v3349 proto=2 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793913371.973 v3350 proto=2 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793913372.064 v3351 proto=2 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793913372.151 v3352 proto=2 sleep_time_s=0 window=20
+1793915352 FIN B_tcp_cont
+1793915352 INICIO B_mqtt_ds proto=0 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793915352.231 v3353 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793915352.311 v3354 proto=0 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793915352.409 v3355 proto=0 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793915352.497 v3356 proto=0 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793915352.578 v3357 proto=0 sleep_time_s=30 window=10
+1793917332 FIN B_mqtt_ds
+1793917332 INICIO B_mqtt_cont proto=0 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793917332.651 v3358 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793917332.722 v3359 proto=0 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793917332.793 v3360 proto=0 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793917332.878 v3361 proto=0 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793917332.965 v3362 proto=0 sleep_time_s=0 window=20
+1793919312 FIN B_mqtt_cont
+  34:85:18:A2:DB:4E 1793919313.073 v3363 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793919313.170 v3364 proto=1 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793919313.248 v3365 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793919313.324 v3366 proto=1 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793919313.399 v3367 proto=1 sleep_time_s=30 window=10
+1793919512 RED ap wlan0:connected:nebulaedge_ap_int
+1793920232 MANDAN 0 de 5
+1793920232 INICIO Z_ble_ds proto=3 sleep=30 window=10 regimen_min=30
+  34:85:18:A2:DB:4E 1793920232.507 v3368 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DE:16 1793920232.577 v3369 proto=3 sleep_time_s=30 window=10
+  34:85:18:A2:DB:06 1793920232.657 v3370 proto=3 sleep_time_s=30 window=10
+  1C:DB:D4:66:51:CE 1793920232.746 v3371 proto=3 sleep_time_s=30 window=10
+  1C:DB:D4:66:52:16 1793920232.836 v3372 proto=3 sleep_time_s=30 window=10
+1793922212 FIN Z_ble_ds
+1793922212 INICIO Z_ble_cont proto=3 sleep=0 window=20 regimen_min=30
+  34:85:18:A2:DB:4E 1793922212.919 v3373 proto=3 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793922212.993 v3374 proto=3 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793922213.066 v3375 proto=3 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793922213.140 v3376 proto=3 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793922213.213 v3377 proto=3 sleep_time_s=0 window=20
+1793924193 FIN Z_ble_cont
+  34:85:18:A2:DB:4E 1793924193.292 v3378 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DE:16 1793924193.364 v3379 proto=1 sleep_time_s=0 window=20
+  34:85:18:A2:DB:06 1793924193.437 v3380 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:51:CE 1793924193.511 v3381 proto=1 sleep_time_s=0 window=20
+  1C:DB:D4:66:52:16 1793924193.582 v3382 proto=1 sleep_time_s=0 window=20
+1793924193 TERMINADO
