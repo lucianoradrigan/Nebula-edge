@@ -412,11 +412,19 @@ La red que recibe el device (SSID, contraseña e IP del servidor) la arma el
 servidor en cada config (`system.py` -> `LocalWifiConfig`), no la tabla
 `config`:
 
-- Si `WIFI_SSID` / `WIFI_PASSWD` estan definidas en `raspberry/.env`, se usan
-  esas. Es el caso de la Raspberry conectada por cable a un router.
-- Si estan vacias, se lee con `nmcli` la conexion activa de `WIFI_DEVICE`
-  (`wlan0` por defecto): la WiFi a la que esta conectada la Raspberry, o el AP
-  que levanto ella misma.
+- El SSID y la contraseña salen siempre de `WIFI_SSID` / `WIFI_PASSWD` en
+  `raspberry/.env`, y son obligatorios para UDP, TCP, MQTT e INFER:
+  - con la Raspberry en modo AP, los del AP que ella publica (los mismos con que
+    se creo su perfil, seccion 10.1);
+  - con la Raspberry como cliente de un router, o por cable a el, los del router.
+- La IP del servidor es `HOST_IP` si esta puesta; si no, la IPv4 de
+  `WIFI_DEVICE` (`wlan0` por defecto), y si esa no tiene, la de la ruta por
+  defecto. Con el AP es `10.42.0.1`.
+
+Antes el SSID y la contraseña se leian con `nmcli` de la conexion activa de
+`WIFI_DEVICE`. Se dejo de hacer: en una prueba de 7 placas, al pasar la
+Raspberry del AP al router `nmcli` devolvio vacio por 3 h y el servidor
+reparto configs con la red vacia. Ahora la red es configuracion, no estado.
 
 El device solo cambia de red con una config de `config_version` mayor: una
 config con la misma version se descarta como ya aplicada, aunque traiga otro
@@ -482,9 +490,9 @@ TL-WN823N (RTL8192EU, driver `rtl8xxxu`) y un dongle Bluetooth TP-Link.
    - Como el dongle solo sirve para el AP, el perfil se levanta siempre al
      arrancar; la Raspberry sigue saliendo a internet por cable.
 
-4. En `raspberry/.env`: `WIFI_DEVICE=wlan_ap`, y `WIFI_SSID` / `WIFI_PASSWD`
-   vacios. Reiniciar el servidor (`docker compose up -d server`) y subir
-   `config_version` de cada device. El broker y los puertos UDP/TCP ya escuchan
+4. En `raspberry/.env`: `WIFI_DEVICE=wlan_ap`, y en `WIFI_SSID` / `WIFI_PASSWD`
+   el SSID y la clave del AP del paso 3. Reiniciar el servidor
+   (`docker compose up -d server`) y subir `config_version` de cada device. El broker y los puertos UDP/TCP ya escuchan
    en todas las interfaces.
 
 5. Si el servidor registra `start scan falló: NotReady`, el dongle Bluetooth
@@ -497,5 +505,5 @@ del cierre de la sesion anterior) e INFER con ventanas crudas (769/769
 respondidas, 99,09 % de accuracy, 354 ms de ida y vuelta, igual que con el
 router).
 
-Para volver al router: restaurar `WIFI_SSID` / `WIFI_PASSWD` en `.env`,
+Para volver al router: poner en `WIFI_SSID` / `WIFI_PASSWD` los del router,
 reiniciar el servidor y subir `config_version`.

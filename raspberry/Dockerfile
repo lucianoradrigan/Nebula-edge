@@ -7,11 +7,9 @@
 FROM python:3.11-slim-bookworm
 WORKDIR /nebulaedge
 
-# network-manager -> nmcli, que usa LocalWifiConfig para leer SSID/IP del host.
-# bluez -> pila BLE que bleak maneja por D-Bus.
+# bluez -> pila BLE que bleak maneja por D-Bus, y hciconfig para elegir adaptador.
+# (network-manager y sudo se fueron: la red de los devices ya no se lee con nmcli.)
 RUN apt-get update && apt-get install -y \
-    network-manager \
-    sudo \
     bluez \
     && rm -rf /var/lib/apt/lists/*
 

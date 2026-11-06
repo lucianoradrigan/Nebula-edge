@@ -10,13 +10,12 @@ UTILIDAD PRINCIPAL
         log()                imprime con marca de tiempo, para cruzar con el device
         database_dsn()       DSN de Postgres (PG_HOST / PG_DB / PG_USER / PG_PASSWORD)
         BLEAdapterResolver   qué adaptador BLE usar (hciconfig / BLE_ADAPTER)
-        LocalWifiConfig      SSID, password e IP local del host, vía nmcli
+        LocalWifiConfig      SSID y clave (del .env) e IP del servidor que van al device
 
 LOS DATOS DE WIFI NO SON PARA EL SERVIDOR
     Viajan dentro de la configuración hacia el ESP32, que los necesita para
-    unirse a la misma red y poder hablar por UDP, TCP o MQTT. Por eso se leen
-    de la red a la que la Raspberry está conectada en ese momento, y por eso se
-    consultan con un cache corto: cambian poco, pero pueden cambiar.
+    unirse a la misma red y poder hablar por UDP, TCP o MQTT. El SSID y la clave
+    son configuración (WIFI_SSID / WIFI_PASSWD); solo la IP se detecta.
 
 POR QUÉ UTC Y NO HORA LOCAL
     `utc_epoch_now()` devuelve UTC real, sin sumarle el offset local. Es lo que
@@ -30,17 +29,10 @@ POR QUÉ SE LLAMA system.py Y NO platform.py
     nombre para todo el proceso, incluido bleak, que lo importa internamente.
 
 PORTABILIDAD
-    `hciconfig` (BlueZ) y `nmcli` (NetworkManager) solo existen en Linux. Fuera
-    de la Raspberry -por ejemplo corriendo el servidor en un Mac- esas llamadas
-    fallan en silencio: BLEAdapterResolver cae a su valor por defecto y
-    LocalWifiConfig devuelve SSID y password vacíos, con la IP resuelta por el
-    fallback de socket. El servidor arranca igual, y BLE funciona, pero los
-    devices que usen WiFi no recibirían credenciales válidas.
-
-    Para ese caso están las variables de entorno WIFI_SSID, WIFI_PASSWD y
-    HOST_IP: si están puestas, ganan sobre lo que diga nmcli. Sirven tanto para
-    desarrollar fuera de la Raspberry como para forzar una red de pruebas
-    estando en ella.
+    `hciconfig` (BlueZ) solo existe en Linux: fuera de la Raspberry -por
+    ejemplo en un Mac- BLEAdapterResolver cae a su valor por defecto. La IP de
+    una interfaz también se pide al kernel de Linux; en otro sistema se usa la
+    de la ruta por defecto, o HOST_IP si está puesta.
 """
 from __future__ import annotations
 import os
@@ -260,70 +252,46 @@ class BLEAdapterResolver:
         return cls.DEFAULT_ADAPTER
 
 class LocalWifiConfig:
-    """Obtiene datos de WiFi local usando nmcli con cache temporal."""
-    _CACHE_TTL_SEC = 10.0
-    _CACHE: dict[str, object] = {
-        "ts": 0.0,
-        "ssid": "",
-        "passwd": "",
-        "host_ip_addr": "",
-    }
+    """La red WiFi que se les entrega a los devices: SSID, clave e IP del servidor.
+
+    DE DÓNDE SALE CADA DATO
+        - SSID y clave: de WIFI_SSID / WIFI_PASSWD (raspberry/.env). Son
+          configuración, no estado: en modo AP son las del AP que publica la Pi
+          (las mismas con que se creó su perfil de NetworkManager); con la Pi
+          como cliente de un router, las del router.
+        - IP del servidor: HOST_IP si está puesta; si no, la IPv4 de
+          WIFI_DEVICE leída del kernel; si tampoco, la de la ruta por defecto.
+
+    POR QUÉ YA NO SE LEE CON nmcli
+        Antes se preguntaba a nmcli, en cada config, por la conexión activa de
+        WIFI_DEVICE. Mezclaba dos preguntas -a qué red está la Pi y a qué red
+        deben ir los devices- y dependía de sudo, D-Bus y el estado de
+        NetworkManager dentro del contenedor. En la prueba del 05-11, tras pasar
+        la Pi del AP al router, devolvió vacío durante 3 h y se repartieron ~1000
+        configs con la red vacía a 7 placas, que quedaron colgadas.
+    """
+    _warned_missing = False
 
     @staticmethod
-    def _run_cmd(args: list[str]) -> str:
-        """Ejecuta un comando y retorna stdout o cadena vacia en error.
+    def interface_ip(device: str) -> str:
+        """IPv4 de una interfaz, pedida al kernel (SIOCGIFADDR). "" si no tiene o no es Linux.
 
-        Conserva espacios significativos y solo elimina saltos de linea finales.
-        """
+        Funciona dentro del contenedor porque el servicio corre con
+        network_mode: host. Sin subprocesos ni permisos especiales."""
+        if not device:
+            return ""
         try:
-            result = subprocess.run(args, capture_output=True, text=True, check=True)
-            return result.stdout.rstrip('\n')
+            import fcntl
+            import struct
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                packed = fcntl.ioctl(s.fileno(), 0x8915, struct.pack("256s", device[:15].encode()))
+            return socket.inet_ntoa(packed[20:24])
         except Exception:
             return ""
 
-    @classmethod
-    def _active_connection_name(cls, device: str) -> str:
-        """Obtiene el nombre de la conexión activa para el dispositivo dado."""
-        if not device:
-            return ""
-        return cls._run_cmd(["sudo", "nmcli", "-t", "-g", "GENERAL.CONNECTION", "dev", "show", device])
-
-    @classmethod
-    def _active_wifi_ssid(cls, device: str, conn_name: str) -> str:
-        """Obtiene el SSID activo desde el nombre de conexión o el scan actual."""
-        if conn_name:
-            ssid = cls._run_cmd(["sudo", "nmcli", "-t", "-g", "802-11-wireless.ssid", "connection", "show", conn_name])
-            if ssid:
-                return ssid
-        output = cls._run_cmd(["sudo", "nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
-        for line in output.splitlines():
-            if line.startswith("yes:"):
-                return line.split(":", 1)[1]
-        return ""
-
-    @classmethod
-    def _active_wifi_psk(cls, conn_name: str) -> str:
-        """Obtiene la PSK guardada de la conexión activa (si existe)."""
-        for _ in range(3):
-            psk = cls._run_cmd(["sudo", "nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", conn_name])
-            if psk and psk != "--":
-                return psk
-            time.sleep(0.05)
-
-        return ""
-
-    @classmethod
-    def active_wifi_ip(cls, device: str) -> str:
-        """Obtiene la IP IPv4 asignada al dispositivo WiFi activo."""
-        if device:
-            ip_addr = cls._run_cmd(["sudo", "nmcli", "-t", "-g", "IP4.ADDRESS", "dev", "show", device])
-            if ip_addr:
-                return ip_addr.split("/", 1)[0]
-        return ""
-
     @staticmethod
     def _local_ip_fallback() -> str:
-        """Resuelve IP local abriendo un socket UDP a internet como fallback."""
+        """IP de la ruta por defecto, abriendo un socket UDP hacia afuera (no envía nada)."""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
@@ -333,51 +301,16 @@ class LocalWifiConfig:
             return ""
 
     @classmethod
-    def _env_overrides(cls) -> tuple[str, str, str]:
-        """Lee WIFI_SSID / WIFI_PASSWD / HOST_IP del entorno.
+    def get(cls) -> tuple[str, str, str]:
+        """Retorna (host_ip_addr, ssid, passwd)."""
+        ssid = os.getenv("WIFI_SSID", "").strip()
+        passwd = os.getenv("WIFI_PASSWD", "").strip()
+        device = os.getenv("WIFI_DEVICE", "").strip() or "wlan0"
+        host_ip = (os.getenv("HOST_IP", "").strip() or cls.interface_ip(device)
+                   or cls._local_ip_fallback())
+        if not ssid and not cls._warned_missing:
+            log("[WiFi] WIFI_SSID está vacío en .env: los devices en WiFi no van a poder "
+                "conectarse (ver README §10).")
+            cls._warned_missing = True
+        return host_ip, ssid, passwd
 
-        Cada una gana sobre lo que devuelva nmcli, y se pueden poner por
-        separado. Sin nmcli -corriendo el servidor en un Mac, por ejemplo- son
-        la única forma de que los devices en WiFi reciban credenciales usables.
-        """
-        return (
-            os.getenv("HOST_IP", "").strip(),
-            os.getenv("WIFI_SSID", "").strip(),
-            os.getenv("WIFI_PASSWD", "").strip(),
-        )
-
-    @classmethod
-    def get(cls, cache_ttl_sec: float | None = None) -> tuple[str, str, str]:
-        """Retorna (host_ip_addr, ssid, passwd) con cache de corto plazo."""
-        ttl = cls._CACHE_TTL_SEC if cache_ttl_sec is None else cache_ttl_sec
-        now = time.monotonic()
-        last_ts = float(cls._CACHE.get("ts", 0.0))
-        if now - last_ts <= ttl:
-            return (
-                str(cls._CACHE.get("host_ip_addr", "")),
-                str(cls._CACHE.get("ssid", "")),
-                str(cls._CACHE.get("passwd", "")),
-            )
-
-        env_ip, env_ssid, env_passwd = cls._env_overrides()
-
-        # Si el entorno define las tres, no hace falta molestar a nmcli: son
-        # cuatro subprocesos que en un Mac fallan igual.
-        if env_ip and env_ssid and env_passwd:
-            ssid, passwd, host_ip_addr = env_ssid, env_passwd, env_ip
-        else:
-            # Fija y no detectada: la interfaz puede estar en modo cliente o
-            # levantando un AP, y en los dos casos es la misma.
-            device = os.getenv("WIFI_DEVICE", "").strip() or "wlan0"
-            conn_name = cls._active_connection_name(device)
-            ssid = env_ssid or cls._active_wifi_ssid(device, conn_name)
-            passwd = env_passwd or cls._active_wifi_psk(conn_name)
-            host_ip_addr = env_ip or cls.active_wifi_ip(device) or cls._local_ip_fallback()
-
-        cls._CACHE.update({
-            "ts": now,
-            "ssid": ssid or "",
-            "passwd": passwd or "",
-            "host_ip_addr": host_ip_addr or "",
-        })
-        return host_ip_addr or "", ssid or "", passwd or ""
