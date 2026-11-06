@@ -88,8 +88,27 @@ static bool mqtt_open(void) {
     };
     mqtt_start(&mqtt_config);
 
-    // Le da tiempo a la Raspberry para conectarse al broker antes de enviar.
-    vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS));
+    /* No arranca el envío sin sesión con el broker. Antes se esperaba un tiempo
+     * fijo y se arrancaba igual: si la conexión al broker expiraba (visto con el
+     * router, al despertar), cada publish QoS 0 se descartaba en el device
+     * ("Losing qos0 data when client not connected") y se perdía ya con su seq.
+     * Sin sesión: en deep sleep se salta la ventana y se vuelve a dormir; en
+     * continuo, open() devuelve false y el bucle de protocolos reintenta. */
+    TickType_t t0 = xTaskGetTickCount();
+    if (!mqtt_wait_connected(MQTT_CONNECT_TIMEOUT_MS)) {
+        ESP_LOGW(TAG_SEND_MQTT, "MQTT: sin sesión con el broker en %d s", MQTT_CONNECT_TIMEOUT_MS / 1000);
+        if (current_config->sleep_time_s > 0) {
+            deep_sleep_if_needed();     // no vuelve
+        }
+        mqtt_finish();
+        return false;
+    }
+
+    // Le da tiempo a la Raspberry: completa los SERVER_READY_MS de antes.
+    uint32_t waited_ms = pdTICKS_TO_MS(xTaskGetTickCount() - t0);
+    if (waited_ms < SERVER_READY_MS) {
+        vTaskDelay(pdMS_TO_TICKS(SERVER_READY_MS - waited_ms));
+    }
 
     char topic_cfg[128];
     mqtt_topic(topic_cfg, sizeof topic_cfg, current_config->id_device, MQTT_TOPIC_CONFIG);

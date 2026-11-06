@@ -128,6 +128,8 @@ extern fxl6408_handle_t io_expander;
 #define SERVER_READY_MS 5000
 /* Cuánto espera ble_open() a que el servidor se conecte por BLE. Ver protocols.c. */
 #define BLE_OPEN_TIMEOUT_MS 60000
+/* Cuánto espera mqtt_open() la sesión con el broker. Ver protocols.c. */
+#define MQTT_CONNECT_TIMEOUT_MS 20000
 
 /* Intentos de asociación al AP antes de que nebulaedge_wifi reinicie el chip.
  * Estaba repetido en las tres ramas del switch con el valor 15, y dos de los

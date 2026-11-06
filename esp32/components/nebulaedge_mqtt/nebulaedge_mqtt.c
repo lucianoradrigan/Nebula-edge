@@ -24,6 +24,10 @@ static const char *TAG = "nebulaedge_mqtt";
 
 static char s_sub_topics[MQTT_MAX_SUBS][MQTT_TOPIC_MAX];
 static int  s_sub_qos[MQTT_MAX_SUBS];
+
+/* Si hay sesión con el broker. Lo mantienen los eventos CONNECTED y
+ * DISCONNECTED; lo lee mqtt_wait_connected(). */
+static volatile bool s_connected = false;
 static int  s_sub_count = 0;
 
 static void remember_subscription(const char *topic, int qos) {
@@ -241,6 +245,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         // Client is now ready to send and receive data.
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "CONNECTED: succesfully conected to broker");
+            s_connected = true;
             /* Re-suscribe lo que ya estaba suscrito.
              *
              * Las suscripciones MQTT son POR SESIÓN y esp-mqtt no las restaura
@@ -262,6 +267,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         // or write data, e.g., because the server is unavailable.
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "DISCONNECTED: connection aborted");
+            s_connected = false;
             break;
 
         // The broker has acknowledged the client's subscribe request. 
@@ -414,7 +420,15 @@ int mqtt_subscribe(const char *topic, int qos) {
 }
 
 /* Finaliza mqtt por completo. */
+bool mqtt_wait_connected(uint32_t timeout_ms) {
+    for (uint32_t waited = 0; !s_connected && waited < timeout_ms; waited += 100) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return s_connected;
+}
+
 void mqtt_finish(void) {
+    s_connected = false;
     if (client != NULL) {
         esp_mqtt_client_stop(client);
         esp_mqtt_client_destroy(client);

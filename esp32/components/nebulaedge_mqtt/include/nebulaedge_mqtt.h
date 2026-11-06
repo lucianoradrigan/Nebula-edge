@@ -35,6 +35,8 @@ typedef struct {
 void mqtt_start(const mqtt_config_global *mqtt_config_global);
 int mqtt_publish(const char *topic, const uint8_t *data, size_t len, int qos);
 int mqtt_subscribe(const char *topic, int qos);
+/* Espera hasta timeout_ms a que haya sesión con el broker. true si la hay. */
+bool mqtt_wait_connected(uint32_t timeout_ms);
 void mqtt_finish(void);
 
 #endif
