@@ -273,7 +273,27 @@ static bool ble_open(void) {
      * placas en BLE el 04-11: el dongle no da abasto). Vencido el tope, en deep
      * sleep se salta esta ventana y se vuelve a dormir; en continuo, open()
      * devuelve false y el bucle de protocolos vuelve a esperar. */
-    if (xSemaphoreTake(ble_start_semaphore, pdMS_TO_TICKS(BLE_OPEN_TIMEOUT_MS)) != pdTRUE) {
+    /* Se espera en tramos para mirar también la cola de configs BLE. Si el
+     * servidor quiere pasar al device a OTRO protocolo, no lo "arranca" por la
+     * característica C: solo le escribe la config nueva en la A. Sin esto esa
+     * config quedaba en la cola sin que nadie la leyera -la task de respuesta
+     * todavía no existe-, se vencía el tope, el device volvía a dormir y el
+     * ciclo se repetía para siempre (visto el 05-11 al pasar de BLE en deep
+     * sleep a UDP). Con una config en cola se arrancan las tasks y la de
+     * respuesta la aplica como cualquier otra. */
+    TickType_t start = xTaskGetTickCount();
+    bool started = false;
+    while (xTaskGetTickCount() - start < pdMS_TO_TICKS(BLE_OPEN_TIMEOUT_MS)) {
+        if (xSemaphoreTake(ble_start_semaphore, pdMS_TO_TICKS(500)) == pdTRUE) {
+            started = true;
+            break;
+        }
+        if (uxQueueMessagesWaiting(xQueueConfigBle) > 0) {
+            ESP_LOGI(TAG, "BLE: llegó una config mientras se esperaba la conexión: se aplica");
+            return true;
+        }
+    }
+    if (!started) {
         ESP_LOGW(TAG, "BLE: el servidor no se conectó en %d s", BLE_OPEN_TIMEOUT_MS / 1000);
         if (current_config && current_config->sleep_time_s > 0) {
             deep_sleep_if_needed();     // no vuelve
