@@ -181,21 +181,23 @@ class DeviceSession:
             ver es la que le mandamos nosotros.
 
         POR QUÉ REENVIAR LA MISMA VERSIÓN Y NO INVENTAR UNA NUEVA
-            `get_config()` estampa `time_client` con la hora del momento en
-            cada config que arma, así que el mismo mensaje que ya existe sirve
-            de reloj sin tocar nada del protocolo. Subirle la versión para
+            `DataCodec.serialize_config()` estampa `time_server_us` con la hora
+            del momento cada vez que serializa una config (y `get_config()`
+            pone además `time_client` en segundos, para un firmware viejo), así
+            que el mismo mensaje que ya existe sirve de reloj sin tocar nada del
+            protocolo. Subirle la versión para
             forzar una reaplicación ensuciaría el espacio de versiones y haría
             que el device rearme tasks y transporte por nada.
 
             Del lado del firmware, la hora se aplica ANTES de comparar
             versiones justamente para que una config repetida sirva de
-            sincronización; ver vTaskGetResponse() en main.c.
+            sincronización; ver vTaskGetResponse() en config_task.c.
 
         RECIBE LA CONFIG DE LA BASE, NO self.config
-            `self.config` es la que quedó fija al abrir la sesión, con la hora
-            de ese momento: reenviarla sincronizaría el reloj a un instante ya
-            pasado. La que llega por parámetro sale de get_config_async() en la
-            misma vuelta del bucle, así que su `time_client` es de ahora.
+            La hora no depende de cuál se mande: se estampa al serializar. Se
+            usa la de get_config_async(), leída en la misma vuelta del bucle,
+            para reenviar la config vigente y no la que quedó fija al abrir la
+            sesión.
 
         NO ESPERA EL ACK
             El device contesta un ACK que acá no le sirve a nadie: llega al
@@ -355,8 +357,8 @@ class ProtocolSession(DeviceSession):
 
     # Piso de la pausa tras un aviso de deep sleep, para no reconectar con el
     # device todavía encendido. Cubre lo que le queda por hacer después de
-    # avisar: nvs_save_config(), el deinit de los sensores y el
-    # vTaskDelay(3000) final de deep_sleep_if_needed() (main.c).
+    # avisar: config_store_save(), el deinit de los sensores y el
+    # DEEP_SLEEP_SETTLE_MS (3 s) final de deep_sleep_if_needed() (power.c).
     _DEEP_SLEEP_SHUTDOWN_SEC = 5.0
 
     async def run(self) -> "ConfigData | None":

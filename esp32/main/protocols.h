@@ -41,14 +41,6 @@ typedef struct {
      * característica D, que es distinta de la de telemetría. */
     esp_err_t (*send_ack)(const Config *cfg, const uint8_t *buf, size_t size);
 
-    /* Bloquea hasta que llegue una config nueva y la devuelve desempaquetada,
-     * o NULL si lo que llegó no servía. El caller la libera.
-     *
-     * Esta es la firma que hace que todo lo demás encaje. Los cuatro reciben
-     * en formas incompatibles: MQTT saca un Config* ya desempaquetado de una
-     * cola, BLE saca un packet_t crudo de otra, UDP y TCP bloquean en recv()
-     * sobre un buffer. Devolver Config* absorbe las tres diferencias, y todo
-     * lo que viene después pasa a existir una sola vez. */
     /* Deja el transporte listo para que arranquen las tasks. Devuelve false si
      * no se pudo: el bucle de protocolos lo reintenta.
      *
@@ -63,6 +55,15 @@ typedef struct {
      * BLE no, y por eso tampoco se le baja al salir. */
     bool needs_wifi;
 
+    /* Espera una config nueva, con timeout (TASK_POLL_MS), y la devuelve
+     * desempaquetada, o NULL si no llegó nada o lo que llegó no servía. El
+     * caller la libera.
+     *
+     * Esta es la firma que hace que todo lo demás encaje. Los cuatro reciben
+     * en formas distintas: MQTT y BLE sacan bytes crudos de una cola (MQTT
+     * con un byte adelante que dice si la config venía retenida), UDP y TCP
+     * leen de su socket a un buffer. Devolver Config* absorbe las diferencias,
+     * y todo lo que viene después pasa a existir una sola vez. */
     Config *(*recv_config)(void);
 
     /* Cierra el transporte antes de cambiar de protocolo o de dormir.

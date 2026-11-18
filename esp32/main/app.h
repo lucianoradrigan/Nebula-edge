@@ -3,9 +3,10 @@
 
 /* LO QUE COMPARTEN LOS ARCHIVOS DE LA APLICACIÓN
  *
- * main.c pasaba de 1800 líneas y se está repartiendo en archivos por tema
- * (protocolos, compuerta, camino de datos, config, energía). Lo que más de uno
- * necesita conocer se declara acá; las definiciones siguen en main.c.
+ * main.c pasaba de 1800 líneas y se repartió en archivos por tema
+ * (protocols.c, gate.c, data_path.c, config_task.c, power.c, diag.c). Lo que
+ * más de uno necesita conocer se declara acá; las colas, los semáforos y la
+ * config global se siguen definiendo en main.c.
  *
  * Es un header de la aplicación, no la API de un componente: no se copia a
  * otro proyecto. Lo que usa un solo archivo se queda `static` en ese archivo. */

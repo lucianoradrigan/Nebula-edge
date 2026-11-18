@@ -78,11 +78,11 @@ static const i2c_bus_config_t board_i2c = {
     .freq_hz = I2C_MASTER_FREQ_HZ,
 };
 
-/* Dos productoras de telemetría, una por ritmo. Los sensores tienen tiempos
- * naturales muy distintos: la temperatura cambia en minutos y el acelerómetro
- * en milisegundos. Con una sola task había que elegir un intervalo único, que
- * sobremuestreaba el ambiente o submuestreaba el movimiento. Ahora cada una
- * corre a lo suyo y ambas escriben en la misma xQueueData. */
+/* Dos productoras de telemetría, una por flujo: Data_1 (ambiental) y Data_2
+ * (inercial). Nacieron para correr a ritmos distintos, pero desde f01353d las
+ * dos usan el mismo send_interval_s. Siguen separadas porque cada una lee sus
+ * propios sensores y lleva su propio seq y su conteo de ventana (data_path.c).
+ * Ambas escriben en la misma xQueueData. */
 TaskHandle_t xHandleCollectInertial = NULL;       // Data_2, cada send_interval_s
 TaskHandle_t xHandleCollectEnvironmental = NULL;  // Data_1, cada send_interval_s
 
